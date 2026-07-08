@@ -72,7 +72,7 @@ Resources:
     Properties:
       StageName: !Ref EnvironmentName
       Cors:
-        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
         AllowHeaders: "'Content-Type,Authorization'"
         AllowOrigin: "'*'"
       BinaryMediaTypes:
@@ -275,6 +275,246 @@ Resources:
             RestApiId: !Ref ReceiptApi
             Path: /invite
             Method: POST
+
+  GetSessionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/getSession.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        GetSessionRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /session
+            Method: GET
+
+  GetReceiptFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/getReceipt.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        GetReceiptRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /receipts/{id}
+            Method: GET
+
+  UpdateReceiptFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/updateReceipt.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        UpdateReceiptRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /receipts/{id}
+            Method: PUT
+
+  DeleteReceiptFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/deleteReceipt.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        DeleteReceiptRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /receipts/{id}
+            Method: DELETE
+
+  GetReceiptAssetUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/getReceiptAssetUrl.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        GetReceiptAssetUrlRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /receipts/{id}/asset-url
+            Method: GET
+
+  GetClaimFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/getClaim.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        GetClaimRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /claims/{id}
+            Method: GET
+
+  UpdateClaimFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/updateClaim.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        UpdateClaimRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /claims/{id}
+            Method: PUT
+
+  GetSettingsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/getSettings.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        GetSettingsRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /settings
+            Method: GET
+
+  UpdateSettingsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/updateSettings.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        UpdateSettingsRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /settings
+            Method: PUT
+
+  ListSupplierRulesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/listSupplierRules.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        ListSupplierRulesRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /rules
+            Method: GET
+
+  UpsertSupplierRuleFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/upsertSupplierRule.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        UpsertSupplierRuleRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /rules
+            Method: POST
+
+  DeleteSupplierRuleFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/deleteSupplierRule.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        DeleteSupplierRuleRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /rules/{id}
+            Method: DELETE
+
+  ListReconciliationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/listReconciliation.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        ListReconciliationRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /reconciliation
+            Method: GET
+
+  MatchReconciliationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/matchReconciliation.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        MatchReconciliationRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /reconciliation/match
+            Method: POST
+
+  CreateRequisitionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/createRequisition.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        CreateRequisitionRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /requisitions
+            Method: POST
+
+  BankCallbackFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/bankCallback.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        BankCallbackRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /bank-callback
+            Method: GET
 
 Outputs:
   ApiBaseUrl:
