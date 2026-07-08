@@ -97,6 +97,8 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     'If the total amount is not clearly visible or cannot be read confidently, return total_amount as null.',
     'Extract UK VAT fields separately: total_amount is gross paid, vat_amount is VAT/tax, and net_amount is before VAT.',
     'If VAT is printed, return vat_amount exactly as printed.',
+    'If the receipt explicitly prints a VAT or tax rate such as VAT 20% or Tax 5% but does not print the VAT amount, return printed_vat_rate_percent with that numeric rate.',
+    'Only calculate missing vat_amount when the document explicitly shows a VAT or tax rate. Do not calculate VAT from a guessed or inferred rate.',
     'If net_amount is missing but total_amount and vat_amount are clear, calculate net_amount as total_amount - vat_amount.',
     'If VAT is not printed and cannot be reliably inferred, return vat_amount as null.',
     'Classify suggested_uk_tax_rate as one of: 20% Standard, 5% Reduced, 0% Zero, Exempt.',
@@ -121,6 +123,7 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
         total_amount: 'number | null',
         net_amount: 'number | null',
         vat_amount: 'number | null',
+        printed_vat_rate_percent: 'number | null',
         suggested_uk_tax_rate: '20% Standard | 5% Reduced | 0% Zero | Exempt | null',
         subtotal_amount: 'number | null',
         total_tax_amount: 'number | null',
@@ -180,19 +183,65 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
   const totalAmount = toNumber(source.total_amount);
   const explicitVatAmount = toNumber(source.vat_amount);
   const explicitNetAmount = toNumber(source.net_amount);
-  const totalTaxAmount = explicitVatAmount ?? toNumber(source.total_tax_amount);
-  const netAmount =
-    explicitNetAmount ?? (totalAmount !== null && totalTaxAmount !== null ? roundMoney(totalAmount - totalTaxAmount) : null);
-  const subtotalAmount = toNumber(source.subtotal_amount) ?? netAmount;
   const taxRateApplied = normalizeUkTaxRate(source.suggested_uk_tax_rate ?? source.tax_rate_applied);
   const notes = Array.isArray(source.notes)
     ? source.notes.map((note) => normalizeFreeText(note)).filter((note): note is string => Boolean(note))
     : [];
   const rawTextSummary = normalizeFreeText(source.raw_text_summary) || null;
+  const printedVatRatePercent = resolvePrintedVatRatePercent(source, notes, rawTextSummary);
   const amountLooksUnreadable =
-    notes.some((note) => /could not read amount|amount could not be read|unable to read amount|not clearly visible/i.test(note)) ||
+    notes.some((note) => /could not read receipt|could not read invoice|could not read amount|amount could not be read|unable to read amount|unable to read receipt|unable to read invoice|not clearly visible|blank image|blank file|no receipt visible|no invoice visible/i.test(note)) ||
     (rawTextSummary !== null &&
-      /could not read amount|amount could not be read|not clearly visible|unable to read amount/i.test(rawTextSummary));
+      /could not read receipt|could not read invoice|could not read amount|amount could not be read|not clearly visible|unable to read amount|unable to read receipt|unable to read invoice|blank image|blank file|no receipt visible|no invoice visible/i.test(rawTextSummary));
+  const documentLooksUnreadable =
+    amountLooksUnreadable ||
+    (totalAmount === null &&
+      explicitVatAmount === null &&
+      explicitNetAmount === null &&
+      vendorName === null &&
+      !rawTextSummary);
+  const resolvedVatAmount = resolveVatAmount({
+    totalAmount,
+    explicitVatAmount,
+    explicitNetAmount,
+    printedVatRatePercent,
+    taxRateApplied,
+  });
+  const computedTotalTaxAmount = resolvedVatAmount ?? toNumber(source.total_tax_amount);
+  const resolvedNetAmount = resolveNetAmount({
+    totalAmount,
+    explicitNetAmount,
+    vatAmount: computedTotalTaxAmount,
+    printedVatRatePercent,
+    taxRateApplied,
+  });
+  const totalTaxAmount = computedTotalTaxAmount;
+  const subtotalAmount = toNumber(source.subtotal_amount) ?? resolvedNetAmount;
+
+  if (documentLooksUnreadable) {
+    const unreadableNote = 'Could not read receipt or invoice.';
+    return {
+      vendorName: null,
+      invoiceDate: normalizeDateString(source.invoice_date),
+      dueDate: normalizeDateString(source.due_date),
+      invoiceNumber: normalizeInvoiceNumber(source.invoice_number),
+      currency,
+      totalAmount: 0,
+      netAmount: 0,
+      vatAmount: 0,
+      taxRateApplied: 'No VAT',
+      subtotalAmount: 0,
+      totalTaxAmount: 0,
+      documentType: normalizedDocumentType,
+      confidenceScore,
+      confidenceSource: confidenceScore === null ? 'unavailable' : 'model_self_assessment',
+      needsReview: true,
+      lineItems: [],
+      taxBreakdown: [],
+      notes: dedupeNotes([unreadableNote, ...notes]),
+      rawTextSummary: unreadableNote,
+    };
+  }
 
   return {
     vendorName,
@@ -200,8 +249,8 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
     dueDate: normalizeDateString(source.due_date),
     invoiceNumber: normalizeInvoiceNumber(source.invoice_number),
     currency,
-    totalAmount: amountLooksUnreadable && totalAmount === 0 ? null : totalAmount,
-    netAmount,
+    totalAmount,
+    netAmount: resolvedNetAmount,
     vatAmount: totalTaxAmount,
     taxRateApplied,
     subtotalAmount,
@@ -308,6 +357,114 @@ function normalizeUkTaxRate(value: unknown) {
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+function resolveVatAmount(input: {
+  totalAmount: number | null;
+  explicitVatAmount: number | null;
+  explicitNetAmount: number | null;
+  printedVatRatePercent: number | null;
+  taxRateApplied: string | null;
+}) {
+  if (input.explicitVatAmount !== null) {
+    return input.explicitVatAmount;
+  }
+
+  if (input.totalAmount !== null && input.explicitNetAmount !== null) {
+    return roundMoney(Math.max(0, input.totalAmount - input.explicitNetAmount));
+  }
+
+  const effectiveRate = input.printedVatRatePercent ?? ukTaxRateToPercent(input.taxRateApplied);
+  if (input.printedVatRatePercent !== null && input.totalAmount !== null && effectiveRate !== null && effectiveRate > 0) {
+    return roundMoney(input.totalAmount * (effectiveRate / (100 + effectiveRate)));
+  }
+
+  if (effectiveRate === 0 && input.totalAmount !== null) {
+    return 0;
+  }
+
+  return null;
+}
+
+function resolveNetAmount(input: {
+  totalAmount: number | null;
+  explicitNetAmount: number | null;
+  vatAmount: number | null;
+  printedVatRatePercent: number | null;
+  taxRateApplied: string | null;
+}) {
+  if (input.explicitNetAmount !== null) {
+    return input.explicitNetAmount;
+  }
+  if (input.totalAmount !== null && input.vatAmount !== null) {
+    return roundMoney(input.totalAmount - input.vatAmount);
+  }
+  const effectiveRate = input.printedVatRatePercent ?? ukTaxRateToPercent(input.taxRateApplied);
+  if (effectiveRate === 0 && input.totalAmount !== null) {
+    return input.totalAmount;
+  }
+  return null;
+}
+
+function resolvePrintedVatRatePercent(
+  source: Record<string, unknown>,
+  notes: string[],
+  rawTextSummary: string | null,
+) {
+  const explicitValue = toNumber(source.printed_vat_rate_percent);
+  if (explicitValue !== null) {
+    return explicitValue;
+  }
+
+  const taxBreakdown = Array.isArray(source.tax_breakdown) ? source.tax_breakdown : [];
+  for (const item of taxBreakdown) {
+    if (typeof item !== 'object' || !item) {
+      continue;
+    }
+    const rate = toNumber((item as Record<string, unknown>).rate);
+    if (rate !== null) {
+      return rate;
+    }
+    const label = normalizeFreeText((item as Record<string, unknown>).label);
+    const parsedRate = findPercentInText(label);
+    if (parsedRate !== null) {
+      return parsedRate;
+    }
+  }
+
+  for (const text of [...notes, rawTextSummary ?? '']) {
+    const parsedRate = findPercentInText(text);
+    if (parsedRate !== null && /vat|tax/i.test(text)) {
+      return parsedRate;
+    }
+  }
+
+  return null;
+}
+
+function findPercentInText(value: string) {
+  const match = value.match(/(\d+(?:\.\d+)?)\s*%/);
+  return match ? Number(match[1]) : null;
+}
+
+function ukTaxRateToPercent(value: string | null) {
+  if (!value) {
+    return null;
+  }
+  if (value.startsWith('20%')) {
+    return 20;
+  }
+  if (value.startsWith('5%')) {
+    return 5;
+  }
+  if (value.startsWith('0%') || value === 'Exempt' || value === 'No VAT') {
+    return 0;
+  }
+  return null;
+}
+
+function dedupeNotes(notes: string[]) {
+  return [...new Set(notes.filter(Boolean))];
 }
 
 function normalizeFreeText(value: unknown) {

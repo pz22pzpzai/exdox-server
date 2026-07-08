@@ -25,6 +25,9 @@ type NormalizedExpenseDocument = {
   invoiceNumber: string | null;
   currency: string | null;
   totalAmount: number | null;
+  netAmount: number | null;
+  vatAmount: number | null;
+  taxRateApplied: '20% Standard' | '5% Reduced' | '0% Zero' | 'Exempt' | 'No VAT' | null;
   subtotalAmount: number | null;
   totalTaxAmount: number | null;
   documentType: DocumentType;
@@ -253,8 +256,14 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     'This is an OCR-style extraction task. Prefer literal reading over inference.',
     'Do not guess missing values.',
     'If the total amount is not clearly visible or cannot be read confidently, return total_amount as null.',
+    'Extract UK VAT fields separately: total_amount is gross paid, vat_amount is VAT/tax, and net_amount is before VAT.',
+    'If VAT is printed, return vat_amount exactly as printed.',
+    'If the receipt explicitly prints a VAT or tax rate such as VAT 20% or Tax 5% but does not print the VAT amount, return printed_vat_rate_percent with that numeric rate.',
+    'Only calculate missing vat_amount when the document explicitly shows a VAT or tax rate. Do not calculate VAT from a guessed or inferred rate.',
+    'If net_amount is missing but total_amount and vat_amount are clear, calculate net_amount as total_amount - vat_amount.',
     'If tax is not clearly visible, return total_tax_amount as null.',
     'If subtotal is not clearly visible, return subtotal_amount as null.',
+    'Classify suggested_uk_tax_rate as one of: 20% Standard, 5% Reduced, 0% Zero, Exempt.',
     'Use the printed currency symbol/code on the document when visible. Otherwise return null.',
     'For receipts, prioritize the final charged amount actually paid.',
     'For invoices, prioritize the invoice total due.',
@@ -270,6 +279,10 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
         invoice_number: 'string | null',
         currency: 'ISO 4217 code like GBP, USD, EUR | null',
         total_amount: 'number | null',
+        net_amount: 'number | null',
+        vat_amount: 'number | null',
+        printed_vat_rate_percent: 'number | null',
+        suggested_uk_tax_rate: '20% Standard | 5% Reduced | 0% Zero | Exempt | null',
         subtotal_amount: 'number | null',
         total_tax_amount: 'number | null',
         document_type: 'receipt | invoice | unknown',
@@ -330,9 +343,7 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
     dueDate: normalizeDateString(source.due_date),
     invoiceNumber: sanitizeText(source.invoice_number) || null,
     currency: normalizeCurrencyCode(source.currency),
-    totalAmount: toNumber(source.total_amount),
-    subtotalAmount: toNumber(source.subtotal_amount),
-    totalTaxAmount: toNumber(source.total_tax_amount),
+    ...resolveMoneyFields(source),
     documentType: normalizedDocumentType,
     confidenceScore,
     confidenceSource: confidenceScore === null ? 'unavailable' : 'model_self_assessment',
@@ -487,6 +498,86 @@ function normalizeDateString(value: unknown) {
 function normalizeCurrencyCode(value: unknown) {
   const text = sanitizeText(value).toUpperCase();
   return /^[A-Z]{3}$/.test(text) ? text : null;
+}
+
+function resolveMoneyFields(source: Record<string, unknown>) {
+  const totalAmount = toNumber(source.total_amount);
+  const explicitNetAmount = toNumber(source.net_amount);
+  const explicitVatAmount = toNumber(source.vat_amount);
+  const printedVatRatePercent = toNumber(source.printed_vat_rate_percent);
+  const suggestedTaxRate = normalizeUkTaxRate(source.suggested_uk_tax_rate);
+  const notes = Array.isArray(source.notes)
+    ? source.notes.map((note) => sanitizeText(note)).filter(Boolean)
+    : [];
+  const rawTextSummary = sanitizeText(source.raw_text_summary) || null;
+  const unreadable =
+    notes.some((note) => /could not read receipt|could not read invoice|unable to read receipt|unable to read invoice|blank image|blank file/i.test(note)) ||
+    (rawTextSummary !== null &&
+      /could not read receipt|could not read invoice|unable to read receipt|unable to read invoice|blank image|blank file/i.test(rawTextSummary)) ||
+    (totalAmount === null && explicitNetAmount === null && explicitVatAmount === null);
+
+  if (unreadable) {
+    return {
+      totalAmount: 0,
+      netAmount: 0,
+      vatAmount: 0,
+      taxRateApplied: 'No VAT' as const,
+      subtotalAmount: 0,
+      totalTaxAmount: 0,
+    };
+  }
+
+  const vatAmount =
+    explicitVatAmount ??
+    (totalAmount !== null && explicitNetAmount !== null ? roundMoney(Math.max(0, totalAmount - explicitNetAmount)) : null) ??
+    (printedVatRatePercent !== null && totalAmount !== null && printedVatRatePercent > 0
+      ? roundMoney(totalAmount * (printedVatRatePercent / (100 + printedVatRatePercent)))
+      : null) ??
+    (normalizeUkTaxRate(source.suggested_uk_tax_rate) === '0% Zero' && totalAmount !== null ? 0 : null) ??
+    toNumber(source.total_tax_amount);
+
+  const netAmount =
+    explicitNetAmount ??
+    (totalAmount !== null && vatAmount !== null ? roundMoney(totalAmount - vatAmount) : null) ??
+    ((suggestedTaxRate === '0% Zero' || suggestedTaxRate === 'Exempt' || suggestedTaxRate === 'No VAT') && totalAmount !== null
+      ? totalAmount
+      : null);
+
+  return {
+    totalAmount,
+    netAmount,
+    vatAmount,
+    taxRateApplied: suggestedTaxRate,
+    subtotalAmount: toNumber(source.subtotal_amount) ?? netAmount,
+    totalTaxAmount: toNumber(source.total_tax_amount) ?? vatAmount,
+  };
+}
+
+function normalizeUkTaxRate(value: unknown) {
+  const text = sanitizeText(value).toLowerCase();
+  if (!text) {
+    return null;
+  }
+  if (text.includes('no vat')) {
+    return 'No VAT' as const;
+  }
+  if (text.includes('20') || text.includes('standard')) {
+    return '20% Standard' as const;
+  }
+  if (text.includes('5') || text.includes('reduced')) {
+    return '5% Reduced' as const;
+  }
+  if (text.includes('0') || text.includes('zero')) {
+    return '0% Zero' as const;
+  }
+  if (text.includes('exempt')) {
+    return 'Exempt' as const;
+  }
+  return null;
+}
+
+function roundMoney(value: number) {
+  return Math.round(value * 100) / 100;
 }
 
 function inferMimeType(fileName: string) {
