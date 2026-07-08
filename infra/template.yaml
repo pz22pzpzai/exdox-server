@@ -1,0 +1,283 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: exdox serverless backend for receipt uploads, OCR parsing, and RDS persistence.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+  ReceiptBucketName:
+    Type: String
+  OpenAIApiKey:
+    Type: String
+    NoEcho: true
+  OpenAIModel:
+    Type: String
+    Default: gpt-4.1-nano
+  JwtSecret:
+    Type: String
+    NoEcho: true
+  InviteEmailFrom:
+    Type: String
+    Default: ''
+  InviteBaseUrl:
+    Type: String
+    Default: 'exdox://signup'
+  ReceiptStoreMode:
+    Type: String
+    Default: s3
+  DbHost:
+    Type: String
+    Default: ''
+  DbPort:
+    Type: Number
+    Default: 3306
+  DbName:
+    Type: String
+    Default: receiptflow
+  DbUser:
+    Type: String
+    Default: ''
+  DbPassword:
+    Type: String
+    Default: ''
+    NoEcho: true
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    MemorySize: 1024
+    Timeout: 60
+    Handler: dist/aws/index.handler
+    CodeUri: ..
+    Environment:
+      Variables:
+        RECEIPT_BUCKET_NAME: !Ref ReceiptBucketName
+        OPENAI_API_KEY: !Ref OpenAIApiKey
+        OPENAI_MODEL: !Ref OpenAIModel
+        JWT_SECRET: !Ref JwtSecret
+        INVITE_EMAIL_FROM: !Ref InviteEmailFrom
+        INVITE_BASE_URL: !Ref InviteBaseUrl
+        RECEIPT_STORE_MODE: !Ref ReceiptStoreMode
+        DB_HOST: !Ref DbHost
+        DB_PORT: !Ref DbPort
+        DB_NAME: !Ref DbName
+        DB_USER: !Ref DbUser
+        DB_PASSWORD: !Ref DbPassword
+        AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+
+Resources:
+  ReceiptApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref EnvironmentName
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: "'*'"
+      BinaryMediaTypes:
+        - multipart/form-data
+        - application/pdf
+        - image/jpeg
+        - image/png
+        - image/webp
+
+  ReceiptStorageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref ReceiptBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+  ReceiptStorageBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ReceiptStorageBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !Sub '${ReceiptStorageBucket.Arn}'
+              - !Sub '${ReceiptStorageBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/health.handler
+      Events:
+        HealthRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /health
+            Method: GET
+
+  CreateUploadUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/createUploadUrl.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        UploadRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /upload/presign
+            Method: POST
+
+  ProcessExpenseFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/processExpense.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+        - AWSLambdaBasicExecutionRole
+      Events:
+        ProcessLegacyRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /api/v1/expenses/process
+            Method: POST
+        ProcessReceiptsRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /receipts/process
+            Method: POST
+
+  ListReceiptsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/listReceipts.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        ListReceiptsRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /receipts
+            Method: GET
+
+  ListClaimsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/listClaims.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        ListClaimsRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /claims
+            Method: GET
+
+  CreateClaimFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/createClaim.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        CreateClaimRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /claims
+            Method: POST
+
+  AttachReceiptToClaimFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/attachReceiptToClaim.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AttachReceiptToClaimRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /claims/attach
+            Method: POST
+
+  LoginFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/login.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        LoginRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /login
+            Method: POST
+
+  RegisterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/register.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        RegisterRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /register
+            Method: POST
+
+  InviteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/invite.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: '*'
+      Events:
+        InviteRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /invite
+            Method: POST
+
+Outputs:
+  ApiBaseUrl:
+    Value: !Sub 'https://${ReceiptApi}.execute-api.${AWS::Region}.amazonaws.com/${EnvironmentName}'
+  ReceiptBucket:
+    Value: !Ref ReceiptStorageBucket

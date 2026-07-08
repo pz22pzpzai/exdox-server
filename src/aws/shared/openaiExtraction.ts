@@ -1,0 +1,376 @@
+import OpenAI from 'openai';
+
+import { awsEnv } from './env.js';
+import {
+  clampConfidence,
+  inferMimeType,
+  normalizeCurrencyCode,
+  normalizeDateString,
+  parseDocumentType,
+  sanitizeText,
+  toNumber,
+} from './helpers.js';
+import { type DocumentType, type ExpenseRequestOptions, type NormalizedExpenseDocument } from '../types.js';
+
+const openai = new OpenAI({
+  apiKey: awsEnv.openAiApiKey,
+  timeout: 45000,
+});
+
+export async function processExpenseBuffer(input: {
+  fileName: string;
+  mimeType?: string;
+  buffer: Buffer;
+  options: ExpenseRequestOptions;
+}) {
+  const responseText = await extractWithOpenAI(input);
+  const raw = parseExtractionJson(responseText);
+  return normalizeExtractionPayload(raw, input.options.documentType);
+}
+
+async function extractWithOpenAI({
+  fileName,
+  mimeType,
+  buffer,
+  options,
+}: {
+  fileName: string;
+  mimeType?: string;
+  buffer: Buffer;
+  options: ExpenseRequestOptions;
+}) {
+  const resolvedMimeType = mimeType || inferMimeType(fileName);
+  const inputContent: Array<Record<string, unknown>> = [
+    {
+      type: 'input_text',
+      text: buildExtractionPrompt(options),
+    },
+  ];
+
+  if (resolvedMimeType === 'application/pdf') {
+    const uploadedFile = await openai.files.create({
+      file: new File([new Uint8Array(buffer)], fileName, { type: resolvedMimeType }),
+      purpose: 'user_data',
+    });
+
+    inputContent.push({
+      type: 'input_file',
+      file_id: uploadedFile.id,
+    });
+  } else {
+    inputContent.push({
+      type: 'input_image',
+      image_url: `data:${resolvedMimeType};base64,${buffer.toString('base64')}`,
+      detail: 'high',
+    });
+  }
+
+  const response = await openai.responses.create({
+    model: awsEnv.openAiModel,
+    input: [
+      {
+        role: 'user',
+        content: inputContent as never,
+      },
+    ],
+  });
+
+  if (!response.output_text) {
+    throw new Error('The OCR provider returned an empty response.');
+  }
+
+  return response.output_text;
+}
+
+function buildExtractionPrompt(options: ExpenseRequestOptions): string {
+  return [
+    'Read this receipt or invoice and return valid JSON only.',
+    'Do not wrap the JSON in markdown fences.',
+    'This is an OCR-style extraction task. Prefer literal reading over inference.',
+    'Do not guess missing values, names, dates, or amounts.',
+    'Carefully inspect the entire image, especially the header and the lower summary area where totals are usually printed.',
+    'For receipts, find the final amount actually paid or charged.',
+    'For invoices, find the invoice total due or balance due.',
+    'Prioritize labels such as TOTAL, AMOUNT DUE, BALANCE DUE, GRAND TOTAL, CARD PAYMENT, PAID, or TO PAY.',
+    'Do not confuse subtotal, VAT, tax, tip, discount, change, or item prices with the final total amount.',
+    'If multiple amounts are visible, choose the final payable amount only when the label or placement clearly supports it.',
+    'If the total amount is not clearly visible or cannot be read confidently, return total_amount as null.',
+    'Extract UK VAT fields separately: total_amount is gross paid, vat_amount is VAT/tax, and net_amount is before VAT.',
+    'If VAT is printed, return vat_amount exactly as printed.',
+    'If net_amount is missing but total_amount and vat_amount are clear, calculate net_amount as total_amount - vat_amount.',
+    'If VAT is not printed and cannot be reliably inferred, return vat_amount as null.',
+    'Classify suggested_uk_tax_rate as one of: 20% Standard, 5% Reduced, 0% Zero, Exempt.',
+    'Use UK VAT judgement for common merchants and items: restaurant, cafe, takeaway food and drinks are usually 20% Standard; domestic energy is often 5% Reduced; train or rail fares such as Trainline are 0% Zero; insurance, finance, medical, and education style exempt supplies are Exempt.',
+    'If subtotal is not clearly visible, return subtotal_amount as the same value as net_amount when net_amount is known, otherwise null.',
+    'If tax is not clearly visible, return total_tax_amount as the same value as vat_amount when vat_amount is known, otherwise null.',
+    'Use the printed currency symbol or currency code on the document when visible. Convert symbols to ISO code, for example £ to GBP, $ to USD, and € to EUR.',
+    'The vendor name must come from the document itself, usually the top header or merchant branding. Never invent a workspace name or a filename-based name.',
+    'The invoice number must be a literal printed reference number from the document, not a filename or timestamp.',
+    'The raw_text_summary must be a short plain-English summary of what is actually visible on the document. Preserve the correct currency symbol and do not invent values.',
+    `Locale for date and number interpretation: ${options.locale}.`,
+    `Document type hint: ${options.documentType}.`,
+    `Extract line items: ${options.extractLineItems ? 'yes' : 'no'}.`,
+    'Return this shape exactly:',
+    JSON.stringify(
+      {
+        vendor_name: 'string | null',
+        invoice_date: 'YYYY-MM-DD | null',
+        due_date: 'YYYY-MM-DD | null',
+        invoice_number: 'string | null',
+        currency: 'ISO 4217 code like GBP, USD, EUR | null',
+        total_amount: 'number | null',
+        net_amount: 'number | null',
+        vat_amount: 'number | null',
+        suggested_uk_tax_rate: '20% Standard | 5% Reduced | 0% Zero | Exempt | null',
+        subtotal_amount: 'number | null',
+        total_tax_amount: 'number | null',
+        document_type: 'receipt | invoice | unknown',
+        confidence_score: 'number from 0 to 1 | null',
+        notes: ['string'],
+        raw_text_summary: 'string | null',
+        line_items: [
+          {
+            description: 'string',
+            quantity: 'number | null',
+            unit_price: 'number | null',
+            total: 'number | null',
+            tax_amount: 'number | null',
+          },
+        ],
+        tax_breakdown: [
+          {
+            label: 'string',
+            rate: 'number | null',
+            amount: 'number | null',
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  ].join('\n');
+}
+
+function parseExtractionJson(responseText: string): unknown {
+  const trimmed = responseText.trim();
+  const cleaned = trimmed.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '');
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start === -1 || end === -1 || end <= start) {
+      throw new Error('The OCR provider returned invalid JSON.');
+    }
+    return JSON.parse(cleaned.slice(start, end + 1));
+  }
+}
+
+function normalizeExtractionPayload(raw: unknown, requestedDocumentType: DocumentType): NormalizedExpenseDocument {
+  const source = typeof raw === 'object' && raw ? (raw as Record<string, unknown>) : {};
+  const lineItems = Array.isArray(source.line_items) ? source.line_items : [];
+  const taxBreakdown = Array.isArray(source.tax_breakdown) ? source.tax_breakdown : [];
+  const confidenceScore = clampConfidence(toNumber(source.confidence_score));
+  const normalizedDocumentType = parseDocumentType(
+    typeof source.document_type === 'string' ? source.document_type : requestedDocumentType,
+  );
+  const vendorName = normalizeVendorName(source.vendor_name);
+  const currency = normalizeCurrencyValue(source.currency, source.raw_text_summary);
+  const totalAmount = toNumber(source.total_amount);
+  const explicitVatAmount = toNumber(source.vat_amount);
+  const explicitNetAmount = toNumber(source.net_amount);
+  const totalTaxAmount = explicitVatAmount ?? toNumber(source.total_tax_amount);
+  const netAmount =
+    explicitNetAmount ?? (totalAmount !== null && totalTaxAmount !== null ? roundMoney(totalAmount - totalTaxAmount) : null);
+  const subtotalAmount = toNumber(source.subtotal_amount) ?? netAmount;
+  const taxRateApplied = normalizeUkTaxRate(source.suggested_uk_tax_rate ?? source.tax_rate_applied);
+  const notes = Array.isArray(source.notes)
+    ? source.notes.map((note) => normalizeFreeText(note)).filter((note): note is string => Boolean(note))
+    : [];
+  const rawTextSummary = normalizeFreeText(source.raw_text_summary) || null;
+  const amountLooksUnreadable =
+    notes.some((note) => /could not read amount|amount could not be read|unable to read amount|not clearly visible/i.test(note)) ||
+    (rawTextSummary !== null &&
+      /could not read amount|amount could not be read|not clearly visible|unable to read amount/i.test(rawTextSummary));
+
+  return {
+    vendorName,
+    invoiceDate: normalizeDateString(source.invoice_date),
+    dueDate: normalizeDateString(source.due_date),
+    invoiceNumber: normalizeInvoiceNumber(source.invoice_number),
+    currency,
+    totalAmount: amountLooksUnreadable && totalAmount === 0 ? null : totalAmount,
+    netAmount,
+    vatAmount: totalTaxAmount,
+    taxRateApplied,
+    subtotalAmount,
+    totalTaxAmount,
+    documentType: normalizedDocumentType,
+    confidenceScore,
+    confidenceSource: confidenceScore === null ? 'unavailable' : 'model_self_assessment',
+    needsReview:
+      confidenceScore === null ||
+      confidenceScore < 0.7 ||
+      totalAmount === null ||
+      vendorName === null,
+    lineItems: lineItems.map((item) => normalizeLineItem(item)).filter(Boolean) as NormalizedExpenseDocument['lineItems'],
+    taxBreakdown: taxBreakdown
+      .map((item) => normalizeTaxLine(item))
+      .filter(Boolean) as NormalizedExpenseDocument['taxBreakdown'],
+    notes,
+    rawTextSummary,
+  };
+}
+
+function normalizeLineItem(item: unknown) {
+  if (typeof item !== 'object' || !item) {
+    return null;
+  }
+
+  const source = item as Record<string, unknown>;
+  return {
+    description: sanitizeText(source.description) || 'Line item',
+    quantity: toNumber(source.quantity),
+    unitPrice: toNumber(source.unit_price),
+    total: toNumber(source.total),
+    taxAmount: toNumber(source.tax_amount),
+  };
+}
+
+function normalizeTaxLine(item: unknown) {
+  if (typeof item !== 'object' || !item) {
+    return null;
+  }
+
+  const source = item as Record<string, unknown>;
+  return {
+    label: sanitizeText(source.label) || 'Tax',
+    rate: toNumber(source.rate),
+    amount: toNumber(source.amount),
+  };
+}
+
+export function applyVatRegistrationRules(
+  document: NormalizedExpenseDocument,
+  taxProfile: { isVatRegistered: boolean; defaultTaxRateCosts?: string | null },
+): NormalizedExpenseDocument {
+  if (!taxProfile.isVatRegistered) {
+    return {
+      ...document,
+      netAmount: document.totalAmount,
+      vatAmount: 0,
+      taxRateApplied: 'No VAT',
+      subtotalAmount: document.totalAmount,
+      totalTaxAmount: 0,
+      taxBreakdown: [],
+      notes: [...document.notes, 'VAT set to No VAT because the organisation is not VAT registered.'],
+    };
+  }
+
+  const vatAmount = document.vatAmount ?? document.totalTaxAmount;
+  const netAmount =
+    document.netAmount ??
+    (document.totalAmount !== null && vatAmount !== null ? roundMoney(document.totalAmount - vatAmount) : null);
+
+  return {
+    ...document,
+    netAmount,
+    vatAmount,
+    taxRateApplied: document.taxRateApplied ?? normalizeUkTaxRate(taxProfile.defaultTaxRateCosts),
+    subtotalAmount: document.subtotalAmount ?? netAmount,
+    totalTaxAmount: document.totalTaxAmount ?? vatAmount,
+  };
+}
+
+function normalizeUkTaxRate(value: unknown) {
+  const text = sanitizeText(value).toLowerCase();
+  if (!text) {
+    return null;
+  }
+  if (text.includes('no vat')) {
+    return 'No VAT';
+  }
+  if (text.includes('20') || text.includes('standard')) {
+    return '20% Standard';
+  }
+  if (text.includes('5') || text.includes('reduced')) {
+    return '5% Reduced';
+  }
+  if (text.includes('0') || text.includes('zero')) {
+    return '0% Zero';
+  }
+  if (text.includes('exempt')) {
+    return 'Exempt';
+  }
+  return null;
+}
+
+function roundMoney(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function normalizeFreeText(value: unknown) {
+  const text = sanitizeText(value);
+  if (!text) {
+    return '';
+  }
+
+  return text
+    .replace(/Â£/g, '£')
+    .replace(/Â€/g, '€')
+    .replace(/Â\$/g, '$')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeVendorName(value: unknown) {
+  const text = normalizeFreeText(value);
+  if (!text) {
+    return null;
+  }
+
+  const lowered = text.toLowerCase();
+  if (
+    lowered.includes('workspace') ||
+    lowered.includes('uploaded document') ||
+    lowered.includes('exdox')
+  ) {
+    return null;
+  }
+
+  return text;
+}
+
+function normalizeInvoiceNumber(value: unknown) {
+  const text = normalizeFreeText(value);
+  if (!text) {
+    return null;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return null;
+  }
+
+  return text;
+}
+
+function normalizeCurrencyValue(currency: unknown, summary: unknown) {
+  const normalized = normalizeCurrencyCode(currency);
+  if (normalized) {
+    return normalized;
+  }
+
+  const summaryText = normalizeFreeText(summary);
+  if (summaryText.includes('£')) {
+    return 'GBP';
+  }
+  if (summaryText.includes('€')) {
+    return 'EUR';
+  }
+  if (summaryText.includes('$')) {
+    return 'USD';
+  }
+
+  return null;
+}
