@@ -18,7 +18,7 @@
 - `GET /receipts`
   - Lists stored receipt rows from RDS.
 - `POST /login`
-  - Route scaffolded for future auth migration. No implementation exists in the current repo.
+  - Authenticates active users and returns the JWT used by the mobile and web clients.
 
 ## Files added for migration
 
@@ -31,10 +31,19 @@
 - `src/scripts/applySchema.ts`
   - Applies the schema to an RDS instance once credentials are available.
 
-## Owner-gated steps still required
+## Production deployment checks
 
-1. AWS Console login and IAM user creation
-2. RDS instance creation with owner-entered master credentials
-3. Final selection of VPC subnets and security groups for Lambda-to-RDS connectivity
-4. Deployment of the SAM stack with real AWS account parameters
-5. Mobile app base URL swap to the final API Gateway URL
+The production SAM stack is `receiptflow-expenses-prod` in `eu-west-2`. It is currently
+configured with `ReceiptStoreMode=s3`.
+
+After every stack or Lambda code deployment, smoke-test all three paths before treating
+the release as complete:
+
+1. `GET /health` returns `200`.
+2. `POST /login` with deliberately invalid credentials returns `401 invalid_credentials`,
+   rather than `500` or an API Gateway error.
+3. A protected receipt route without a token returns `401 unauthorized`.
+
+On 2026-07-09 the production functions were restored after an incomplete Lambda package
+caused `Runtime.ImportModuleError` on login. Ensure deployed packages retain the compiled
+`dist/aws/handlers` directory and dependencies at the paths expected by `infra/template.yaml`.
