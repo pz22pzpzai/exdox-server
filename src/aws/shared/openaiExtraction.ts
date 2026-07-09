@@ -88,6 +88,8 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     'Do not wrap the JSON in markdown fences.',
     'This is an OCR-style extraction task. Prefer literal reading over inference.',
     'Do not guess missing values, names, dates, or amounts.',
+    'If the image is blank, dark, heavily blurred, out of focus, or does not clearly show a receipt or invoice, treat it as unreadable and do not invent any values.',
+    'For an unreadable image, return vendor_name as null, total_amount as null, net_amount as null, vat_amount as null, subtotal_amount as null, total_tax_amount as null, raw_text_summary as "Could not read receipt or invoice.", and include the note "Could not read receipt or invoice."',
     'Carefully inspect the entire image, especially the header and the lower summary area where totals are usually printed.',
     'For receipts, find the final amount actually paid or charged.',
     'For invoices, find the invoice total due or balance due.',
@@ -189,12 +191,23 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
     : [];
   const rawTextSummary = normalizeFreeText(source.raw_text_summary) || null;
   const printedVatRatePercent = resolvePrintedVatRatePercent(source, notes, rawTextSummary);
+  const invoiceDate = normalizeDateString(source.invoice_date);
+  const dueDate = normalizeDateString(source.due_date);
+  const invoiceNumber = normalizeInvoiceNumber(source.invoice_number);
   const amountLooksUnreadable =
     notes.some((note) => /could not read receipt|could not read invoice|could not read amount|amount could not be read|unable to read amount|unable to read receipt|unable to read invoice|not clearly visible|blank image|blank file|no receipt visible|no invoice visible/i.test(note)) ||
     (rawTextSummary !== null &&
       /could not read receipt|could not read invoice|could not read amount|amount could not be read|not clearly visible|unable to read amount|unable to read receipt|unable to read invoice|blank image|blank file|no receipt visible|no invoice visible/i.test(rawTextSummary));
+  const lacksStructuredEvidence =
+    vendorName === null &&
+    invoiceDate === null &&
+    dueDate === null &&
+    invoiceNumber === null &&
+    lineItems.length === 0 &&
+    taxBreakdown.length === 0;
   const documentLooksUnreadable =
     amountLooksUnreadable ||
+    (lacksStructuredEvidence && totalAmount !== null && confidenceScore !== null && confidenceScore < 0.55) ||
     (totalAmount === null &&
       explicitVatAmount === null &&
       explicitNetAmount === null &&
@@ -222,9 +235,9 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
     const unreadableNote = 'Could not read receipt or invoice.';
     return {
       vendorName: null,
-      invoiceDate: normalizeDateString(source.invoice_date),
-      dueDate: normalizeDateString(source.due_date),
-      invoiceNumber: normalizeInvoiceNumber(source.invoice_number),
+      invoiceDate,
+      dueDate,
+      invoiceNumber,
       currency,
       totalAmount: 0,
       netAmount: 0,
@@ -245,9 +258,9 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
 
   return {
     vendorName,
-    invoiceDate: normalizeDateString(source.invoice_date),
-    dueDate: normalizeDateString(source.due_date),
-    invoiceNumber: normalizeInvoiceNumber(source.invoice_number),
+    invoiceDate,
+    dueDate,
+    invoiceNumber,
     currency,
     totalAmount,
     netAmount: resolvedNetAmount,

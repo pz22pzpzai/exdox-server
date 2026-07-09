@@ -255,6 +255,8 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     'Do not wrap the JSON in markdown fences.',
     'This is an OCR-style extraction task. Prefer literal reading over inference.',
     'Do not guess missing values.',
+    'If the image is blank, dark, heavily blurred, out of focus, or does not clearly show a receipt or invoice, treat it as unreadable and do not invent any values.',
+    'For an unreadable image, return vendor_name as null, total_amount as null, net_amount as null, vat_amount as null, subtotal_amount as null, total_tax_amount as null, raw_text_summary as "Could not read receipt or invoice.", and include the note "Could not read receipt or invoice."',
     'If the total amount is not clearly visible or cannot be read confidently, return total_amount as null.',
     'Extract UK VAT fields separately: total_amount is gross paid, vat_amount is VAT/tax, and net_amount is before VAT.',
     'If VAT is printed, return vat_amount exactly as printed.',
