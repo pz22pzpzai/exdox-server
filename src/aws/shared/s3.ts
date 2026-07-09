@@ -1,4 +1,4 @@
-import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 import { awsEnv } from './env.js';
@@ -92,6 +92,15 @@ export async function putReceiptJsonObject(key: string, value: unknown) {
       Key: key,
       Body: JSON.stringify(value),
       ContentType: 'application/json',
+    }),
+  );
+}
+
+export async function deleteReceiptObject(key: string) {
+  await s3.send(
+    new DeleteObjectCommand({
+      Bucket: awsEnv.receiptBucketName,
+      Key: key,
     }),
   );
 }

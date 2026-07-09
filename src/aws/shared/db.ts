@@ -4,7 +4,7 @@ import mysql from 'mysql2/promise';
 
 import { awsEnv } from './env.js';
 import { sanitizeText } from './helpers.js';
-import { getReceiptJsonObject, listReceiptJsonKeys, putReceiptJsonObject } from './s3.js';
+import { deleteReceiptObject, getReceiptJsonObject, listReceiptJsonKeys, putReceiptJsonObject } from './s3.js';
 import {
   type AuthenticatedUser,
   type BankRequisitionRow,
@@ -873,6 +873,10 @@ export async function deleteReceiptById(user: AuthenticatedUser, receiptId: numb
   if (!pool) {
     const existing = await getReceiptById(user, receiptId);
     await putReceiptJsonObject(`deleted/${existing.id}-${Date.now()}.json`, existing);
+    await Promise.all([
+      deleteReceiptObject(buildReceiptMetadataKey(existing)),
+      deleteReceiptObject(existing.s3Key),
+    ]);
     return { success: true };
   }
 
