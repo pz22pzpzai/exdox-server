@@ -653,7 +653,7 @@ export async function activateInvitedUser(input: {
     organisationId: Number(row.organisation_id),
     email: String(row.email),
     fullName: fullName || (row.full_name ? String(row.full_name) : null),
-    role: String(row.role) as UserRole,
+    role: normalizeUserRole(row.role),
     status: 'active',
   };
 }
@@ -696,7 +696,7 @@ export async function findUserByEmail(emailInput: string): Promise<UserRecord | 
     email: String(row.email),
     passwordHash: row.password_hash ? String(row.password_hash) : null,
     fullName: row.full_name ? String(row.full_name) : null,
-    role: String(row.role) as UserRole,
+    role: normalizeUserRole(row.role),
     status: String(row.status) as UserRecord['status'],
     inviteToken: row.invite_token ? String(row.invite_token) : null,
     invitedByUserId: row.invited_by_user_id === null ? null : Number(row.invited_by_user_id),
@@ -1440,9 +1440,13 @@ function toAuthenticatedUser(user: StoredUser | UserRecord): AuthenticatedUser {
     organisationId: user.organisationId,
     email: user.email,
     fullName: user.fullName,
-    role: user.role,
+    role: normalizeUserRole(user.role),
     status: user.status,
   };
+}
+
+function normalizeUserRole(role: unknown): UserRole {
+  return role === 'Business_Admin' || role === 'Admin' ? 'Business_Admin' : 'Standard_Employee';
 }
 
 function toUserRecord(user: StoredUser): UserRecord {
