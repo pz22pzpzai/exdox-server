@@ -96,6 +96,9 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     'Prioritize labels such as TOTAL, AMOUNT DUE, BALANCE DUE, GRAND TOTAL, CARD PAYMENT, PAID, or TO PAY.',
     'Do not confuse subtotal, VAT, tax, tip, discount, change, or item prices with the final total amount.',
     'If multiple amounts are visible, choose the final payable amount only when the label or placement clearly supports it.',
+    'Only return total_amount when the amount itself and a nearby total-style label are both visible on the document.',
+    'Never use a lone price, item amount, subtotal, VAT value, or an unlabeled number as total_amount.',
+    'If the document shows several numbers and no final payable label can be read clearly, return total_amount as null.',
     'If the total amount is not clearly visible or cannot be read confidently, return total_amount as null.',
     'Extract UK VAT fields separately: total_amount is gross paid, vat_amount is VAT/tax, and net_amount is before VAT.',
     'If VAT is printed, return vat_amount exactly as printed.',
@@ -110,6 +113,8 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     'Use the printed currency symbol or currency code on the document when visible. Convert symbols to ISO code, for example £ to GBP, $ to USD, and € to EUR.',
     'The vendor name must come from the document itself, usually the top header or merchant branding. Never invent a workspace name or a filename-based name.',
     'The invoice number must be a literal printed reference number from the document, not a filename or timestamp.',
+    'When total_amount is not null, total_evidence_text must contain the exact visible total label and amount snippet from the document.',
+    'When the final total cannot be proven from the document, set total_evidence_text to null.',
     'The raw_text_summary must be a short plain-English summary of what is actually visible on the document. Preserve the correct currency symbol and do not invent values.',
     `Locale for date and number interpretation: ${options.locale}.`,
     `Document type hint: ${options.documentType}.`,
@@ -123,6 +128,7 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
         invoice_number: 'string | null',
         currency: 'ISO 4217 code like GBP, USD, EUR | null',
         total_amount: 'number | null',
+        total_evidence_text: 'string | null',
         net_amount: 'number | null',
         vat_amount: 'number | null',
         printed_vat_rate_percent: 'number | null',
@@ -182,7 +188,7 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
   );
   const vendorName = normalizeVendorName(source.vendor_name);
   const currency = normalizeCurrencyValue(source.currency, source.raw_text_summary);
-  const totalAmount = toNumber(source.total_amount);
+  const extractedTotalAmount = toNumber(source.total_amount);
   const explicitVatAmount = toNumber(source.vat_amount);
   const explicitNetAmount = toNumber(source.net_amount);
   const taxRateApplied = normalizeUkTaxRate(source.suggested_uk_tax_rate ?? source.tax_rate_applied);
@@ -190,6 +196,7 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
     ? source.notes.map((note) => normalizeFreeText(note)).filter((note): note is string => Boolean(note))
     : [];
   const rawTextSummary = normalizeFreeText(source.raw_text_summary) || null;
+  const totalEvidenceText = normalizeFreeText(source.total_evidence_text) || null;
   const printedVatRatePercent = resolvePrintedVatRatePercent(source, notes, rawTextSummary);
   const invoiceDate = normalizeDateString(source.invoice_date);
   const dueDate = normalizeDateString(source.due_date);
@@ -205,9 +212,28 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
     invoiceNumber === null &&
     lineItems.length === 0 &&
     taxBreakdown.length === 0;
+  const totalAmountLooksUnreliable = totalLooksUnreliable({
+    totalAmount: extractedTotalAmount,
+    totalEvidenceText,
+    confidenceScore,
+    vendorName,
+    invoiceDate,
+    dueDate,
+    invoiceNumber,
+    lineItemCount: lineItems.length,
+    taxBreakdownCount: taxBreakdown.length,
+    amountLooksUnreadable,
+  });
+  const totalAmount = totalAmountLooksUnreliable ? null : extractedTotalAmount;
+  const validatedNotes = totalAmountLooksUnreliable
+    ? dedupeNotes([
+        'Final total was not clearly visible, so the amount was cleared for manual review.',
+        ...notes,
+      ])
+    : notes;
   const documentLooksUnreadable =
     amountLooksUnreadable ||
-    (lacksStructuredEvidence && totalAmount !== null && confidenceScore !== null && confidenceScore < 0.55) ||
+    (lacksStructuredEvidence && extractedTotalAmount !== null && confidenceScore !== null && confidenceScore < 0.55) ||
     (totalAmount === null &&
       explicitVatAmount === null &&
       explicitNetAmount === null &&
@@ -251,7 +277,7 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
       needsReview: true,
       lineItems: [],
       taxBreakdown: [],
-      notes: dedupeNotes([unreadableNote, ...notes]),
+      notes: dedupeNotes([unreadableNote, ...validatedNotes]),
       rawTextSummary: unreadableNote,
     };
   }
@@ -280,7 +306,7 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
     taxBreakdown: taxBreakdown
       .map((item) => normalizeTaxLine(item))
       .filter(Boolean) as NormalizedExpenseDocument['taxBreakdown'],
-    notes,
+    notes: validatedNotes,
     rawTextSummary,
   };
 }
@@ -474,6 +500,55 @@ function ukTaxRateToPercent(value: string | null) {
     return 0;
   }
   return null;
+}
+
+function totalLooksUnreliable(input: {
+  totalAmount: number | null;
+  totalEvidenceText: string | null;
+  confidenceScore: number | null;
+  vendorName: string | null;
+  invoiceDate: string | null;
+  dueDate: string | null;
+  invoiceNumber: string | null;
+  lineItemCount: number;
+  taxBreakdownCount: number;
+  amountLooksUnreadable: boolean;
+}) {
+  if (input.totalAmount === null) {
+    return false;
+  }
+
+  if (input.amountLooksUnreadable) {
+    return true;
+  }
+
+  const totalEvidenceHasLabel =
+    input.totalEvidenceText !== null &&
+    /\b(total|amount due|balance due|grand total|card payment|paid|to pay)\b/i.test(input.totalEvidenceText);
+  const totalEvidenceHasNumber =
+    input.totalEvidenceText !== null && /\d/.test(input.totalEvidenceText);
+
+  if (!totalEvidenceHasLabel || !totalEvidenceHasNumber) {
+    return true;
+  }
+
+  const lacksDocumentIdentity =
+    input.vendorName === null &&
+    input.invoiceDate === null &&
+    input.dueDate === null &&
+    input.invoiceNumber === null &&
+    input.lineItemCount === 0 &&
+    input.taxBreakdownCount === 0;
+
+  if (input.confidenceScore !== null && input.confidenceScore < 0.5) {
+    return true;
+  }
+
+  if (lacksDocumentIdentity && input.confidenceScore !== null && input.confidenceScore < 0.85) {
+    return true;
+  }
+
+  return false;
 }
 
 function dedupeNotes(notes: string[]) {
