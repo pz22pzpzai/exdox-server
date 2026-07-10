@@ -102,6 +102,8 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     'If the total amount is not clearly visible or cannot be read confidently, return total_amount as null.',
     'Extract UK VAT fields separately: total_amount is gross paid, vat_amount is VAT/tax, and net_amount is before VAT.',
     'If VAT is printed, return vat_amount exactly as printed.',
+    'Only return vat_amount when the document clearly shows a VAT or TAX label, amount, or an explicit printed VAT/tax rate.',
+    'Never invent vat_amount from merchant type, product type, or a guessed standard rate.',
     'If the receipt explicitly prints a VAT or tax rate such as VAT 20% or Tax 5% but does not print the VAT amount, return printed_vat_rate_percent with that numeric rate.',
     'Only calculate missing vat_amount when the document explicitly shows a VAT or tax rate. Do not calculate VAT from a guessed or inferred rate.',
     'If net_amount is missing but total_amount and vat_amount are clear, calculate net_amount as total_amount - vat_amount.',
@@ -115,6 +117,9 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     'The invoice number must be a literal printed reference number from the document, not a filename or timestamp.',
     'When total_amount is not null, total_evidence_text must contain the exact visible total label and amount snippet from the document.',
     'When the final total cannot be proven from the document, set total_evidence_text to null.',
+    'When vat_amount is not null, vat_evidence_text must contain the exact visible VAT or TAX snippet from the document.',
+    'When printed_vat_rate_percent is not null, vat_rate_evidence_text must contain the exact visible VAT or TAX rate snippet from the document.',
+    'When VAT or tax cannot be proven from the document, set vat_evidence_text and vat_rate_evidence_text to null.',
     'The raw_text_summary must be a short plain-English summary of what is actually visible on the document. Preserve the correct currency symbol and do not invent values.',
     `Locale for date and number interpretation: ${options.locale}.`,
     `Document type hint: ${options.documentType}.`,
@@ -131,7 +136,9 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
         total_evidence_text: 'string | null',
         net_amount: 'number | null',
         vat_amount: 'number | null',
+        vat_evidence_text: 'string | null',
         printed_vat_rate_percent: 'number | null',
+        vat_rate_evidence_text: 'string | null',
         suggested_uk_tax_rate: '20% Standard | 5% Reduced | 0% Zero | Exempt | null',
         subtotal_amount: 'number | null',
         total_tax_amount: 'number | null',
@@ -197,7 +204,9 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
     : [];
   const rawTextSummary = normalizeFreeText(source.raw_text_summary) || null;
   const totalEvidenceText = normalizeFreeText(source.total_evidence_text) || null;
-  const printedVatRatePercent = resolvePrintedVatRatePercent(source, notes, rawTextSummary);
+  const vatEvidenceText = normalizeFreeText(source.vat_evidence_text) || null;
+  const vatRateEvidenceText = normalizeFreeText(source.vat_rate_evidence_text) || null;
+  const extractedPrintedVatRatePercent = resolvePrintedVatRatePercent(source, notes, rawTextSummary);
   const invoiceDate = normalizeDateString(source.invoice_date);
   const dueDate = normalizeDateString(source.due_date);
   const invoiceNumber = normalizeInvoiceNumber(source.invoice_number);
@@ -231,6 +240,34 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
         ...notes,
       ])
     : notes;
+  const vatAmountLooksUnreliable = vatLooksUnreliable({
+    explicitVatAmount,
+    vatEvidenceText,
+    printedVatRatePercent: extractedPrintedVatRatePercent,
+    vatRateEvidenceText,
+    confidenceScore,
+    amountLooksUnreadable,
+  });
+  const validatedExplicitVatAmount = vatAmountLooksUnreliable ? null : explicitVatAmount;
+  const printedVatRateLooksUnreliable = vatRateLooksUnreliable({
+    printedVatRatePercent: extractedPrintedVatRatePercent,
+    vatRateEvidenceText,
+    confidenceScore,
+    amountLooksUnreadable,
+  });
+  const printedVatRatePercent = printedVatRateLooksUnreliable ? null : extractedPrintedVatRatePercent;
+  const notesWithVatValidation =
+    vatAmountLooksUnreliable || printedVatRateLooksUnreliable
+      ? dedupeNotes([
+          ...(vatAmountLooksUnreliable
+            ? ['VAT amount was not clearly visible, so it was cleared for manual review.']
+            : []),
+          ...(printedVatRateLooksUnreliable
+            ? ['VAT rate was not clearly visible, so it was cleared for manual review.']
+            : []),
+          ...validatedNotes,
+        ])
+      : validatedNotes;
   const documentLooksUnreadable =
     amountLooksUnreadable ||
     (lacksStructuredEvidence && extractedTotalAmount !== null && confidenceScore !== null && confidenceScore < 0.55) ||
@@ -241,7 +278,7 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
       !rawTextSummary);
   const resolvedVatAmount = resolveVatAmount({
     totalAmount,
-    explicitVatAmount,
+    explicitVatAmount: validatedExplicitVatAmount,
     explicitNetAmount,
     printedVatRatePercent,
     taxRateApplied,
@@ -277,7 +314,7 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
       needsReview: true,
       lineItems: [],
       taxBreakdown: [],
-      notes: dedupeNotes([unreadableNote, ...validatedNotes]),
+      notes: dedupeNotes([unreadableNote, ...notesWithVatValidation]),
       rawTextSummary: unreadableNote,
     };
   }
@@ -306,7 +343,7 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
     taxBreakdown: taxBreakdown
       .map((item) => normalizeTaxLine(item))
       .filter(Boolean) as NormalizedExpenseDocument['taxBreakdown'],
-    notes: validatedNotes,
+    notes: notesWithVatValidation,
     rawTextSummary,
   };
 }
@@ -545,6 +582,76 @@ function totalLooksUnreliable(input: {
   }
 
   if (lacksDocumentIdentity && input.confidenceScore !== null && input.confidenceScore < 0.85) {
+    return true;
+  }
+
+  return false;
+}
+
+function vatLooksUnreliable(input: {
+  explicitVatAmount: number | null;
+  vatEvidenceText: string | null;
+  printedVatRatePercent: number | null;
+  vatRateEvidenceText: string | null;
+  confidenceScore: number | null;
+  amountLooksUnreadable: boolean;
+}) {
+  if (input.explicitVatAmount === null) {
+    return false;
+  }
+
+  if (input.amountLooksUnreadable) {
+    return true;
+  }
+
+  const vatEvidenceHasLabel =
+    input.vatEvidenceText !== null && /\b(vat|tax)\b/i.test(input.vatEvidenceText);
+  const vatEvidenceHasNumber =
+    input.vatEvidenceText !== null && /\d/.test(input.vatEvidenceText);
+
+  if (!vatEvidenceHasLabel || !vatEvidenceHasNumber) {
+    return true;
+  }
+
+  if (input.confidenceScore !== null && input.confidenceScore < 0.5) {
+    return true;
+  }
+
+  if (
+    input.printedVatRatePercent !== null &&
+    input.vatRateEvidenceText !== null &&
+    !/\b(vat|tax)\b/i.test(input.vatRateEvidenceText)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function vatRateLooksUnreliable(input: {
+  printedVatRatePercent: number | null;
+  vatRateEvidenceText: string | null;
+  confidenceScore: number | null;
+  amountLooksUnreadable: boolean;
+}) {
+  if (input.printedVatRatePercent === null) {
+    return false;
+  }
+
+  if (input.amountLooksUnreadable) {
+    return true;
+  }
+
+  const vatRateHasTaxLabel =
+    input.vatRateEvidenceText !== null && /\b(vat|tax)\b/i.test(input.vatRateEvidenceText);
+  const vatRateHasPercent =
+    input.vatRateEvidenceText !== null && /(\d+(?:\.\d+)?)\s*%/.test(input.vatRateEvidenceText);
+
+  if (!vatRateHasTaxLabel || !vatRateHasPercent) {
+    return true;
+  }
+
+  if (input.confidenceScore !== null && input.confidenceScore < 0.5) {
     return true;
   }
 
