@@ -42,6 +42,12 @@ Parameters:
     Type: String
     Default: ''
     NoEcho: true
+  DbIamAuthEnabled:
+    Type: String
+    Default: 'false'
+  DbIamRegion:
+    Type: String
+    Default: 'eu-west-2'
 
 Globals:
   Function:
@@ -64,6 +70,8 @@ Globals:
         DB_NAME: !Ref DbName
         DB_USER: !Ref DbUser
         DB_PASSWORD: !Ref DbPassword
+        DB_IAM_AUTH_ENABLED: !Ref DbIamAuthEnabled
+        DB_IAM_REGION: !Ref DbIamRegion
         AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
 
 Resources:

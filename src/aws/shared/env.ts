@@ -10,6 +10,14 @@ function optionalEnv(name: string) {
   return process.env[name]?.trim() || null;
 }
 
+function optionalBooleanEnv(name: string) {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (!value) {
+    return false;
+  }
+  return value === 'true' || value === '1' || value === 'yes';
+}
+
 export const awsEnv = {
   receiptBucketName: requireEnv('RECEIPT_BUCKET_NAME'),
   openAiApiKey: requireEnv('OPENAI_API_KEY'),
@@ -23,6 +31,8 @@ export const awsEnv = {
   dbName: optionalEnv('DB_NAME'),
   dbUser: optionalEnv('DB_USER'),
   dbPassword: optionalEnv('DB_PASSWORD'),
+  dbIamAuthEnabled: optionalBooleanEnv('DB_IAM_AUTH_ENABLED'),
+  dbIamRegion: process.env.DB_IAM_REGION?.trim() || process.env.AWS_REGION?.trim() || null,
   openBankingProvider: process.env.OPEN_BANKING_PROVIDER?.trim() || 'truelayer',
   openBankingAuthUrl: optionalEnv('OPEN_BANKING_AUTH_URL'),
   openBankingCallbackUrl:

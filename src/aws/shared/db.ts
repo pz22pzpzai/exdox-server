@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 
+import { Signer } from '@aws-sdk/rds-signer';
 import mysql from 'mysql2/promise';
 
 import { awsEnv } from './env.js';
@@ -22,18 +23,94 @@ import {
   type WorkspaceContext,
 } from '../types.js';
 
-const pool =
-  awsEnv.receiptStoreMode === 'mysql' && awsEnv.dbHost && awsEnv.dbUser && awsEnv.dbPassword && awsEnv.dbName
-    ? mysql.createPool({
-        host: awsEnv.dbHost,
-        port: awsEnv.dbPort,
-        user: awsEnv.dbUser,
-        password: awsEnv.dbPassword,
-        database: awsEnv.dbName,
-        connectionLimit: 4,
-        charset: 'utf8mb4',
-      })
-    : null;
+const usesMysql =
+  awsEnv.receiptStoreMode === 'mysql' &&
+  awsEnv.dbHost &&
+  awsEnv.dbUser &&
+  awsEnv.dbName &&
+  (awsEnv.dbIamAuthEnabled || awsEnv.dbPassword);
+
+let mysqlPool: mysql.Pool | null = null;
+let mysqlPoolTokenExpiresAt = 0;
+
+const pool = usesMysql
+  ? {
+      execute: <T extends mysql.QueryResult>(sql: string, values?: any) =>
+        withMysqlPool((activePool) => activePool.execute<T>(sql, values)),
+      query: <T extends mysql.QueryResult>(sql: string, values?: any) =>
+        withMysqlPool((activePool) => activePool.query<T>(sql, values)),
+      getConnection: () => withMysqlPool((activePool) => activePool.getConnection()),
+      end: async () => {
+        if (mysqlPool) {
+          await mysqlPool.end();
+          mysqlPool = null;
+          mysqlPoolTokenExpiresAt = 0;
+        }
+      },
+    }
+  : null;
+
+async function withMysqlPool<T>(callback: (activePool: mysql.Pool) => Promise<T>) {
+  const activePool = await getMysqlPool();
+  if (!activePool) {
+    throw new Error('MySQL pool is not configured.');
+  }
+  return callback(activePool);
+}
+
+async function getMysqlPool() {
+  if (!usesMysql || !awsEnv.dbHost || !awsEnv.dbUser || !awsEnv.dbName) {
+    return null;
+  }
+
+  const now = Date.now();
+  if (mysqlPool && (!awsEnv.dbIamAuthEnabled || now < mysqlPoolTokenExpiresAt)) {
+    return mysqlPool;
+  }
+
+  if (mysqlPool) {
+    await mysqlPool.end();
+    mysqlPool = null;
+  }
+
+  const password = awsEnv.dbIamAuthEnabled ? await buildIamAuthToken() : awsEnv.dbPassword;
+  if (!password) {
+    throw new Error('MySQL authentication is not configured.');
+  }
+
+  mysqlPool = mysql.createPool({
+    host: awsEnv.dbHost,
+    port: awsEnv.dbPort,
+    user: awsEnv.dbUser,
+    password,
+    database: awsEnv.dbName,
+    connectionLimit: 4,
+    charset: 'utf8mb4',
+    ssl: awsEnv.dbIamAuthEnabled ? { minVersion: 'TLSv1.2' } : undefined,
+    authPlugins: awsEnv.dbIamAuthEnabled
+      ? {
+          mysql_clear_password: () => () => Buffer.from(`${password}\0`),
+        }
+      : undefined,
+  });
+  mysqlPoolTokenExpiresAt = awsEnv.dbIamAuthEnabled ? now + 14 * 60 * 1000 : Number.MAX_SAFE_INTEGER;
+  return mysqlPool;
+}
+
+async function buildIamAuthToken() {
+  if (!awsEnv.dbHost || !awsEnv.dbUser || !awsEnv.dbIamRegion) {
+    throw new Error('IAM database authentication requires DB_HOST, DB_USER, and DB_IAM_REGION.');
+  }
+
+  const signer = new Signer({
+    hostname: awsEnv.dbHost,
+    port: awsEnv.dbPort,
+    username: awsEnv.dbUser,
+    region: awsEnv.dbIamRegion,
+  });
+
+  return signer.getAuthToken();
+}
 
 type StoredOrganisation = {
   id: number;
@@ -1179,15 +1256,26 @@ export async function completeBankRequisition(input: {
 }
 
 export async function applySchema(sql: string) {
-  if (!awsEnv.dbHost || !awsEnv.dbUser || !awsEnv.dbPassword) {
-    throw new Error('Database credentials are required to apply schema.');
+  if (!awsEnv.dbHost || !awsEnv.dbUser) {
+    throw new Error('Database host and user are required to apply schema.');
+  }
+
+  const password = awsEnv.dbIamAuthEnabled ? await buildIamAuthToken() : awsEnv.dbPassword;
+  if (!password) {
+    throw new Error('Database authentication is required to apply schema.');
   }
 
   const connection = await mysql.createConnection({
     host: awsEnv.dbHost,
     port: awsEnv.dbPort,
     user: awsEnv.dbUser,
-    password: awsEnv.dbPassword,
+    password,
+    ssl: awsEnv.dbIamAuthEnabled ? { minVersion: 'TLSv1.2' } : undefined,
+    authPlugins: awsEnv.dbIamAuthEnabled
+      ? {
+          mysql_clear_password: () => () => Buffer.from(`${password}\0`),
+        }
+      : undefined,
     multipleStatements: true,
   });
 
