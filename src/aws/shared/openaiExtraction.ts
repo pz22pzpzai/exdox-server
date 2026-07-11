@@ -163,8 +163,8 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     'Only calculate missing vat_amount when the document explicitly shows a VAT or tax rate. Do not calculate VAT from a guessed or inferred rate.',
     'If net_amount is missing but total_amount and vat_amount are clear, calculate net_amount as total_amount - vat_amount.',
     'If VAT is not printed and cannot be reliably inferred, return vat_amount as null.',
-    'Classify suggested_uk_tax_rate as one of: 20% Standard, 5% Reduced, 0% Zero, Exempt.',
-    'Use UK VAT judgement for common merchants and items: restaurant, cafe, takeaway food and drinks are usually 20% Standard; domestic energy is often 5% Reduced; train or rail fares such as Trainline are 0% Zero; insurance, finance, medical, and education style exempt supplies are Exempt.',
+    'Only return suggested_uk_tax_rate when the receipt explicitly prints a VAT/TAX rate, or when total_amount, net_amount, and vat_amount are all clearly visible and support an exact UK VAT rate.',
+    'Never set suggested_uk_tax_rate from merchant type, merchant brand, item category, or general business knowledge alone.',
     'If subtotal is not clearly visible, return subtotal_amount as the same value as net_amount when net_amount is known, otherwise null.',
     'If tax is not clearly visible, return total_tax_amount as the same value as vat_amount when vat_amount is known, otherwise null.',
     'Use the printed currency symbol or currency code on the document when visible. Convert symbols to ISO code, for example £ to GBP, $ to USD, and € to EUR.',
@@ -296,14 +296,13 @@ function shouldRetryVatExtraction(raw: unknown) {
     ? source.notes.map((note) => normalizeFreeText(note)).filter((note): note is string => Boolean(note))
     : [];
   const visibleText = [rawTextSummary, ...notes].join(' ');
-  const mentionsVatContext = /\b(vat|tax|subtotal|net|zero rated|standard rated)\b/i.test(visibleText);
   const isUnreadable = /could not read receipt|could not read invoice|blank image|no receipt visible/i.test(visibleText);
 
   if (isUnreadable || totalAmount === null) {
     return false;
   }
 
-  return explicitVatAmount === null && printedVatRatePercent === null && !mentionsVatContext;
+  return explicitVatAmount === null;
 }
 
 function mergeExtractionPayloads(baseRaw: unknown, vatRaw: unknown) {
@@ -359,7 +358,6 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
   const extractedTotalAmount = toNumber(source.total_amount);
   const explicitVatAmount = toNumber(source.vat_amount);
   const explicitNetAmount = toNumber(source.net_amount);
-  const taxRateApplied = normalizeUkTaxRate(source.suggested_uk_tax_rate ?? source.tax_rate_applied);
   const notes = Array.isArray(source.notes)
     ? source.notes.map((note) => normalizeFreeText(note)).filter((note): note is string => Boolean(note))
     : [];
@@ -417,6 +415,15 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
     amountLooksUnreadable,
   });
   const printedVatRatePercent = printedVatRateLooksUnreliable ? null : extractedPrintedVatRatePercent;
+  const taxRateApplied = resolveTaxRateApplied({
+    suggestedTaxRate: source.suggested_uk_tax_rate ?? source.tax_rate_applied,
+    printedVatRatePercent,
+    totalAmount,
+    explicitNetAmount,
+    explicitVatAmount: validatedExplicitVatAmount,
+    vatEvidenceText,
+    vatRateEvidenceText,
+  });
   const notesWithVatValidation =
     vatAmountLooksUnreliable || printedVatRateLooksUnreliable
       ? dedupeNotes([
@@ -696,6 +703,71 @@ function ukTaxRateToPercent(value: string | null) {
   }
   if (value.startsWith('0%') || value === 'Exempt' || value === 'No VAT') {
     return 0;
+  }
+  return null;
+}
+
+function resolveTaxRateApplied(input: {
+  suggestedTaxRate: unknown;
+  printedVatRatePercent: number | null;
+  totalAmount: number | null;
+  explicitNetAmount: number | null;
+  explicitVatAmount: number | null;
+  vatEvidenceText: string | null;
+  vatRateEvidenceText: string | null;
+}) {
+  if (input.printedVatRatePercent !== null) {
+    return percentToUkTaxRate(input.printedVatRatePercent);
+  }
+
+  if (input.explicitVatAmount !== null && input.totalAmount !== null && input.explicitNetAmount !== null) {
+    return percentToUkTaxRate(deriveVatRatePercent(input.explicitNetAmount, input.explicitVatAmount));
+  }
+
+  const normalizedSuggested = normalizeUkTaxRate(input.suggestedTaxRate);
+  if (!normalizedSuggested) {
+    return null;
+  }
+
+  const hasVatEvidence =
+    (input.vatEvidenceText !== null && /\b(vat|tax)\b/i.test(input.vatEvidenceText) && /\d/.test(input.vatEvidenceText)) ||
+    (input.vatRateEvidenceText !== null &&
+      /\b(vat|tax)\b/i.test(input.vatRateEvidenceText) &&
+      /(\d+(?:\.\d+)?)\s*%/.test(input.vatRateEvidenceText));
+
+  return hasVatEvidence ? normalizedSuggested : null;
+}
+
+function deriveVatRatePercent(netAmount: number, vatAmount: number) {
+  if (netAmount <= 0 || vatAmount < 0) {
+    return null;
+  }
+
+  const rate = (vatAmount / netAmount) * 100;
+  if (Math.abs(rate - 20) < 0.75) {
+    return 20;
+  }
+  if (Math.abs(rate - 5) < 0.75) {
+    return 5;
+  }
+  if (Math.abs(rate) < 0.25) {
+    return 0;
+  }
+  return null;
+}
+
+function percentToUkTaxRate(percent: number | null) {
+  if (percent === null) {
+    return null;
+  }
+  if (Math.abs(percent - 20) < 0.75) {
+    return '20% Standard';
+  }
+  if (Math.abs(percent - 5) < 0.75) {
+    return '5% Reduced';
+  }
+  if (Math.abs(percent) < 0.25) {
+    return '0% Zero';
   }
   return null;
 }
