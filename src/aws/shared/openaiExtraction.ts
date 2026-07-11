@@ -25,10 +25,32 @@ export async function processExpenseBuffer(input: {
 }) {
   const responseText = await extractWithOpenAI(input);
   const raw = parseExtractionJson(responseText);
-  const mergedRaw = shouldRetryVatExtraction(raw)
-    ? mergeExtractionPayloads(raw, parseExtractionJson(await extractVatFallbackWithOpenAI(input, raw)))
-    : raw;
-  return normalizeExtractionPayload(mergedRaw, input.options.documentType);
+  const didRetryVat = shouldRetryVatExtraction(raw);
+  const vatFallbackRaw = didRetryVat ? parseExtractionJson(await extractVatFallbackWithOpenAI(input, raw)) : null;
+  const mergedRaw = vatFallbackRaw ? mergeExtractionPayloads(raw, vatFallbackRaw) : raw;
+  const normalized = normalizeExtractionPayload(mergedRaw, input.options.documentType);
+
+  console.info(
+    '[vat-debug]',
+    JSON.stringify({
+      fileName: input.fileName,
+      documentType: input.options.documentType,
+      didRetryVat,
+      firstPass: summarizeVatDebugPayload(raw),
+      vatFallback: summarizeVatDebugPayload(vatFallbackRaw),
+      merged: summarizeVatDebugPayload(mergedRaw),
+      normalized: {
+        totalAmount: normalized.totalAmount,
+        netAmount: normalized.netAmount,
+        vatAmount: normalized.vatAmount,
+        totalTaxAmount: normalized.totalTaxAmount,
+        taxRateApplied: normalized.taxRateApplied,
+        notes: normalized.notes.slice(0, 4),
+      },
+    }),
+  );
+
+  return normalized;
 }
 
 async function extractWithOpenAI({
@@ -280,6 +302,48 @@ function parseExtractionJson(responseText: string): unknown {
     }
     return JSON.parse(cleaned.slice(start, end + 1));
   }
+}
+
+function summarizeVatDebugPayload(raw: unknown) {
+  if (typeof raw !== 'object' || !raw) {
+    return null;
+  }
+
+  const source = raw as Record<string, unknown>;
+  const notes = Array.isArray(source.notes)
+    ? source.notes
+        .map((note) => normalizeFreeText(note))
+        .filter(Boolean)
+        .slice(0, 4)
+    : [];
+
+  return {
+    total_amount: toNumber(source.total_amount),
+    net_amount: toNumber(source.net_amount),
+    vat_amount: toNumber(source.vat_amount),
+    total_tax_amount: toNumber(source.total_tax_amount),
+    printed_vat_rate_percent: toNumber(source.printed_vat_rate_percent),
+    suggested_uk_tax_rate: normalizeFreeText(source.suggested_uk_tax_rate),
+    total_evidence_text: normalizeFreeText(source.total_evidence_text),
+    vat_evidence_text: normalizeFreeText(source.vat_evidence_text),
+    vat_rate_evidence_text: normalizeFreeText(source.vat_rate_evidence_text),
+    raw_text_summary: normalizeFreeText(source.raw_text_summary),
+    tax_breakdown: Array.isArray(source.tax_breakdown)
+      ? source.tax_breakdown
+          .slice(0, 4)
+          .map((item) =>
+            typeof item === 'object' && item
+              ? {
+                  label: normalizeFreeText((item as Record<string, unknown>).label),
+                  rate: toNumber((item as Record<string, unknown>).rate),
+                  amount: toNumber((item as Record<string, unknown>).amount),
+                }
+              : null,
+          )
+          .filter(Boolean)
+      : [],
+    notes,
+  };
 }
 
 function shouldRetryVatExtraction(raw: unknown) {
