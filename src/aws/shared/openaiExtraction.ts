@@ -25,7 +25,10 @@ export async function processExpenseBuffer(input: {
 }) {
   const responseText = await extractWithOpenAI(input);
   const raw = parseExtractionJson(responseText);
-  return normalizeExtractionPayload(raw, input.options.documentType);
+  const mergedRaw = shouldRetryVatExtraction(raw)
+    ? mergeExtractionPayloads(raw, parseExtractionJson(await extractVatFallbackWithOpenAI(input, raw)))
+    : raw;
+  return normalizeExtractionPayload(mergedRaw, input.options.documentType);
 }
 
 async function extractWithOpenAI({
@@ -77,6 +80,58 @@ async function extractWithOpenAI({
 
   if (!response.output_text) {
     throw new Error('The OCR provider returned an empty response.');
+  }
+
+  return response.output_text;
+}
+
+async function extractVatFallbackWithOpenAI(
+  input: {
+    fileName: string;
+    mimeType?: string;
+    buffer: Buffer;
+    options: ExpenseRequestOptions;
+  },
+  firstPassRaw: unknown,
+) {
+  const resolvedMimeType = input.mimeType || inferMimeType(input.fileName);
+  const inputContent: Array<Record<string, unknown>> = [
+    {
+      type: 'input_text',
+      text: buildVatFallbackPrompt(input.options, firstPassRaw),
+    },
+  ];
+
+  if (resolvedMimeType === 'application/pdf') {
+    const uploadedFile = await openai.files.create({
+      file: new File([new Uint8Array(input.buffer)], input.fileName, { type: resolvedMimeType }),
+      purpose: 'user_data',
+    });
+
+    inputContent.push({
+      type: 'input_file',
+      file_id: uploadedFile.id,
+    });
+  } else {
+    inputContent.push({
+      type: 'input_image',
+      image_url: `data:${resolvedMimeType};base64,${input.buffer.toString('base64')}`,
+      detail: 'high',
+    });
+  }
+
+  const response = await openai.responses.create({
+    model: awsEnv.openAiModel,
+    input: [
+      {
+        role: 'user',
+        content: inputContent as never,
+      },
+    ],
+  });
+
+  if (!response.output_text) {
+    throw new Error('The OCR provider returned an empty VAT fallback response.');
   }
 
   return response.output_text;
@@ -169,6 +224,48 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
   ].join('\n');
 }
 
+function buildVatFallbackPrompt(options: ExpenseRequestOptions, firstPassRaw: unknown): string {
+  return [
+    'Re-read this same receipt or invoice, but only for VAT and tax evidence.',
+    'Return valid JSON only. Do not wrap the JSON in markdown fences.',
+    'Look carefully at the lower summary block where receipts often print VAT breakdowns, VAT numbers, tax codes, subtotal, and total.',
+    'Do not guess VAT from the merchant type alone.',
+    'If the receipt prints a VAT amount, return that exact amount.',
+    'If the receipt prints a VAT or tax percentage but not the VAT amount, return the printed_vat_rate_percent.',
+    'If the receipt prints a subtotal or net amount before VAT, return net_amount and subtotal_amount exactly as visible.',
+    'If a VAT amount is clearly printed, also return total_tax_amount with the same number.',
+    'If there is no visible VAT or tax line, return all VAT fields as null and explain that briefly in notes.',
+    'Use exact visible snippets for vat_evidence_text and vat_rate_evidence_text.',
+    `Locale for date and number interpretation: ${options.locale}.`,
+    `Document type hint: ${options.documentType}.`,
+    'Here is the first pass result for context. Correct it if VAT was missed:',
+    JSON.stringify(firstPassRaw, null, 2),
+    'Return this shape exactly:',
+    JSON.stringify(
+      {
+        net_amount: 'number | null',
+        vat_amount: 'number | null',
+        vat_evidence_text: 'string | null',
+        printed_vat_rate_percent: 'number | null',
+        vat_rate_evidence_text: 'string | null',
+        subtotal_amount: 'number | null',
+        total_tax_amount: 'number | null',
+        tax_breakdown: [
+          {
+            label: 'string',
+            rate: 'number | null',
+            amount: 'number | null',
+          },
+        ],
+        notes: ['string'],
+        raw_text_summary: 'string | null',
+      },
+      null,
+      2,
+    ),
+  ].join('\n');
+}
+
 function parseExtractionJson(responseText: string): unknown {
   const trimmed = responseText.trim();
   const cleaned = trimmed.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '');
@@ -183,6 +280,70 @@ function parseExtractionJson(responseText: string): unknown {
     }
     return JSON.parse(cleaned.slice(start, end + 1));
   }
+}
+
+function shouldRetryVatExtraction(raw: unknown) {
+  if (typeof raw !== 'object' || !raw) {
+    return false;
+  }
+
+  const source = raw as Record<string, unknown>;
+  const totalAmount = toNumber(source.total_amount);
+  const explicitVatAmount = toNumber(source.vat_amount);
+  const printedVatRatePercent = toNumber(source.printed_vat_rate_percent);
+  const rawTextSummary = normalizeFreeText(source.raw_text_summary);
+  const notes = Array.isArray(source.notes)
+    ? source.notes.map((note) => normalizeFreeText(note)).filter((note): note is string => Boolean(note))
+    : [];
+  const visibleText = [rawTextSummary, ...notes].join(' ');
+  const mentionsVatContext = /\b(vat|tax|subtotal|net|zero rated|standard rated)\b/i.test(visibleText);
+  const isUnreadable = /could not read receipt|could not read invoice|blank image|no receipt visible/i.test(visibleText);
+
+  if (isUnreadable || totalAmount === null) {
+    return false;
+  }
+
+  return explicitVatAmount === null && printedVatRatePercent === null && !mentionsVatContext;
+}
+
+function mergeExtractionPayloads(baseRaw: unknown, vatRaw: unknown) {
+  const base =
+    typeof baseRaw === 'object' && baseRaw
+      ? ({ ...(baseRaw as Record<string, unknown>) } as Record<string, unknown>)
+      : {};
+  const vat =
+    typeof vatRaw === 'object' && vatRaw ? (vatRaw as Record<string, unknown>) : {};
+
+  const mergedNotes = [
+    ...(Array.isArray(base.notes) ? base.notes : []),
+    ...(Array.isArray(vat.notes) ? vat.notes : []),
+  ];
+
+  for (const key of [
+    'net_amount',
+    'vat_amount',
+    'vat_evidence_text',
+    'printed_vat_rate_percent',
+    'vat_rate_evidence_text',
+    'subtotal_amount',
+    'total_tax_amount',
+    'tax_breakdown',
+  ]) {
+    const incoming = vat[key];
+    if (incoming !== undefined && incoming !== null && !(Array.isArray(incoming) && incoming.length === 0)) {
+      base[key] = incoming;
+    }
+  }
+
+  if (vat.raw_text_summary !== undefined && vat.raw_text_summary !== null) {
+    base.raw_text_summary = vat.raw_text_summary;
+  }
+
+  if (mergedNotes.length) {
+    base.notes = [...new Set(mergedNotes)];
+  }
+
+  return base;
 }
 
 function normalizeExtractionPayload(raw: unknown, requestedDocumentType: DocumentType): NormalizedExpenseDocument {
