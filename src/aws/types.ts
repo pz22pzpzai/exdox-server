@@ -58,6 +58,8 @@ export type ReceiptRow = {
   claimId: number | null;
   status: InboxStatus;
   category: string | null;
+  description: string | null;
+  customer: string | null;
   receiptSource: ReceiptSource;
   sourceFilename: string;
   sourceMimeType: string;

@@ -141,6 +141,8 @@ export async function insertReceiptRecord(input: {
   claimId?: number | null;
   status?: ReceiptRow['status'];
   category?: string | null;
+  description?: string | null;
+  customer?: string | null;
   receiptSource?: ReceiptSource;
   sourceFileName: string;
   sourceMimeType: string;
@@ -168,6 +170,8 @@ export async function insertReceiptRecord(input: {
       claim_id,
       status,
       category,
+      description,
+      customer_name,
       receipt_source,
       source_filename,
       source_mime_type,
@@ -196,7 +200,7 @@ export async function insertReceiptRecord(input: {
       notes,
       raw_text_summary,
       raw_extraction_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.organisationId,
       input.uploadedByUserId,
@@ -205,6 +209,8 @@ export async function insertReceiptRecord(input: {
       input.claimId ?? null,
       input.status ?? (input.document.needsReview ? 'Review' : 'Ready'),
       input.category ?? 'Uncategorised',
+      input.description ?? null,
+      input.customer ?? null,
       input.receiptSource ?? 'web_upload',
       input.sourceFileName,
       input.sourceMimeType,
@@ -300,6 +306,8 @@ export async function listReceipts(
       claim_id,
       status,
       category,
+      description,
+      customer_name,
       receipt_source,
       source_filename,
       source_mime_type,
@@ -470,6 +478,8 @@ export async function attachReceiptToClaim(input: {
       claim_id,
       status,
       category,
+      description,
+      customer_name,
       receipt_source,
       source_filename,
       source_mime_type,
@@ -899,7 +909,7 @@ export async function updateReceiptById(
   user: AuthenticatedUser,
   receiptId: number,
   updates: Partial<
-    Pick<ReceiptRow, 'vendorName' | 'invoiceDate' | 'dueDate' | 'invoiceNumber' | 'category' | 'netAmount' | 'vatAmount' | 'totalAmount' | 'taxRateApplied' | 'status'>
+    Pick<ReceiptRow, 'vendorName' | 'invoiceDate' | 'dueDate' | 'invoiceNumber' | 'category' | 'description' | 'customer' | 'netAmount' | 'vatAmount' | 'totalAmount' | 'taxRateApplied' | 'status'>
   >,
 ) {
   if (!pool) {
@@ -920,6 +930,8 @@ export async function updateReceiptById(
          due_date = ?,
          invoice_number = ?,
          category = ?,
+         description = ?,
+         customer_name = ?,
          net_amount = ?,
          vat_amount = ?,
          total_amount = ?,
@@ -933,6 +945,8 @@ export async function updateReceiptById(
       updates.dueDate ?? null,
       updates.invoiceNumber ?? null,
       updates.category ?? null,
+      updates.description ?? null,
+      updates.customer ?? null,
       updates.netAmount ?? null,
       updates.vatAmount ?? null,
       updates.totalAmount ?? null,
@@ -1124,6 +1138,8 @@ export async function listBankTransactionsWithCandidates(
     totalAmount: toDbNumber(row.total_amount),
     status: (row.status ? String(row.status) : 'Review') as ReceiptRow['status'],
     category: row.category ? String(row.category) : null,
+    description: row.description ? String(row.description) : null,
+    customer: row.customer_name ? String(row.customer_name) : null,
     receiptSource: (row.receipt_source ? String(row.receipt_source) : 'web_upload') as ReceiptRow['receiptSource'],
   }));
 
@@ -1353,6 +1369,8 @@ function mapReceiptRow(row: mysql.RowDataPacket): ReceiptRow {
     claimId: row.claim_id === null ? null : Number(row.claim_id),
     status: (row.status ? String(row.status) : 'Review') as ReceiptRow['status'],
     category: row.category ? String(row.category) : null,
+    description: row.description ? String(row.description) : null,
+    customer: row.customer_name ? String(row.customer_name) : null,
     receiptSource: (row.receipt_source ? String(row.receipt_source) : 'web_upload') as ReceiptRow['receiptSource'],
     sourceFilename: String(row.source_filename),
     sourceMimeType: String(row.source_mime_type),
@@ -1430,6 +1448,8 @@ function buildS3BackedReceiptRow(input: {
   claimId?: number | null;
   status?: ReceiptRow['status'];
   category?: string | null;
+  description?: string | null;
+  customer?: string | null;
   receiptSource?: ReceiptSource;
   sourceFileName: string;
   sourceMimeType: string;
@@ -1452,6 +1472,8 @@ function buildS3BackedReceiptRow(input: {
     claimId: input.claimId ?? null,
     status: input.status ?? (input.document.needsReview ? 'Review' : 'Ready'),
     category: input.category ?? 'Uncategorised',
+    description: input.description ?? null,
+    customer: input.customer ?? null,
     receiptSource: input.receiptSource ?? 'web_upload',
     sourceFilename: input.sourceFileName,
     sourceMimeType: input.sourceMimeType,

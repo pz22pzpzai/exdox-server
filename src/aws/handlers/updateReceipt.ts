@@ -24,6 +24,8 @@ export async function handler(event: APIGatewayProxyEventV2) {
       dueDate: sanitizeText(body.dueDate) || null,
       invoiceNumber: sanitizeText(body.invoiceNumber) || null,
       category: sanitizeText(body.category) || null,
+      description: sanitizeText(body.description) || null,
+      customer: sanitizeText(body.customer) || null,
       netAmount: toNumber(body.netAmount),
       vatAmount: toNumber(body.vatAmount),
       totalAmount: toNumber(body.totalAmount),

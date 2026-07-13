@@ -71,6 +71,8 @@ CREATE TABLE IF NOT EXISTS receipts (
   claim_id BIGINT UNSIGNED NULL,
   status VARCHAR(32) NOT NULL DEFAULT 'Processing',
   category VARCHAR(255) NULL,
+  description TEXT NULL,
+  customer_name VARCHAR(255) NULL,
   receipt_source VARCHAR(32) NOT NULL DEFAULT 'web_upload',
   source_filename VARCHAR(255) NOT NULL,
   source_mime_type VARCHAR(120) NOT NULL,
@@ -123,7 +125,9 @@ CREATE TABLE IF NOT EXISTS receipts (
 ALTER TABLE receipts
   ADD COLUMN IF NOT EXISTS status VARCHAR(32) NOT NULL DEFAULT 'Processing' AFTER claim_id,
   ADD COLUMN IF NOT EXISTS category VARCHAR(255) NULL AFTER status,
-  ADD COLUMN IF NOT EXISTS receipt_source VARCHAR(32) NOT NULL DEFAULT 'web_upload' AFTER category,
+  ADD COLUMN IF NOT EXISTS description TEXT NULL AFTER category,
+  ADD COLUMN IF NOT EXISTS customer_name VARCHAR(255) NULL AFTER description,
+  ADD COLUMN IF NOT EXISTS receipt_source VARCHAR(32) NOT NULL DEFAULT 'web_upload' AFTER customer_name,
   ADD COLUMN IF NOT EXISTS net_amount DECIMAL(12, 2) NULL AFTER total_amount,
   ADD COLUMN IF NOT EXISTS vat_amount DECIMAL(12, 2) NULL AFTER net_amount,
   ADD COLUMN IF NOT EXISTS tax_rate_applied VARCHAR(64) NULL AFTER vat_amount;
