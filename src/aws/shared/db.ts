@@ -10,8 +10,12 @@ import {
   type AuthenticatedUser,
   type BankRequisitionRow,
   type BankTransactionRow,
+  type BillingCycle,
+  type BillingPlanId,
+  type BillingStatus,
   type ExpenseClaimRow,
   type NormalizedExpenseDocument,
+  type OrganisationBillingSummary,
   type OrganisationSettings,
   type PaymentMethod,
   type ReconciliationCandidate,
@@ -22,6 +26,12 @@ import {
   type UserRole,
   type WorkspaceContext,
 } from '../types.js';
+import {
+  defaultTrialEndsAt,
+  normalizeBillingCycle,
+  normalizeBillingStatus,
+  normalizePlanId,
+} from './billing.js';
 
 const usesMysql =
   awsEnv.receiptStoreMode === 'mysql' &&
@@ -116,6 +126,16 @@ async function buildIamAuthToken() {
 type StoredOrganisation = {
   id: number;
   name: string;
+  isVatRegistered?: boolean;
+  defaultTaxRateCosts?: string;
+  billingPlan?: BillingPlanId;
+  billingStatus?: BillingStatus;
+  billingCycle?: BillingCycle;
+  trialEndsAt?: string | null;
+  monthlyDocumentLimit?: number | null;
+  includedUsers?: number | null;
+  stripeCustomerId?: string | null;
+  stripeSubscriptionId?: string | null;
   createdAt: string;
 };
 
@@ -538,10 +558,14 @@ export async function createUser(input: {
   passwordHash: string;
   fullName?: string | null;
   organisationName?: string | null;
+  billingPlan?: BillingPlanId | null;
+  billingCycle?: BillingCycle | null;
 }): Promise<AuthenticatedUser> {
   const email = normalizeEmail(input.email);
   const fullName = normalizeName(input.fullName);
   const organisationName = normalizeName(input.organisationName) || `${fullName || 'exdox'} Workspace`;
+  const billingPlan = normalizePlanId(input.billingPlan);
+  const billingCycle = normalizeBillingCycle(input.billingCycle);
 
   if (!pool) {
     const existing = await findUserByEmail(email);
@@ -549,7 +573,7 @@ export async function createUser(input: {
       throw duplicateUserError();
     }
 
-    const organisation = await createS3Organisation(organisationName);
+    const organisation = await createS3Organisation(organisationName, billingPlan, billingCycle);
     const user = buildStoredUser({
       id: Date.now(),
       organisationId: organisation.id,
@@ -570,8 +594,23 @@ export async function createUser(input: {
     await connection.beginTransaction();
 
     const [orgResult] = await connection.execute<mysql.ResultSetHeader>(
-      `INSERT INTO organisations (name) VALUES (?)`,
-      [organisationName],
+      `INSERT INTO organisations (
+        name,
+        billing_plan,
+        billing_status,
+        billing_cycle,
+        trial_ends_at,
+        monthly_document_limit,
+        included_users
+      ) VALUES (?, ?, 'trialing', ?, ?, ?, ?)`,
+      [
+        organisationName,
+        billingPlan,
+        billingCycle,
+        defaultTrialEndsAt(billingPlan),
+        defaultMonthlyDocumentLimitForPlan(billingPlan),
+        defaultIncludedUsersForPlan(billingPlan),
+      ],
     );
 
     const [userResult] = await connection.execute<mysql.ResultSetHeader>(
@@ -871,6 +910,73 @@ export async function getOrganisationSettings(organisationId: number): Promise<O
   };
 }
 
+export async function getOrganisationBillingSummary(organisationId: number): Promise<OrganisationBillingSummary> {
+  if (!pool) {
+    const organisation = await getS3Organisation(organisationId);
+    const billingPlan = normalizePlanId(organisation.billingPlan);
+    const users = await listS3UsersForOrganisation(organisationId);
+    const monthlyDocumentUsage = await countS3DocumentsForCurrentMonth(organisationId);
+
+    return {
+      planId: billingPlan,
+      status: normalizeBillingStatus(organisation.billingStatus, billingPlan),
+      billingCycle: normalizeBillingCycle(organisation.billingCycle),
+      trialEndsAt: organisation.trialEndsAt ?? defaultTrialEndsAt(billingPlan),
+      monthlyDocumentLimit: normalizeNullableNumber(organisation.monthlyDocumentLimit) ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
+      monthlyDocumentUsage,
+      includedUsers: normalizeNullableNumber(organisation.includedUsers) ?? defaultIncludedUsersForPlan(billingPlan),
+      currentUserCount: users.length,
+      stripeCustomerId: organisation.stripeCustomerId ?? null,
+      stripeSubscriptionId: organisation.stripeSubscriptionId ?? null,
+    };
+  }
+
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT
+      o.billing_plan,
+      o.billing_status,
+      o.billing_cycle,
+      o.trial_ends_at,
+      o.monthly_document_limit,
+      o.included_users,
+      o.stripe_customer_id,
+      o.stripe_subscription_id,
+      (
+        SELECT COUNT(*)
+        FROM receipts r
+        WHERE r.organisation_id = o.id
+          AND DATE_FORMAT(r.created_at, '%Y-%m') = DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m')
+      ) AS monthly_document_usage,
+      (
+        SELECT COUNT(*)
+        FROM users u
+        WHERE u.organisation_id = o.id
+      ) AS current_user_count
+     FROM organisations o
+     WHERE o.id = ?
+     LIMIT 1`,
+    [organisationId],
+  );
+  const row = rows[0];
+  if (!row) {
+    throw notFoundError('Organisation not found.');
+  }
+
+  const billingPlan = normalizePlanId(row.billing_plan);
+  return {
+    planId: billingPlan,
+    status: normalizeBillingStatus(row.billing_status, billingPlan),
+    billingCycle: normalizeBillingCycle(row.billing_cycle),
+    trialEndsAt: row.trial_ends_at ? new Date(row.trial_ends_at).toISOString() : defaultTrialEndsAt(billingPlan),
+    monthlyDocumentLimit: normalizeNullableNumber(row.monthly_document_limit) ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
+    monthlyDocumentUsage: Number(row.monthly_document_usage ?? 0),
+    includedUsers: normalizeNullableNumber(row.included_users) ?? defaultIncludedUsersForPlan(billingPlan),
+    currentUserCount: Number(row.current_user_count ?? 0),
+    stripeCustomerId: row.stripe_customer_id ? String(row.stripe_customer_id) : null,
+    stripeSubscriptionId: row.stripe_subscription_id ? String(row.stripe_subscription_id) : null,
+  };
+}
+
 export async function updateOrganisationSettings(input: {
   organisationId: number;
   isVatRegistered: boolean;
@@ -895,6 +1001,67 @@ export async function updateOrganisationSettings(input: {
   );
 
   return getOrganisationSettings(input.organisationId);
+}
+
+export async function updateOrganisationBillingProfile(input: {
+  organisationId: number;
+  billingPlan?: BillingPlanId;
+  billingStatus?: BillingStatus;
+  billingCycle?: BillingCycle;
+  trialEndsAt?: string | null;
+  monthlyDocumentLimit?: number | null;
+  includedUsers?: number | null;
+  stripeCustomerId?: string | null;
+  stripeSubscriptionId?: string | null;
+}) {
+  if (!pool) {
+    const organisation = await getS3Organisation(input.organisationId);
+    const next: StoredOrganisation = {
+      ...organisation,
+      billingPlan: input.billingPlan ?? organisation.billingPlan ?? 'legacy',
+      billingStatus: input.billingStatus ?? organisation.billingStatus ?? 'legacy',
+      billingCycle: input.billingCycle ?? organisation.billingCycle ?? 'monthly',
+      trialEndsAt: input.trialEndsAt === undefined ? organisation.trialEndsAt ?? null : input.trialEndsAt,
+      monthlyDocumentLimit:
+        input.monthlyDocumentLimit === undefined ? organisation.monthlyDocumentLimit ?? null : input.monthlyDocumentLimit,
+      includedUsers: input.includedUsers === undefined ? organisation.includedUsers ?? null : input.includedUsers,
+      stripeCustomerId:
+        input.stripeCustomerId === undefined ? organisation.stripeCustomerId ?? null : input.stripeCustomerId,
+      stripeSubscriptionId:
+        input.stripeSubscriptionId === undefined
+          ? organisation.stripeSubscriptionId ?? null
+          : input.stripeSubscriptionId,
+    };
+    await putReceiptJsonObject(buildOrganisationKey(input.organisationId), next);
+    return getOrganisationBillingSummary(input.organisationId);
+  }
+
+  await pool.execute(
+    `UPDATE organisations
+     SET billing_plan = COALESCE(?, billing_plan),
+         billing_status = COALESCE(?, billing_status),
+         billing_cycle = COALESCE(?, billing_cycle),
+         trial_ends_at = COALESCE(?, trial_ends_at),
+         monthly_document_limit = COALESCE(?, monthly_document_limit),
+         included_users = COALESCE(?, included_users),
+         stripe_customer_id = COALESCE(?, stripe_customer_id),
+         stripe_subscription_id = COALESCE(?, stripe_subscription_id),
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [
+      input.billingPlan ?? null,
+      input.billingStatus ?? null,
+      input.billingCycle ?? null,
+      input.trialEndsAt ?? null,
+      input.monthlyDocumentLimit ?? null,
+      input.includedUsers ?? null,
+      input.stripeCustomerId ?? null,
+      input.stripeSubscriptionId ?? null,
+      input.organisationId,
+    ],
+  );
+
+  return getOrganisationBillingSummary(input.organisationId);
 }
 
 export async function getReceiptById(user: AuthenticatedUser, receiptId: number): Promise<ReceiptRow> {
@@ -1524,12 +1691,24 @@ function buildOrganisationKey(organisationId: number) {
   return `organisations/${organisationId}.json`;
 }
 
-async function createS3Organisation(name: string): Promise<StoredOrganisation> {
+async function createS3Organisation(
+  name: string,
+  billingPlan: BillingPlanId = 'legacy',
+  billingCycle: BillingCycle = 'monthly',
+): Promise<StoredOrganisation> {
   const organisation = {
     id: Date.now(),
     name,
     isVatRegistered: false,
     defaultTaxRateCosts: 'No VAT',
+    billingPlan,
+    billingStatus: (billingPlan === 'legacy' ? 'legacy' : 'trialing') as BillingStatus,
+    billingCycle,
+    trialEndsAt: defaultTrialEndsAt(billingPlan),
+    monthlyDocumentLimit: defaultMonthlyDocumentLimitForPlan(billingPlan),
+    includedUsers: defaultIncludedUsersForPlan(billingPlan),
+    stripeCustomerId: null,
+    stripeSubscriptionId: null,
     createdAt: new Date().toISOString(),
   };
   await putReceiptJsonObject(buildOrganisationKey(organisation.id), organisation);
@@ -1538,6 +1717,53 @@ async function createS3Organisation(name: string): Promise<StoredOrganisation> {
 
 async function getS3Organisation(organisationId: number): Promise<StoredOrganisation> {
   return getReceiptJsonObject<StoredOrganisation>(buildOrganisationKey(organisationId));
+}
+
+async function listS3UsersForOrganisation(organisationId: number) {
+  const keys = await listReceiptJsonKeys('users/', 500);
+  const users = await Promise.all(keys.map((key) => getReceiptJsonObject<StoredUser>(key)));
+  return users.filter((user) => user.organisationId === organisationId);
+}
+
+async function countS3DocumentsForCurrentMonth(organisationId: number) {
+  const prefix = `receipt-records/org-${organisationId}/`;
+  const keys = await listReceiptJsonKeys(prefix, 2000);
+  const monthPrefix = new Date().toISOString().slice(0, 7);
+  return keys.filter((key) => key.includes(`/${monthPrefix}`)).length;
+}
+
+function defaultMonthlyDocumentLimitForPlan(planId: BillingPlanId) {
+  switch (planId) {
+    case 'capture':
+      return 150;
+    case 'control':
+      return 500;
+    case 'operations':
+      return 2000;
+    default:
+      return null;
+  }
+}
+
+function defaultIncludedUsersForPlan(planId: BillingPlanId) {
+  switch (planId) {
+    case 'capture':
+      return 3;
+    case 'control':
+      return 10;
+    case 'operations':
+      return 25;
+    default:
+      return null;
+  }
+}
+
+function normalizeNullableNumber(value: unknown) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function buildStoredUser(input: Omit<StoredUser, 'createdAt'> & { createdAt?: string }): StoredUser {

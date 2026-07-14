@@ -37,4 +37,20 @@ export const awsEnv = {
   openBankingAuthUrl: optionalEnv('OPEN_BANKING_AUTH_URL'),
   openBankingCallbackUrl:
     process.env.OPEN_BANKING_CALLBACK_URL?.trim() || 'https://app.exdox.co.uk/bank-callback',
+  stripeSecretKey: optionalEnv('STRIPE_SECRET_KEY'),
+  stripeWebhookSecret: optionalEnv('STRIPE_WEBHOOK_SECRET'),
+  stripeCheckoutSuccessUrl:
+    process.env.STRIPE_CHECKOUT_SUCCESS_URL?.trim() || 'https://app.exdox.co.uk/billing?checkout=success',
+  stripeCheckoutCancelUrl:
+    process.env.STRIPE_CHECKOUT_CANCEL_URL?.trim() || 'https://app.exdox.co.uk/billing?checkout=cancelled',
+  stripeBillingPortalReturnUrl:
+    process.env.STRIPE_BILLING_PORTAL_RETURN_URL?.trim() || 'https://app.exdox.co.uk/billing',
+  stripePriceCaptureMonthly: optionalEnv('STRIPE_PRICE_CAPTURE_MONTHLY'),
+  stripePriceCaptureAnnual: optionalEnv('STRIPE_PRICE_CAPTURE_ANNUAL'),
+  stripePriceControlMonthly: optionalEnv('STRIPE_PRICE_CONTROL_MONTHLY'),
+  stripePriceControlAnnual: optionalEnv('STRIPE_PRICE_CONTROL_ANNUAL'),
+  stripePriceOperationsMonthly: optionalEnv('STRIPE_PRICE_OPERATIONS_MONTHLY'),
+  stripePriceOperationsAnnual: optionalEnv('STRIPE_PRICE_OPERATIONS_ANNUAL'),
+  stripePriceEnterpriseMonthly: optionalEnv('STRIPE_PRICE_ENTERPRISE_MONTHLY'),
+  stripePriceEnterpriseAnnual: optionalEnv('STRIPE_PRICE_ENTERPRISE_ANNUAL'),
 };

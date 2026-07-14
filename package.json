@@ -24,7 +24,8 @@
     "lambda-multipart-parser": "^1.0.1",
     "multer": "^2.0.2",
     "mysql2": "^3.14.3",
-    "openai": "^6.6.0"
+    "openai": "^6.6.0",
+    "stripe": "^22.3.1"
   },
   "devDependencies": {
     "@aws-sdk/client-lambda": "^3.1081.0",

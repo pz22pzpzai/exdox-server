@@ -48,6 +48,47 @@ Parameters:
   DbIamRegion:
     Type: String
     Default: 'eu-west-2'
+  StripeSecretKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+  StripeWebhookSecret:
+    Type: String
+    Default: ''
+    NoEcho: true
+  StripeCheckoutSuccessUrl:
+    Type: String
+    Default: 'https://app.exdox.co.uk/billing?checkout=success'
+  StripeCheckoutCancelUrl:
+    Type: String
+    Default: 'https://app.exdox.co.uk/billing?checkout=cancelled'
+  StripeBillingPortalReturnUrl:
+    Type: String
+    Default: 'https://app.exdox.co.uk/billing'
+  StripePriceCaptureMonthly:
+    Type: String
+    Default: ''
+  StripePriceCaptureAnnual:
+    Type: String
+    Default: ''
+  StripePriceControlMonthly:
+    Type: String
+    Default: ''
+  StripePriceControlAnnual:
+    Type: String
+    Default: ''
+  StripePriceOperationsMonthly:
+    Type: String
+    Default: ''
+  StripePriceOperationsAnnual:
+    Type: String
+    Default: ''
+  StripePriceEnterpriseMonthly:
+    Type: String
+    Default: ''
+  StripePriceEnterpriseAnnual:
+    Type: String
+    Default: ''
 
 Globals:
   Function:
@@ -72,6 +113,19 @@ Globals:
         DB_PASSWORD: !Ref DbPassword
         DB_IAM_AUTH_ENABLED: !Ref DbIamAuthEnabled
         DB_IAM_REGION: !Ref DbIamRegion
+        STRIPE_SECRET_KEY: !Ref StripeSecretKey
+        STRIPE_WEBHOOK_SECRET: !Ref StripeWebhookSecret
+        STRIPE_CHECKOUT_SUCCESS_URL: !Ref StripeCheckoutSuccessUrl
+        STRIPE_CHECKOUT_CANCEL_URL: !Ref StripeCheckoutCancelUrl
+        STRIPE_BILLING_PORTAL_RETURN_URL: !Ref StripeBillingPortalReturnUrl
+        STRIPE_PRICE_CAPTURE_MONTHLY: !Ref StripePriceCaptureMonthly
+        STRIPE_PRICE_CAPTURE_ANNUAL: !Ref StripePriceCaptureAnnual
+        STRIPE_PRICE_CONTROL_MONTHLY: !Ref StripePriceControlMonthly
+        STRIPE_PRICE_CONTROL_ANNUAL: !Ref StripePriceControlAnnual
+        STRIPE_PRICE_OPERATIONS_MONTHLY: !Ref StripePriceOperationsMonthly
+        STRIPE_PRICE_OPERATIONS_ANNUAL: !Ref StripePriceOperationsAnnual
+        STRIPE_PRICE_ENTERPRISE_MONTHLY: !Ref StripePriceEnterpriseMonthly
+        STRIPE_PRICE_ENTERPRISE_ANNUAL: !Ref StripePriceEnterpriseAnnual
         AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
 
 Resources:
@@ -316,6 +370,51 @@ Resources:
             RestApiId: !Ref ReceiptApi
             Path: /session
             Method: GET
+
+  GetBillingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/getBilling.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        GetBillingRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /billing
+            Method: GET
+
+  CreateBillingCheckoutSessionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/createBillingCheckoutSession.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        CreateBillingCheckoutSessionRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /billing/checkout-session
+            Method: POST
+
+  CreateBillingPortalSessionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/createBillingPortalSession.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        CreateBillingPortalSessionRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /billing/portal-session
+            Method: POST
 
   GetReceiptFunction:
     Type: AWS::Serverless::Function

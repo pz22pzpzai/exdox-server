@@ -2,12 +2,18 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import multipart from 'lambda-multipart-parser';
 
 import { requireAuthenticatedUser } from '../shared/auth.js';
+import { canProcessDocument, getPlanLimitMessage, isBillingActive } from '../shared/billing.js';
 import { awsEnv } from '../shared/env.js';
 import { jsonResponse } from '../shared/http.js';
 import { getReceiptObjectBuffer, putReceiptObject } from '../shared/s3.js';
 import { inferMimeType, readRequestOptions, sanitizeText } from '../shared/helpers.js';
 import { applyVatRegistrationRules, processExpenseBuffer } from '../shared/openaiExtraction.js';
-import { applySupplierRulesToDocument, getOrganisationTaxProfile, insertReceiptRecord } from '../shared/db.js';
+import {
+  applySupplierRulesToDocument,
+  getOrganisationBillingSummary,
+  getOrganisationTaxProfile,
+  insertReceiptRecord,
+} from '../shared/db.js';
 import { type DocumentType, type ExpenseRequestOptions, type NormalizedExpenseDocument } from '../types.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
@@ -53,6 +59,23 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: { id: 
     payment_method: parsed.payment_method,
     skip_processing: parsed.skip_processing,
   });
+  const billing = await getOrganisationBillingSummary(user.organisationId);
+
+  if (!isBillingActive(billing)) {
+    return jsonResponse(402, {
+      success: false,
+      error: 'billing_inactive',
+      message: 'This workspace needs an active plan before new documents can be processed.',
+    });
+  }
+
+  if (!canProcessDocument(billing)) {
+    return jsonResponse(402, {
+      success: false,
+      error: 'plan_document_limit_reached',
+      message: getPlanLimitMessage(billing, 'documents'),
+    });
+  }
 
   const fileBuffer = Buffer.isBuffer(file.content) ? file.content : Buffer.from(file.content);
   const fileName = sanitizeText(file.filename) || `receipt-${Date.now()}.jpg`;
@@ -140,6 +163,23 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: { id: numbe
     payment_method: payload.payment_method,
     skip_processing: payload.skip_processing,
   });
+  const billing = await getOrganisationBillingSummary(user.organisationId);
+
+  if (!isBillingActive(billing)) {
+    return jsonResponse(402, {
+      success: false,
+      error: 'billing_inactive',
+      message: 'This workspace needs an active plan before new documents can be processed.',
+    });
+  }
+
+  if (!canProcessDocument(billing)) {
+    return jsonResponse(402, {
+      success: false,
+      error: 'plan_document_limit_reached',
+      message: getPlanLimitMessage(billing, 'documents'),
+    });
+  }
 
   if (!isAllowedStorageKey(s3Key, user.organisationId, user.id, options.workspaceContext)) {
     return jsonResponse(403, {

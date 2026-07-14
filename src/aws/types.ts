@@ -7,6 +7,9 @@ export type ReceiptSource = 'mobile' | 'email' | 'web_upload' | 'bank_import';
 export type UserRole = 'Business_Admin' | 'Standard_Employee';
 export type UserStatus = 'pending_invite' | 'active';
 export type UkTaxRate = '20% Standard' | '5% Reduced' | '0% Zero' | 'Exempt' | 'No VAT';
+export type BillingPlanId = 'capture' | 'control' | 'operations' | 'enterprise' | 'legacy';
+export type BillingStatus = 'trialing' | 'active' | 'past_due' | 'canceled' | 'inactive' | 'legacy';
+export type BillingCycle = 'monthly' | 'annual' | 'custom';
 
 export type ExpenseRequestOptions = {
   locale: string;
@@ -155,6 +158,19 @@ export type OrganisationSettings = {
   organisationName: string;
   isVatRegistered: boolean;
   defaultTaxRate: string;
+};
+
+export type OrganisationBillingSummary = {
+  planId: BillingPlanId;
+  status: BillingStatus;
+  billingCycle: BillingCycle;
+  trialEndsAt: string | null;
+  monthlyDocumentLimit: number | null;
+  monthlyDocumentUsage: number;
+  includedUsers: number | null;
+  currentUserCount: number;
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
 };
 
 export type AuthenticatedUser = {

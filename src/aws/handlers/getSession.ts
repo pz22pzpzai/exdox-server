@@ -1,13 +1,16 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAuthenticatedUser } from '../shared/auth.js';
-import { getOrganisationSettings } from '../shared/db.js';
+import { buildEntitlements, isStripeConfigured, resolveAllowedWebRoutes } from '../shared/billing.js';
+import { getOrganisationBillingSummary, getOrganisationSettings } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     const organisation = await getOrganisationSettings(user.organisationId);
+    const billing = await getOrganisationBillingSummary(user.organisationId);
+    const allowedWebRoutes = resolveAllowedWebRoutes(billing, user.role);
 
     return jsonResponse(200, {
       success: true,
@@ -19,10 +22,13 @@ export async function handler(event: APIGatewayProxyEventV2) {
         },
       ],
       activeOrganisationId: organisation.organisationId,
-      allowedWebRoutes:
-        user.role === 'Business_Admin'
-          ? ['/overview', '/costs', '/sales', '/claims', '/rules', '/reconciliation', '/settings', '/requisitions', '/bank-callback']
-          : ['/dropbox'],
+      allowedWebRoutes,
+      billing: {
+        ...billing,
+        planLabel: billing.planId === 'legacy' ? 'Legacy' : billing.planId[0]!.toUpperCase() + billing.planId.slice(1),
+        stripeConfigured: isStripeConfigured(),
+      },
+      entitlements: buildEntitlements(billing),
     });
   } catch (error) {
     const status =

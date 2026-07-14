@@ -6,6 +6,14 @@ CREATE TABLE IF NOT EXISTS organisations (
   name VARCHAR(255) NOT NULL,
   is_vat_registered TINYINT(1) NOT NULL DEFAULT 0,
   default_tax_rate_costs VARCHAR(64) NOT NULL DEFAULT 'No VAT',
+  billing_plan VARCHAR(32) NOT NULL DEFAULT 'legacy',
+  billing_status VARCHAR(32) NOT NULL DEFAULT 'legacy',
+  billing_cycle VARCHAR(32) NOT NULL DEFAULT 'monthly',
+  trial_ends_at TIMESTAMP NULL DEFAULT NULL,
+  monthly_document_limit INT NULL DEFAULT NULL,
+  included_users INT NULL DEFAULT NULL,
+  stripe_customer_id VARCHAR(255) NULL,
+  stripe_subscription_id VARCHAR(255) NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id)
@@ -13,7 +21,15 @@ CREATE TABLE IF NOT EXISTS organisations (
 
 ALTER TABLE organisations
   ADD COLUMN IF NOT EXISTS is_vat_registered TINYINT(1) NOT NULL DEFAULT 0 AFTER name,
-  ADD COLUMN IF NOT EXISTS default_tax_rate_costs VARCHAR(64) NOT NULL DEFAULT 'No VAT' AFTER is_vat_registered;
+  ADD COLUMN IF NOT EXISTS default_tax_rate_costs VARCHAR(64) NOT NULL DEFAULT 'No VAT' AFTER is_vat_registered,
+  ADD COLUMN IF NOT EXISTS billing_plan VARCHAR(32) NOT NULL DEFAULT 'legacy' AFTER default_tax_rate_costs,
+  ADD COLUMN IF NOT EXISTS billing_status VARCHAR(32) NOT NULL DEFAULT 'legacy' AFTER billing_plan,
+  ADD COLUMN IF NOT EXISTS billing_cycle VARCHAR(32) NOT NULL DEFAULT 'monthly' AFTER billing_status,
+  ADD COLUMN IF NOT EXISTS trial_ends_at TIMESTAMP NULL DEFAULT NULL AFTER billing_cycle,
+  ADD COLUMN IF NOT EXISTS monthly_document_limit INT NULL DEFAULT NULL AFTER trial_ends_at,
+  ADD COLUMN IF NOT EXISTS included_users INT NULL DEFAULT NULL AFTER monthly_document_limit,
+  ADD COLUMN IF NOT EXISTS stripe_customer_id VARCHAR(255) NULL AFTER included_users,
+  ADD COLUMN IF NOT EXISTS stripe_subscription_id VARCHAR(255) NULL AFTER stripe_customer_id;
 
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

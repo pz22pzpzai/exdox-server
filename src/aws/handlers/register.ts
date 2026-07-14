@@ -1,6 +1,7 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { hashPassword, signUserToken } from '../shared/auth.js';
+import { normalizeBillingCycle, normalizePlanId } from '../shared/billing.js';
 import { activateInvitedUser, createUser } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
@@ -13,6 +14,8 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const fullName = sanitizeText(body.fullName) || null;
     const organisationName = sanitizeText(body.organisationName) || null;
     const inviteToken = sanitizeText(body.inviteToken);
+    const billingPlan = normalizePlanId(body.billingPlan);
+    const billingCycle = normalizeBillingCycle(body.billingCycle);
 
     if (!email || !password) {
       return jsonResponse(400, {
@@ -51,6 +54,8 @@ export async function handler(event: APIGatewayProxyEventV2) {
           passwordHash,
           fullName,
           organisationName,
+          billingPlan,
+          billingCycle,
         });
 
     return jsonResponse(201, {

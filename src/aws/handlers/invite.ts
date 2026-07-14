@@ -1,7 +1,8 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
-import { createInvite } from '../shared/db.js';
+import { canInviteUser, getPlanLimitMessage, isBillingActive } from '../shared/billing.js';
+import { createInvite, getOrganisationBillingSummary } from '../shared/db.js';
 import { sanitizeText } from '../shared/helpers.js';
 import { jsonResponse } from '../shared/http.js';
 import { sendInviteEmail } from '../shared/inviteMail.js';
@@ -10,6 +11,23 @@ export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    const billing = await getOrganisationBillingSummary(user.organisationId);
+
+    if (!isBillingActive(billing)) {
+      return jsonResponse(402, {
+        success: false,
+        error: 'billing_inactive',
+        message: 'This workspace needs an active plan before you can invite teammates.',
+      });
+    }
+
+    if (!canInviteUser(billing)) {
+      return jsonResponse(402, {
+        success: false,
+        error: 'plan_user_limit_reached',
+        message: getPlanLimitMessage(billing, 'users'),
+      });
+    }
 
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
     const email = sanitizeText(body.email).toLowerCase();
