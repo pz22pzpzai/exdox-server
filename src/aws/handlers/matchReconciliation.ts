@@ -1,13 +1,16 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
-import { matchBankTransaction } from '../shared/db.js';
+import { assertFeatureAccess } from '../shared/billing.js';
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
+import { getOrganisationBillingSummary, matchBankTransaction } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    const billing = await getOrganisationBillingSummary(user.organisationId);
+    assertFeatureAccess(billing, 'reconciliation', 'Your current plan does not include bank reconciliation.');
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
     const bankTransactionId = Number(body.bankTransactionId ?? body.statementLineId);
     const receiptId = Number(body.receiptId);

@@ -1,7 +1,8 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
-import { createBankRequisition } from '../shared/db.js';
+import { assertFeatureAccess } from '../shared/billing.js';
+import { createBankRequisition, getOrganisationBillingSummary } from '../shared/db.js';
 import { awsEnv } from '../shared/env.js';
 import { sanitizeText } from '../shared/helpers.js';
 import { jsonResponse } from '../shared/http.js';
@@ -10,6 +11,8 @@ export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    const billing = await getOrganisationBillingSummary(user.organisationId);
+    assertFeatureAccess(billing, 'open_banking', 'Your current plan does not include open banking.');
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
 
     const requisition = await createBankRequisition({

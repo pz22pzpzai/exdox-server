@@ -2,7 +2,7 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import multipart from 'lambda-multipart-parser';
 
 import { requireAuthenticatedUser } from '../shared/auth.js';
-import { canProcessDocument, getPlanLimitMessage, isBillingActive } from '../shared/billing.js';
+import { assertWorkspaceAccess, canProcessDocument, getPlanLimitMessage, isBillingActive } from '../shared/billing.js';
 import { awsEnv } from '../shared/env.js';
 import { jsonResponse } from '../shared/http.js';
 import { getReceiptObjectBuffer, putReceiptObject } from '../shared/s3.js';
@@ -76,6 +76,7 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: { id: 
       message: getPlanLimitMessage(billing, 'documents'),
     });
   }
+  assertWorkspaceAccess(billing, options.workspaceContext);
 
   const fileBuffer = Buffer.isBuffer(file.content) ? file.content : Buffer.from(file.content);
   const fileName = sanitizeText(file.filename) || `receipt-${Date.now()}.jpg`;
@@ -180,6 +181,7 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: { id: numbe
       message: getPlanLimitMessage(billing, 'documents'),
     });
   }
+  assertWorkspaceAccess(billing, options.workspaceContext);
 
   if (!isAllowedStorageKey(s3Key, user.organisationId, user.id, options.workspaceContext)) {
     return jsonResponse(403, {

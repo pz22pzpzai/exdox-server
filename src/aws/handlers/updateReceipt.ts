@@ -1,7 +1,8 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAuthenticatedUser } from '../shared/auth.js';
-import { updateReceiptById } from '../shared/db.js';
+import { assertWorkspaceAccess } from '../shared/billing.js';
+import { getOrganisationBillingSummary, getReceiptById, updateReceiptById } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText, toNumber } from '../shared/helpers.js';
 
@@ -18,6 +19,11 @@ export async function handler(event: APIGatewayProxyEventV2) {
     }
 
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
+    const [billing, existingReceipt] = await Promise.all([
+      getOrganisationBillingSummary(user.organisationId),
+      getReceiptById(user, receiptId),
+    ]);
+    assertWorkspaceAccess(billing, existingReceipt.workspaceContext);
     const receipt = await updateReceiptById(user, receiptId, {
       vendorName: sanitizeText(body.vendorName) || null,
       invoiceDate: sanitizeText(body.invoiceDate) || null,

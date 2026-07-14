@@ -1,7 +1,8 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAuthenticatedUser } from '../shared/auth.js';
-import { getReceiptById } from '../shared/db.js';
+import { assertWorkspaceAccess } from '../shared/billing.js';
+import { getOrganisationBillingSummary, getReceiptById } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { createReceiptDownloadUrl } from '../shared/s3.js';
 
@@ -17,7 +18,11 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
-    const receipt = await getReceiptById(user, receiptId);
+    const [billing, receipt] = await Promise.all([
+      getOrganisationBillingSummary(user.organisationId),
+      getReceiptById(user, receiptId),
+    ]);
+    assertWorkspaceAccess(billing, receipt.workspaceContext);
     const asset = await createReceiptDownloadUrl({
       key: receipt.s3Key,
     });

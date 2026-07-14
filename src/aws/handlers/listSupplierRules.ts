@@ -1,13 +1,17 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
+import { assertFeatureAccess } from '../shared/billing.js';
 import { listSupplierRules } from '../shared/db.js';
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
+import { getOrganisationBillingSummary } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    const billing = await getOrganisationBillingSummary(user.organisationId);
+    assertFeatureAccess(billing, 'supplier_rules', 'Your current plan does not include supplier rules.');
     const rules = await listSupplierRules(user.organisationId);
 
     return jsonResponse(200, {

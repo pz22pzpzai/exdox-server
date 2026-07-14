@@ -5,6 +5,7 @@ import {
   type BillingStatus,
   type OrganisationBillingSummary,
   type UserRole,
+  type WorkspaceContext,
 } from '../types.js';
 
 export type PlanDefinition = {
@@ -253,6 +254,43 @@ export function buildEntitlements(summary: OrganisationBillingSummary) {
   };
 }
 
+export function canAccessWorkspace(summary: OrganisationBillingSummary, workspace: WorkspaceContext) {
+  if (!isBillingActive(summary)) {
+    return false;
+  }
+  if (workspace === 'cost') {
+    return true;
+  }
+  if (workspace === 'sales') {
+    return hasFeature(summary, 'sales_review');
+  }
+  return hasFeature(summary, 'vault');
+}
+
+export function getAccessibleWorkspaces(summary: OrganisationBillingSummary) {
+  return (['cost', 'sales', 'vault'] as WorkspaceContext[]).filter((workspace) => canAccessWorkspace(summary, workspace));
+}
+
+export function assertWorkspaceAccess(summary: OrganisationBillingSummary, workspace: WorkspaceContext) {
+  if (canAccessWorkspace(summary, workspace)) {
+    return;
+  }
+  throw billingLockedError(
+    workspace === 'sales'
+      ? 'Your current plan does not include the sales workspace.'
+      : workspace === 'vault'
+        ? 'Your current plan does not include the vault workspace.'
+        : 'Your current plan does not include this workspace.',
+  );
+}
+
+export function assertFeatureAccess(summary: OrganisationBillingSummary, feature: string, message: string) {
+  if (hasFeature(summary, feature)) {
+    return;
+  }
+  throw billingLockedError(message);
+}
+
 export function listPlanDefinitions() {
   return Object.values(PLAN_DEFINITIONS);
 }
@@ -282,4 +320,11 @@ export function getStripePriceId(planId: BillingPlanId, billingCycle: BillingCyc
   };
 
   return map[`${planId}:${billingCycle}`] ?? null;
+}
+
+function billingLockedError(message: string) {
+  const error = new Error(message) as Error & { statusCode?: number; code?: string };
+  error.statusCode = 402;
+  error.code = 'plan_locked';
+  return error;
 }

@@ -1,7 +1,8 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAuthenticatedUser } from '../shared/auth.js';
-import { deleteReceiptById } from '../shared/db.js';
+import { assertWorkspaceAccess } from '../shared/billing.js';
+import { deleteReceiptById, getOrganisationBillingSummary, getReceiptById } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
@@ -16,6 +17,11 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
+    const [billing, receipt] = await Promise.all([
+      getOrganisationBillingSummary(user.organisationId),
+      getReceiptById(user, receiptId),
+    ]);
+    assertWorkspaceAccess(billing, receipt.workspaceContext);
     const result = await deleteReceiptById(user, receiptId);
     return jsonResponse(200, {
       success: true,
