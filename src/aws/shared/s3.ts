@@ -4,6 +4,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { awsEnv } from './env.js';
 
 const s3 = new S3Client({});
+const RECEIPT_BUCKET_SSE = 'AES256';
 
 export async function putReceiptObject(input: {
   key: string;
@@ -16,6 +17,7 @@ export async function putReceiptObject(input: {
       Key: input.key,
       Body: input.body,
       ContentType: input.contentType,
+      ServerSideEncryption: RECEIPT_BUCKET_SSE,
     }),
   );
 }
@@ -50,6 +52,7 @@ export async function createReceiptUploadUrl(input: {
     Bucket: awsEnv.receiptBucketName,
     Key: input.key,
     ContentType: input.contentType,
+    ServerSideEncryption: RECEIPT_BUCKET_SSE,
   });
 
   const uploadUrl = await getSignedUrl(s3, command, {
@@ -61,6 +64,10 @@ export async function createReceiptUploadUrl(input: {
     key: input.key,
     uploadUrl,
     expiresInSeconds: input.expiresInSeconds ?? 900,
+    serverSideEncryption: RECEIPT_BUCKET_SSE,
+    requiredHeaders: {
+      'x-amz-server-side-encryption': RECEIPT_BUCKET_SSE,
+    },
   };
 }
 
@@ -92,6 +99,7 @@ export async function putReceiptJsonObject(key: string, value: unknown) {
       Key: key,
       Body: JSON.stringify(value),
       ContentType: 'application/json',
+      ServerSideEncryption: RECEIPT_BUCKET_SSE,
     }),
   );
 }

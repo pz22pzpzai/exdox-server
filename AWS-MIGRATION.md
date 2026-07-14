@@ -67,3 +67,30 @@ caused `Runtime.ImportModuleError` on login. Ensure deployed packages retain the
 - Important Lambda networking limitation: the live Lambda functions are still not attached
   to VPC subnets because this VPC currently has no NAT gateway. Attaching them directly would
   break outbound calls such as OpenAI unless NAT or another outbound path is added first.
+
+## 2026-07-14 vault encryption hardening note
+
+- The live Vault/receipt S3 bucket `receiptflow-expenses-prod-025627371571-eu-west-2`
+  now explicitly enforces AES-256 server-side encryption for object writes:
+  - default bucket encryption remains `AES256`
+  - the bucket policy now denies any `s3:PutObject` request that omits
+    `x-amz-server-side-encryption`
+  - the bucket policy also denies `s3:PutObject` requests whose encryption header is not `AES256`
+- The shared server S3 helper now sends `ServerSideEncryption: AES256` on:
+  - direct Lambda object uploads
+  - JSON metadata writes
+  - presigned upload URL generation
+- The live API Gateway REST API `hz2zkm6jkf` is no longer on the legacy TLS profile:
+  - `securityPolicy` is now `SecurityPolicy_TLS12_PFS_2025_EDGE`
+  - `endpointAccessMode` is now `STRICT`
+  - this satisfies the `TLS 1.2 or higher` requirement for the public execute-api endpoint
+- The live RDS instance `receiptflow-mysql` was already encrypted at rest before this pass:
+  - `StorageEncrypted=true`
+  - KMS key ARN is present on the instance
+- A dedicated custom DB parameter group now enforces encrypted transport on the DB side:
+  - parameter group: `receiptflow-mysql-require-secure-transport`
+  - `require_secure_transport=1`
+  - `tls_version=TLSv1.2,TLSv1.3`
+  - the instance was rebooted once so the parameter group is now `in-sync`
+- The shared MySQL connection code in `src/aws/shared/db.ts` now always requests TLS 1.2+
+  whenever MySQL mode is used, not only when IAM database authentication is enabled.

@@ -32,6 +32,7 @@ const usesMysql =
 
 let mysqlPool: mysql.Pool | null = null;
 let mysqlPoolTokenExpiresAt = 0;
+const MYSQL_SSL_OPTIONS = { minVersion: 'TLSv1.2', rejectUnauthorized: true } as const;
 
 const pool = usesMysql
   ? {
@@ -86,7 +87,7 @@ async function getMysqlPool() {
     database: awsEnv.dbName,
     connectionLimit: 4,
     charset: 'utf8mb4',
-    ssl: awsEnv.dbIamAuthEnabled ? { minVersion: 'TLSv1.2' } : undefined,
+    ssl: MYSQL_SSL_OPTIONS,
     authPlugins: awsEnv.dbIamAuthEnabled
       ? {
           mysql_clear_password: () => () => Buffer.from(`${password}\0`),
@@ -1286,7 +1287,7 @@ export async function applySchema(sql: string) {
     port: awsEnv.dbPort,
     user: awsEnv.dbUser,
     password,
-    ssl: awsEnv.dbIamAuthEnabled ? { minVersion: 'TLSv1.2' } : undefined,
+    ssl: MYSQL_SSL_OPTIONS,
     authPlugins: awsEnv.dbIamAuthEnabled
       ? {
           mysql_clear_password: () => () => Buffer.from(`${password}\0`),
