@@ -1737,7 +1737,7 @@ function defaultMonthlyDocumentLimitForPlan(planId: BillingPlanId) {
     case 'capture':
       return 250;
     case 'control':
-      return 2500;
+      return 1250;
     case 'operations':
       return 10000;
     default:

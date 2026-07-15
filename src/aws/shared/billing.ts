@@ -43,7 +43,7 @@ const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
   control: {
     id: 'control',
     label: 'Control',
-    monthlyDocumentLimit: 2500,
+    monthlyDocumentLimit: 1250,
     includedUsers: 25,
     routes: ['/overview', '/costs', '/sales', '/claims', '/settings', '/billing'],
     features: [
