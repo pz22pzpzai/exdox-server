@@ -6,6 +6,17 @@ import { activateInvitedUser, createUser } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
 
+function normalizeOptionalPositiveInteger(value: unknown) {
+  if (value === null || value === undefined || value === '') {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
@@ -16,6 +27,8 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const inviteToken = sanitizeText(body.inviteToken);
     const billingPlan = normalizePlanId(body.billingPlan);
     const billingCycle = normalizeBillingCycle(body.billingCycle);
+    const monthlyDocumentLimit = normalizeOptionalPositiveInteger(body.monthlyDocumentLimit);
+    const includedUsers = normalizeOptionalPositiveInteger(body.includedUsers);
 
     if (!email || !password) {
       return jsonResponse(400, {
@@ -49,13 +62,15 @@ export async function handler(event: APIGatewayProxyEventV2) {
           fullName,
           inviteToken,
         })
-      : await createUser({
+        : await createUser({
           email,
           passwordHash,
           fullName,
           organisationName,
           billingPlan,
           billingCycle,
+          monthlyDocumentLimit,
+          includedUsers,
         });
 
     return jsonResponse(201, {

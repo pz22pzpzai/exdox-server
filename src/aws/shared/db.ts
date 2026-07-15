@@ -560,6 +560,8 @@ export async function createUser(input: {
   organisationName?: string | null;
   billingPlan?: BillingPlanId | null;
   billingCycle?: BillingCycle | null;
+  monthlyDocumentLimit?: number | null;
+  includedUsers?: number | null;
 }): Promise<AuthenticatedUser> {
   const email = normalizeEmail(input.email);
   const fullName = normalizeName(input.fullName);
@@ -573,7 +575,13 @@ export async function createUser(input: {
       throw duplicateUserError();
     }
 
-    const organisation = await createS3Organisation(organisationName, billingPlan, billingCycle);
+    const organisation = await createS3Organisation(
+      organisationName,
+      billingPlan,
+      billingCycle,
+      input.monthlyDocumentLimit,
+      input.includedUsers,
+    );
     const user = buildStoredUser({
       id: Date.now(),
       organisationId: organisation.id,
@@ -608,8 +616,8 @@ export async function createUser(input: {
         billingPlan,
         billingCycle,
         defaultTrialEndsAt(billingPlan),
-        defaultMonthlyDocumentLimitForPlan(billingPlan),
-        defaultIncludedUsersForPlan(billingPlan),
+        input.monthlyDocumentLimit ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
+        input.includedUsers ?? defaultIncludedUsersForPlan(billingPlan),
       ],
     );
 
@@ -1695,6 +1703,8 @@ async function createS3Organisation(
   name: string,
   billingPlan: BillingPlanId = 'legacy',
   billingCycle: BillingCycle = 'monthly',
+  monthlyDocumentLimit?: number | null,
+  includedUsers?: number | null,
 ): Promise<StoredOrganisation> {
   const organisation = {
     id: Date.now(),
@@ -1705,8 +1715,8 @@ async function createS3Organisation(
     billingStatus: (billingPlan === 'legacy' ? 'legacy' : 'trialing') as BillingStatus,
     billingCycle,
     trialEndsAt: defaultTrialEndsAt(billingPlan),
-    monthlyDocumentLimit: defaultMonthlyDocumentLimitForPlan(billingPlan),
-    includedUsers: defaultIncludedUsersForPlan(billingPlan),
+    monthlyDocumentLimit: monthlyDocumentLimit ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
+    includedUsers: includedUsers ?? defaultIncludedUsersForPlan(billingPlan),
     stripeCustomerId: null,
     stripeSubscriptionId: null,
     createdAt: new Date().toISOString(),
@@ -1737,7 +1747,7 @@ function defaultMonthlyDocumentLimitForPlan(planId: BillingPlanId) {
     case 'capture':
       return 250;
     case 'control':
-      return 1250;
+      return 2500;
     case 'operations':
       return 10000;
     default:
