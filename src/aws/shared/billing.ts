@@ -25,8 +25,8 @@ const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
   capture: {
     id: 'capture',
     label: 'Capture',
-    monthlyDocumentLimit: 150,
-    includedUsers: 3,
+    monthlyDocumentLimit: 250,
+    includedUsers: 5,
     routes: ['/overview', '/costs', '/claims', '/settings', '/billing'],
     features: [
       'mobile_capture',
@@ -43,8 +43,8 @@ const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
   control: {
     id: 'control',
     label: 'Control',
-    monthlyDocumentLimit: 500,
-    includedUsers: 10,
+    monthlyDocumentLimit: 2500,
+    includedUsers: 25,
     routes: ['/overview', '/costs', '/sales', '/claims', '/settings', '/billing'],
     features: [
       'mobile_capture',
@@ -64,8 +64,8 @@ const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
   operations: {
     id: 'operations',
     label: 'Operations',
-    monthlyDocumentLimit: 2000,
-    includedUsers: 25,
+    monthlyDocumentLimit: 10000,
+    includedUsers: 100,
     routes: [
       '/overview',
       '/costs',

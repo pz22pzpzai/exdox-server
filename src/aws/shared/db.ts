@@ -1735,11 +1735,11 @@ async function countS3DocumentsForCurrentMonth(organisationId: number) {
 function defaultMonthlyDocumentLimitForPlan(planId: BillingPlanId) {
   switch (planId) {
     case 'capture':
-      return 150;
+      return 250;
     case 'control':
-      return 500;
+      return 2500;
     case 'operations':
-      return 2000;
+      return 10000;
     default:
       return null;
   }
@@ -1748,11 +1748,11 @@ function defaultMonthlyDocumentLimitForPlan(planId: BillingPlanId) {
 function defaultIncludedUsersForPlan(planId: BillingPlanId) {
   switch (planId) {
     case 'capture':
-      return 3;
+      return 5;
     case 'control':
-      return 10;
-    case 'operations':
       return 25;
+    case 'operations':
+      return 100;
     default:
       return null;
   }
