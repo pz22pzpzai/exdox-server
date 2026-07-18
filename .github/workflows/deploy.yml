@@ -57,6 +57,20 @@ jobs:
       - name: Build backend
         run: npm run build
 
+      - name: Validate deployment secrets
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          RECEIPT_BUCKET_NAME: ${{ secrets.RECEIPT_BUCKET_NAME }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          test -n "$AWS_ACCESS_KEY_ID" || { echo "Missing AWS_ACCESS_KEY_ID GitHub secret"; exit 1; }
+          test -n "$AWS_SECRET_ACCESS_KEY" || { echo "Missing AWS_SECRET_ACCESS_KEY GitHub secret"; exit 1; }
+          test -n "$RECEIPT_BUCKET_NAME" || { echo "Missing RECEIPT_BUCKET_NAME GitHub secret"; exit 1; }
+          test -n "$OPENAI_API_KEY" || { echo "Missing OPENAI_API_KEY GitHub secret"; exit 1; }
+          test -n "$JWT_SECRET" || { echo "Missing JWT_SECRET GitHub secret"; exit 1; }
+
       - name: Set up AWS SAM
         uses: aws-actions/setup-sam@v2
 
@@ -76,12 +90,6 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-
-      - name: Validate required deployment settings
-        run: |
-          test -n "$RECEIPT_BUCKET_NAME" || { echo "Missing RECEIPT_BUCKET_NAME secret"; exit 1; }
-          test -n "$OPENAI_API_KEY" || { echo "Missing OPENAI_API_KEY secret"; exit 1; }
-          test -n "$JWT_SECRET" || { echo "Missing JWT_SECRET secret"; exit 1; }
 
       - name: Build SAM template
         run: sam build --template-file infra/template.yaml
