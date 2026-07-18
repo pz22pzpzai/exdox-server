@@ -1,0 +1,119 @@
+name: Deploy Exdox Server
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: eu-west-2
+      STACK_NAME: receiptflow-expenses-prod
+      ENVIRONMENT_NAME: prod
+      RECEIPT_BUCKET_NAME: ${{ secrets.RECEIPT_BUCKET_NAME }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      INVITE_EMAIL_FROM: ${{ secrets.INVITE_EMAIL_FROM }}
+      INVITE_BASE_URL: ${{ secrets.INVITE_BASE_URL }}
+      RECEIPT_STORE_MODE: ${{ secrets.RECEIPT_STORE_MODE }}
+      DB_HOST: ${{ secrets.DB_HOST }}
+      DB_PORT: ${{ secrets.DB_PORT }}
+      DB_NAME: ${{ secrets.DB_NAME }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      DB_IAM_AUTH_ENABLED: ${{ secrets.DB_IAM_AUTH_ENABLED }}
+      DB_IAM_REGION: ${{ secrets.DB_IAM_REGION }}
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+      STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+      STRIPE_CHECKOUT_SUCCESS_URL: ${{ secrets.STRIPE_CHECKOUT_SUCCESS_URL }}
+      STRIPE_CHECKOUT_CANCEL_URL: ${{ secrets.STRIPE_CHECKOUT_CANCEL_URL }}
+      STRIPE_BILLING_PORTAL_RETURN_URL: ${{ secrets.STRIPE_BILLING_PORTAL_RETURN_URL }}
+      STRIPE_PRICE_CAPTURE_MONTHLY: ${{ secrets.STRIPE_PRICE_CAPTURE_MONTHLY }}
+      STRIPE_PRICE_CAPTURE_ANNUAL: ${{ secrets.STRIPE_PRICE_CAPTURE_ANNUAL }}
+      STRIPE_PRICE_CONTROL_MONTHLY: ${{ secrets.STRIPE_PRICE_CONTROL_MONTHLY }}
+      STRIPE_PRICE_CONTROL_ANNUAL: ${{ secrets.STRIPE_PRICE_CONTROL_ANNUAL }}
+      STRIPE_PRICE_OPERATIONS_MONTHLY: ${{ secrets.STRIPE_PRICE_OPERATIONS_MONTHLY }}
+      STRIPE_PRICE_OPERATIONS_ANNUAL: ${{ secrets.STRIPE_PRICE_OPERATIONS_ANNUAL }}
+      STRIPE_PRICE_ENTERPRISE_MONTHLY: ${{ secrets.STRIPE_PRICE_ENTERPRISE_MONTHLY }}
+      STRIPE_PRICE_ENTERPRISE_ANNUAL: ${{ secrets.STRIPE_PRICE_ENTERPRISE_ANNUAL }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build backend
+        run: npm run build
+
+      - name: Set up AWS SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate required deployment settings
+        run: |
+          test -n "$RECEIPT_BUCKET_NAME" || { echo "Missing RECEIPT_BUCKET_NAME secret"; exit 1; }
+          test -n "$OPENAI_API_KEY" || { echo "Missing OPENAI_API_KEY secret"; exit 1; }
+          test -n "$JWT_SECRET" || { echo "Missing JWT_SECRET secret"; exit 1; }
+
+      - name: Build SAM template
+        run: sam build --template-file infra/template.yaml
+
+      - name: Deploy production stack
+        run: |
+          parameter_overrides=(
+            "EnvironmentName=$ENVIRONMENT_NAME"
+            "ReceiptBucketName=$RECEIPT_BUCKET_NAME"
+            "OpenAIApiKey=$OPENAI_API_KEY"
+            "OpenAIModel=${OPENAI_MODEL:-gpt-4.1-nano}"
+            "JwtSecret=$JWT_SECRET"
+            "InviteEmailFrom=$INVITE_EMAIL_FROM"
+            "InviteBaseUrl=${INVITE_BASE_URL:-exdox://signup}"
+            "ReceiptStoreMode=${RECEIPT_STORE_MODE:-s3}"
+            "DbHost=$DB_HOST"
+            "DbPort=${DB_PORT:-3306}"
+            "DbName=${DB_NAME:-receiptflow}"
+            "DbUser=$DB_USER"
+            "DbPassword=$DB_PASSWORD"
+            "DbIamAuthEnabled=${DB_IAM_AUTH_ENABLED:-false}"
+            "DbIamRegion=${DB_IAM_REGION:-eu-west-2}"
+            "StripeSecretKey=$STRIPE_SECRET_KEY"
+            "StripeWebhookSecret=$STRIPE_WEBHOOK_SECRET"
+            "StripeCheckoutSuccessUrl=${STRIPE_CHECKOUT_SUCCESS_URL:-https://app.exdox.co.uk/billing?checkout=success}"
+            "StripeCheckoutCancelUrl=${STRIPE_CHECKOUT_CANCEL_URL:-https://app.exdox.co.uk/billing?checkout=cancelled}"
+            "StripeBillingPortalReturnUrl=${STRIPE_BILLING_PORTAL_RETURN_URL:-https://app.exdox.co.uk/billing}"
+            "StripePriceCaptureMonthly=$STRIPE_PRICE_CAPTURE_MONTHLY"
+            "StripePriceCaptureAnnual=$STRIPE_PRICE_CAPTURE_ANNUAL"
+            "StripePriceControlMonthly=$STRIPE_PRICE_CONTROL_MONTHLY"
+            "StripePriceControlAnnual=$STRIPE_PRICE_CONTROL_ANNUAL"
+            "StripePriceOperationsMonthly=$STRIPE_PRICE_OPERATIONS_MONTHLY"
+            "StripePriceOperationsAnnual=$STRIPE_PRICE_OPERATIONS_ANNUAL"
+            "StripePriceEnterpriseMonthly=$STRIPE_PRICE_ENTERPRISE_MONTHLY"
+            "StripePriceEnterpriseAnnual=$STRIPE_PRICE_ENTERPRISE_ANNUAL"
+          )
+
+          sam deploy \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --capabilities CAPABILITY_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides "${parameter_overrides[@]}"
