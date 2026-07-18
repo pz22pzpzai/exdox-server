@@ -179,14 +179,6 @@ Resources:
             Condition:
               Bool:
                 'aws:SecureTransport': 'false'
-          - Sid: DenyMissingEncryptionHeader
-            Effect: Deny
-            Principal: '*'
-            Action: 's3:PutObject'
-            Resource: !Sub '${ReceiptStorageBucket.Arn}/*'
-            Condition:
-              Null:
-                's3:x-amz-server-side-encryption': 'true'
           - Sid: DenyIncorrectEncryptionHeader
             Effect: Deny
             Principal: '*'
