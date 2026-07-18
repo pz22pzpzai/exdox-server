@@ -16,7 +16,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       return jsonResponse(503, {
         success: false,
         error: 'billing_not_configured',
-        message: 'Stripe billing portal is not connected yet.',
+        message: 'The billing portal is not available for this workspace yet. Contact hello@exdox.co.uk if you need billing support.',
       });
     }
 
@@ -25,7 +25,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       return jsonResponse(400, {
         success: false,
         error: 'missing_customer',
-        message: 'No Stripe customer is stored for this workspace yet.',
+        message: 'This workspace does not have a billing portal profile yet. Contact hello@exdox.co.uk if you need billing support.',
       });
     }
 

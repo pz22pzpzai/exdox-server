@@ -1174,7 +1174,18 @@ export async function listReceiptsByClaim(user: AuthenticatedUser, claimId: numb
 
 export async function updateClaimStatus(user: AuthenticatedUser, claimId: number, status: ExpenseClaimRow['status']) {
   if (!pool) {
-    throw validationError('Claim status updates require MySQL mode.');
+    const claims = await listExpenseClaims(user, 200);
+    const claim = claims.find((candidate) => candidate.id === claimId);
+    if (!claim) {
+      throw notFoundError('Claim not found.');
+    }
+    const nextClaim: ExpenseClaimRow = {
+      ...claim,
+      status,
+      updatedAt: new Date().toISOString(),
+    };
+    await putReceiptJsonObject(buildClaimKey(nextClaim), nextClaim);
+    return hydrateClaimTotals(nextClaim, await listReceipts(user, { limit: 500 }));
   }
 
   await pool.execute(
@@ -1194,7 +1205,11 @@ export async function updateClaimStatus(user: AuthenticatedUser, claimId: number
 
 export async function listSupplierRules(organisationId: number): Promise<SupplierRuleRow[]> {
   if (!pool) {
-    return [];
+    const keys = await listReceiptJsonKeys(`supplier-rules/org-${organisationId}/`, 500);
+    const rules = await Promise.all(keys.map((key) => getReceiptJsonObject<SupplierRuleRow>(key)));
+    return rules
+      .filter((rule) => rule.organisationId === organisationId)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
@@ -1252,7 +1267,25 @@ export async function applySupplierRulesToDocument(input: {
 
 export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'createdAt' | 'updatedAt'> & { id?: number }) {
   if (!pool) {
-    throw validationError('Supplier rules require MySQL mode.');
+    const existingRules = await listSupplierRules(input.organisationId);
+    const existing = input.id ? existingRules.find((rule) => rule.id === input.id) : null;
+    if (input.id && !existing) {
+      throw notFoundError('Supplier rule not found.');
+    }
+    const createdAt = existing?.createdAt ?? new Date().toISOString();
+    const nextRule: SupplierRuleRow = {
+      id: existing?.id ?? Date.now() + Math.floor(Math.random() * 1000),
+      organisationId: input.organisationId,
+      supplierMatchText: sanitizeText(input.supplierMatchText),
+      category: sanitizeText(input.category),
+      taxRate: sanitizeText(input.taxRate) || '20% Standard',
+      paymentMethod: input.paymentMethod,
+      isActive: input.isActive,
+      createdAt,
+      updatedAt: new Date().toISOString(),
+    };
+    await putReceiptJsonObject(buildSupplierRuleKey(nextRule), nextRule);
+    return nextRule;
   }
 
   if (input.id) {
@@ -1291,7 +1324,13 @@ export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'cr
 
 export async function deleteSupplierRule(organisationId: number, ruleId: number) {
   if (!pool) {
-    throw validationError('Supplier rules require MySQL mode.');
+    const rules = await listSupplierRules(organisationId);
+    const rule = rules.find((candidate) => candidate.id === ruleId);
+    if (!rule) {
+      throw notFoundError('Supplier rule not found.');
+    }
+    await deleteReceiptObject(buildSupplierRuleKey(rule));
+    return { success: true };
   }
   await pool.execute(`DELETE FROM supplier_rules WHERE id = ? AND organisation_id = ?`, [ruleId, organisationId]);
   return { success: true };
@@ -1706,6 +1745,10 @@ function buildReceiptMetadataKey(record: ReceiptRow) {
 
 function buildClaimKey(claim: ExpenseClaimRow) {
   return `expense-claims/org-${claim.organisationId}/user-${claim.createdByUserId}/${claim.createdAt.slice(0, 10)}/${claim.id}.json`;
+}
+
+function buildSupplierRuleKey(rule: SupplierRuleRow) {
+  return `supplier-rules/org-${rule.organisationId}/${rule.createdAt.slice(0, 10)}/${rule.id}.json`;
 }
 
 function buildUserKey(email: string) {
