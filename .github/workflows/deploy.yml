@@ -60,12 +60,21 @@ jobs:
       - name: Set up AWS SAM
         uses: aws-actions/setup-sam@v2
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials with session token
         uses: aws-actions/configure-aws-credentials@v4
+        if: ${{ secrets.AWS_SESSION_TOKEN != '' }}
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure AWS credentials without session token
+        uses: aws-actions/configure-aws-credentials@v4
+        if: ${{ secrets.AWS_SESSION_TOKEN == '' }}
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Validate required deployment settings
