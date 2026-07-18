@@ -178,7 +178,7 @@ Resources:
               - !Sub '${ReceiptStorageBucket.Arn}/*'
             Condition:
               Bool:
-                aws:SecureTransport: false
+                'aws:SecureTransport': 'false'
           - Sid: DenyMissingEncryptionHeader
             Effect: Deny
             Principal: '*'
@@ -186,7 +186,7 @@ Resources:
             Resource: !Sub '${ReceiptStorageBucket.Arn}/*'
             Condition:
               Null:
-                s3:x-amz-server-side-encryption: true
+                's3:x-amz-server-side-encryption': 'true'
           - Sid: DenyIncorrectEncryptionHeader
             Effect: Deny
             Principal: '*'
@@ -194,7 +194,7 @@ Resources:
             Resource: !Sub '${ReceiptStorageBucket.Arn}/*'
             Condition:
               StringNotEquals:
-                s3:x-amz-server-side-encryption: AES256
+                's3:x-amz-server-side-encryption': 'AES256'
 
   HealthFunction:
     Type: AWS::Serverless::Function
