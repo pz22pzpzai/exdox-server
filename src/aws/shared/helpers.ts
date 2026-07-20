@@ -49,6 +49,20 @@ export function normalizeDateString(value: unknown) {
     return null;
   }
 
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return text;
+  }
+
+  const dayFirstMatch = text.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/);
+  if (dayFirstMatch) {
+    const day = Number(dayFirstMatch[1]);
+    const month = Number(dayFirstMatch[2]);
+    const year = Number(dayFirstMatch[3].length === 2 ? `20${dayFirstMatch[3]}` : dayFirstMatch[3]);
+    if (year >= 2000 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${year.toString().padStart(4, '0')}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+    }
+  }
+
   const parsed = new Date(text);
   if (Number.isNaN(parsed.getTime())) {
     return null;
