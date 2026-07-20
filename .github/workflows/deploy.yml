@@ -9,6 +9,7 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    environment: prod
     env:
       AWS_REGION: eu-west-2
       STACK_NAME: receiptflow-expenses-prod
