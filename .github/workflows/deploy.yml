@@ -27,6 +27,7 @@ jobs:
       DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
       DB_IAM_AUTH_ENABLED: ${{ secrets.DB_IAM_AUTH_ENABLED }}
       DB_IAM_REGION: ${{ secrets.DB_IAM_REGION }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
       STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
       STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
       STRIPE_CHECKOUT_SUCCESS_URL: ${{ secrets.STRIPE_CHECKOUT_SUCCESS_URL }}
@@ -76,16 +77,16 @@ jobs:
 
       - name: Configure AWS credentials with session token
         uses: aws-actions/configure-aws-credentials@v4
-        if: ${{ secrets.AWS_SESSION_TOKEN != '' }}
+        if: ${{ env.AWS_SESSION_TOKEN != '' }}
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-session-token: ${{ env.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Configure AWS credentials without session token
         uses: aws-actions/configure-aws-credentials@v4
-        if: ${{ secrets.AWS_SESSION_TOKEN == '' }}
+        if: ${{ env.AWS_SESSION_TOKEN == '' }}
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
