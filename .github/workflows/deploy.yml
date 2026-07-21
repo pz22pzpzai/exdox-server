@@ -59,6 +59,22 @@ jobs:
       - name: Build backend
         run: npm run build
 
+      - name: Prepare deployment package
+        run: |
+          rm -rf deploy-package
+          mkdir -p deploy-package
+          cp -R dist deploy-package/dist
+          cp -R node_modules deploy-package/node_modules
+          cp package.json package-lock.json deploy-package/
+          cp infra/template.yaml infra/template.deploy.yaml
+          python3 - <<'PY'
+          from pathlib import Path
+
+          template_path = Path("infra/template.deploy.yaml")
+          template = template_path.read_text()
+          template_path.write_text(template.replace("    CodeUri: ..\n", "    CodeUri: ../deploy-package\n", 1))
+          PY
+
       - name: Validate deployment secrets
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -94,7 +110,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Build SAM template
-        run: sam build --template-file infra/template.yaml
+        run: sam build --template-file infra/template.deploy.yaml
 
       - name: Deploy production stack
         run: |
@@ -139,6 +155,7 @@ jobs:
           add_if_set "StripePriceEnterpriseAnnual" "$STRIPE_PRICE_ENTERPRISE_ANNUAL"
 
           sam deploy \
+            --template-file .aws-sam/build/template.yaml \
             --stack-name "$STACK_NAME" \
             --region "$AWS_REGION" \
             --s3-bucket "$RECEIPT_BUCKET_NAME" \
