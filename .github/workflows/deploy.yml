@@ -141,6 +141,7 @@ jobs:
           sam deploy \
             --stack-name "$STACK_NAME" \
             --region "$AWS_REGION" \
+            --s3-bucket "$RECEIPT_BUCKET_NAME" \
             --capabilities CAPABILITY_IAM \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
