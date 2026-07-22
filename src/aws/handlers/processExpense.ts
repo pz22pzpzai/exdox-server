@@ -5,11 +5,13 @@ import { requireAuthenticatedUser } from '../shared/auth.js';
 import { assertWorkspaceAccess, canProcessDocument, getPlanLimitMessage, isBillingActive } from '../shared/billing.js';
 import { awsEnv } from '../shared/env.js';
 import { jsonResponse } from '../shared/http.js';
-import { getReceiptObjectBuffer, putReceiptObject } from '../shared/s3.js';
+import { deleteReceiptObject, getReceiptObjectBuffer, putReceiptObject } from '../shared/s3.js';
 import { inferMimeType, readRequestOptions, sanitizeText } from '../shared/helpers.js';
 import { applyVatRegistrationRules, processExpenseBuffer } from '../shared/openaiExtraction.js';
 import {
   applySupplierRulesToDocument,
+  duplicateReceiptError,
+  findDuplicateReceiptForOrganisation,
   getOrganisationBillingSummary,
   getOrganisationTaxProfile,
   insertReceiptRecord,
@@ -105,6 +107,16 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: { id: 
     paymentMethod: options.paymentMethod,
   });
   const document = supplierRuleOutcome.document;
+  const duplicateReceipt = await findDuplicateReceiptForOrganisation({
+    organisationId: user.organisationId,
+    workspaceContext: options.workspaceContext,
+    document,
+    sourceFileName: fileName,
+  });
+  if (duplicateReceipt) {
+    await deleteReceiptObject(s3Key);
+    throw duplicateReceiptError('Error: Duplicate');
+  }
 
   const receiptId = await insertReceiptRecord({
     organisationId: user.organisationId,
@@ -208,6 +220,16 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: { id: numbe
     paymentMethod: options.paymentMethod,
   });
   const document = supplierRuleOutcome.document;
+  const duplicateReceipt = await findDuplicateReceiptForOrganisation({
+    organisationId: user.organisationId,
+    workspaceContext: options.workspaceContext,
+    document,
+    sourceFileName: fileName,
+  });
+  if (duplicateReceipt) {
+    await deleteReceiptObject(s3Key);
+    throw duplicateReceiptError('Error: Duplicate');
+  }
 
   const receiptId = await insertReceiptRecord({
     organisationId: user.organisationId,

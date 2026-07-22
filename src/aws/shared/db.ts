@@ -266,6 +266,38 @@ export async function insertReceiptRecord(input: {
   return result.insertId;
 }
 
+export async function findDuplicateReceiptForOrganisation(input: {
+  organisationId: number;
+  workspaceContext: WorkspaceContext;
+  document: NormalizedExpenseDocument;
+  sourceFileName: string;
+}) {
+  const candidateKeys = buildDuplicateCandidateKeys({
+    workspaceContext: input.workspaceContext,
+    sourceFilename: input.sourceFileName,
+    vendorName: input.document.vendorName,
+    invoiceDate: input.document.invoiceDate,
+    createdAt: new Date().toISOString(),
+    totalAmount: input.document.totalAmount,
+    netAmount: input.document.netAmount,
+    vatAmount: input.document.vatAmount,
+  });
+  if (!candidateKeys.length) {
+    return null;
+  }
+
+  const receipts = !pool
+    ? await listOrganisationWorkspaceReceiptsFromS3(input.organisationId, input.workspaceContext, 1000)
+    : await listOrganisationWorkspaceReceiptsFromMysql(input.organisationId, input.workspaceContext, 1000);
+
+  return (
+    receipts.find((receipt) => {
+      const existingKeys = buildDuplicateCandidateKeys(receipt);
+      return existingKeys.some((key) => candidateKeys.includes(key));
+    }) ?? null
+  );
+}
+
 export async function listReceipts(
   user: AuthenticatedUser,
   options?: {
@@ -1546,6 +1578,76 @@ function buildReceiptListPrefix(user: AuthenticatedUser, workspaceContext: Works
     : `receipt-records/org-${user.organisationId}/`;
 }
 
+async function listOrganisationWorkspaceReceiptsFromS3(
+  organisationId: number,
+  workspaceContext: WorkspaceContext,
+  limit: number,
+) {
+  const prefix = `receipt-records/org-${organisationId}/${workspaceContext}/`;
+  const keys = await listReceiptJsonKeys(prefix, Math.max(limit * 4, 50));
+  const receipts = await Promise.all(keys.map((key) => getReceiptJsonObject<ReceiptRow>(key)));
+  return receipts
+    .filter((receipt) => receipt.organisationId === organisationId && receipt.workspaceContext === workspaceContext)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .slice(0, limit);
+}
+
+async function listOrganisationWorkspaceReceiptsFromMysql(
+  organisationId: number,
+  workspaceContext: WorkspaceContext,
+  limit: number,
+) {
+  const [rows] = await pool!.query<mysql.RowDataPacket[]>(
+    `SELECT
+      id,
+      organisation_id,
+      uploaded_by_user_id,
+      workspace_context,
+      payment_method,
+      claim_id,
+      status,
+      category,
+      description,
+      customer_name,
+      receipt_source,
+      source_filename,
+      source_mime_type,
+      s3_bucket,
+      s3_key,
+      locale,
+      document_type,
+      vendor_name,
+      invoice_date,
+      due_date,
+      invoice_number,
+      currency,
+      total_amount,
+      net_amount,
+      vat_amount,
+      tax_rate_applied,
+      subtotal_amount,
+      total_tax_amount,
+      confidence_score,
+      confidence_source,
+      needs_review,
+      extraction_provider,
+      extraction_model,
+      line_items,
+      tax_breakdown,
+      notes,
+      raw_text_summary,
+      created_at,
+      updated_at
+    FROM receipts
+    WHERE organisation_id = ? AND workspace_context = ?
+    ORDER BY created_at DESC
+    LIMIT ?`,
+    [organisationId, workspaceContext, limit],
+  );
+
+  return rows.map(mapReceiptRow);
+}
+
 function filterReceiptForUser(receipt: ReceiptRow, user: AuthenticatedUser) {
   return user.role === 'Business_Admin'
     ? receipt.organisationId === user.organisationId
@@ -1670,6 +1772,45 @@ function buildReconciliationScore(
   }
 
   return Math.max(0.1, 1 - dayDistance / 7);
+}
+
+function buildDuplicateCandidateKeys(record: Pick<
+  ReceiptRow,
+  'workspaceContext' | 'sourceFilename' | 'vendorName' | 'invoiceDate' | 'createdAt' | 'totalAmount' | 'netAmount' | 'vatAmount'
+>) {
+  const amount = duplicateCandidateAmount(record);
+  if (amount === null) {
+    return [];
+  }
+
+  const date = duplicateCandidateDate(record);
+  const baseParts = [record.workspaceContext, amount.toFixed(2), date];
+  const vendor = normalizeDuplicateText(record.vendorName);
+  const fileName = normalizeDuplicateText(record.sourceFilename.replace(/\.[a-z0-9]+$/i, ''));
+  const keys: string[] = [];
+
+  if (vendor) {
+    keys.push(['vendor', vendor, ...baseParts].join('|'));
+  }
+  if (fileName) {
+    keys.push(['file', fileName, ...baseParts].join('|'));
+  }
+
+  return keys;
+}
+
+function duplicateCandidateAmount(record: Pick<ReceiptRow, 'totalAmount' | 'netAmount' | 'vatAmount'>) {
+  const hasComponentAmount = record.netAmount != null || record.vatAmount != null;
+  const gross = record.totalAmount ?? (hasComponentAmount ? (record.netAmount ?? 0) + (record.vatAmount ?? 0) : null);
+  return gross === null || !Number.isFinite(gross) || gross <= 0 ? null : gross;
+}
+
+function duplicateCandidateDate(record: Pick<ReceiptRow, 'invoiceDate' | 'createdAt'>) {
+  return (record.invoiceDate ?? record.createdAt).slice(0, 10);
+}
+
+function normalizeDuplicateText(value: string | null | undefined) {
+  return value?.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() ?? '';
 }
 
 function buildS3BackedReceiptRow(input: {
@@ -1930,6 +2071,16 @@ function duplicateOrganisationError(organisationName: string) {
   };
   error.statusCode = 409;
   error.code = 'organisation_exists';
+  return error;
+}
+
+export function duplicateReceiptError(message = 'Duplicate receipt detected.') {
+  const error = new Error(message) as Error & {
+    statusCode?: number;
+    code?: string;
+  };
+  error.statusCode = 409;
+  error.code = 'duplicate_receipt';
   return error;
 }
 
