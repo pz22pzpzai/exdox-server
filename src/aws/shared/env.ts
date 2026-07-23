@@ -25,6 +25,7 @@ export const awsEnv = {
   jwtSecret: requireEnv('JWT_SECRET'),
   inviteEmailFrom: optionalEnv('INVITE_EMAIL_FROM'),
   inviteBaseUrl: process.env.INVITE_BASE_URL?.trim() || 'exdox://signup',
+  confirmEmailBaseUrl: process.env.CONFIRM_EMAIL_BASE_URL?.trim() || 'https://www.exdox.co.uk/confirm-email',
   receiptStoreMode: process.env.RECEIPT_STORE_MODE?.trim() || 's3',
   dbHost: optionalEnv('DB_HOST'),
   dbPort: Number(process.env.DB_PORT ?? 3306),

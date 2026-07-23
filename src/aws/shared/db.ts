@@ -146,7 +146,7 @@ type StoredUser = {
   passwordHash: string | null;
   fullName: string | null;
   role: UserRole;
-  status: 'pending_invite' | 'active';
+  status: 'pending_invite' | 'pending_confirmation' | 'active';
   inviteToken: string | null;
   invitedByUserId: number | null;
   createdAt: string;
@@ -594,12 +594,13 @@ export async function createUser(input: {
   billingCycle?: BillingCycle | null;
   monthlyDocumentLimit?: number | null;
   includedUsers?: number | null;
-}): Promise<AuthenticatedUser> {
+}): Promise<UserRecord> {
   const email = normalizeEmail(input.email);
   const fullName = normalizeName(input.fullName);
   const organisationName = normalizeName(input.organisationName) || `${fullName || 'exdox'} Workspace`;
   const billingPlan = normalizePlanId(input.billingPlan);
   const billingCycle = normalizeBillingCycle(input.billingCycle);
+  const confirmationToken = crypto.randomBytes(24).toString('hex');
 
   if (!pool) {
     const existing = await findUserByEmail(email);
@@ -626,12 +627,12 @@ export async function createUser(input: {
       passwordHash: input.passwordHash,
       fullName,
       role: 'Business_Admin',
-      status: 'active',
-      inviteToken: null,
+      status: 'pending_confirmation',
+      inviteToken: confirmationToken,
       invitedByUserId: null,
     });
     await putReceiptJsonObject(buildUserKey(email), user);
-    return toAuthenticatedUser(user);
+    return toUserRecord(user);
   }
 
   const connection = await pool.getConnection();
@@ -675,9 +676,9 @@ export async function createUser(input: {
     );
 
     const [userResult] = await connection.execute<mysql.ResultSetHeader>(
-      `INSERT INTO users (organisation_id, email, password_hash, full_name, user_role, status, invitation_accepted_at)
-       VALUES (?, ?, ?, ?, 'Business_Admin', 'active', CURRENT_TIMESTAMP)`,
-      [orgResult.insertId, email, input.passwordHash, fullName],
+      `INSERT INTO users (organisation_id, email, password_hash, full_name, user_role, status, invite_token)
+       VALUES (?, ?, ?, ?, 'Business_Admin', 'pending_confirmation', ?)`,
+      [orgResult.insertId, email, input.passwordHash, fullName, confirmationToken],
     );
 
     await connection.commit();
@@ -685,9 +686,12 @@ export async function createUser(input: {
       id: userResult.insertId,
       organisationId: orgResult.insertId,
       email,
+      passwordHash: input.passwordHash,
       fullName,
       role: 'Business_Admin',
-      status: 'active',
+      status: 'pending_confirmation',
+      inviteToken: confirmationToken,
+      invitedByUserId: null,
     };
   } catch (error) {
     await connection.rollback();
@@ -698,6 +702,66 @@ export async function createUser(input: {
   } finally {
     connection.release();
   }
+}
+
+export async function confirmRegisteredUserEmail(input: {
+  email: string;
+  confirmationToken: string;
+}): Promise<AuthenticatedUser> {
+  const email = normalizeEmail(input.email);
+  const confirmationToken = sanitizeText(input.confirmationToken);
+
+  if (!confirmationToken) {
+    throw invalidInviteError('A confirmation token is required to activate this account.');
+  }
+
+  if (!pool) {
+    const existing = await findUserByEmail(email);
+    if (!existing || existing.status !== 'pending_confirmation' || existing.inviteToken !== confirmationToken) {
+      throw invalidInviteError('This confirmation link is invalid or has already been used.');
+    }
+
+    const activated = buildStoredUser({
+      id: existing.id,
+      organisationId: existing.organisationId,
+      email: existing.email,
+      passwordHash: existing.passwordHash,
+      fullName: existing.fullName,
+      role: existing.role,
+      status: 'active',
+      inviteToken: null,
+      invitedByUserId: existing.invitedByUserId,
+    });
+    await putReceiptJsonObject(buildUserKey(email), activated);
+    return toAuthenticatedUser(activated);
+  }
+
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT id, organisation_id, email, full_name, user_role AS role, status, invite_token
+     FROM users
+     WHERE email = ? LIMIT 1`,
+    [email],
+  );
+  const row = rows[0];
+  if (!row || String(row.status) !== 'pending_confirmation' || String(row.invite_token) !== confirmationToken) {
+    throw invalidInviteError('This confirmation link is invalid or has already been used.');
+  }
+
+  await pool.execute(
+    `UPDATE users
+     SET status = 'active', invite_token = NULL, invitation_accepted_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [row.id],
+  );
+
+  return {
+    id: Number(row.id),
+    organisationId: Number(row.organisation_id),
+    email: String(row.email),
+    fullName: row.full_name ? String(row.full_name) : null,
+    role: normalizeUserRole(row.role),
+    status: 'active',
+  };
 }
 
 export async function createInvite(input: {
@@ -2074,6 +2138,12 @@ function buildInviteLink(inviteToken: string, email: string) {
   const base = awsEnv.inviteBaseUrl.replace(/\/$/, '');
   const separator = base.includes('?') ? '&' : '?';
   return `${base}${separator}inviteToken=${encodeURIComponent(inviteToken)}&email=${encodeURIComponent(email)}`;
+}
+
+export function buildConfirmationEmailLink(confirmationToken: string, email: string) {
+  const base = awsEnv.confirmEmailBaseUrl.replace(/\/$/, '');
+  const separator = base.includes('?') ? '&' : '?';
+  return `${base}${separator}token=${encodeURIComponent(confirmationToken)}&email=${encodeURIComponent(email)}`;
 }
 
 function normalizeEmail(value: string) {

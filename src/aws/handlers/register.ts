@@ -2,7 +2,8 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { hashPassword, signUserToken } from '../shared/auth.js';
 import { normalizeBillingCycle, normalizePlanId } from '../shared/billing.js';
-import { activateInvitedUser, createUser } from '../shared/db.js';
+import { sendRegistrationConfirmationEmail } from '../shared/confirmationMail.js';
+import { activateInvitedUser, buildConfirmationEmailLink, createUser } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
 
@@ -55,28 +56,59 @@ export async function handler(event: APIGatewayProxyEventV2) {
     }
 
     const passwordHash = await hashPassword(password);
-    const user = inviteToken
-      ? await activateInvitedUser({
-          email,
-          passwordHash,
-          fullName,
-          inviteToken,
-        })
-        : await createUser({
-          email,
-          passwordHash,
-          fullName,
-          organisationName,
-          billingPlan,
-          billingCycle,
-          monthlyDocumentLimit,
-          includedUsers,
-        });
+    if (inviteToken) {
+      const user = await activateInvitedUser({
+        email,
+        passwordHash,
+        fullName,
+        inviteToken,
+      });
+
+      return jsonResponse(201, {
+        success: true,
+        token: signUserToken(user),
+        user,
+      });
+    }
+
+    const user = await createUser({
+      email,
+      passwordHash,
+      fullName,
+      organisationName,
+      billingPlan,
+      billingCycle,
+      monthlyDocumentLimit,
+      includedUsers,
+    });
+
+    const confirmationToken = user.inviteToken;
+    if (!confirmationToken) {
+      throw new Error('Confirmation token missing for pending registration.');
+    }
+
+    const confirmationLink = buildConfirmationEmailLink(confirmationToken, user.email);
+    const organisationLabel = organisationName || `${fullName || 'exdox'} Workspace`;
+    const delivery = await sendRegistrationConfirmationEmail({
+      toEmail: user.email,
+      fullName: user.fullName,
+      organisationName: organisationLabel,
+      confirmationLink,
+    });
 
     return jsonResponse(201, {
       success: true,
-      token: signUserToken(user),
-      user,
+      requiresEmailConfirmation: true,
+      message: `We've sent a confirmation email to ${user.email}. Open the link in that message to activate your workspace.`,
+      delivery,
+      user: {
+        id: user.id,
+        organisationId: user.organisationId,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        status: user.status,
+      },
     });
   } catch (error) {
     const statusCode =

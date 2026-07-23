@@ -5,7 +5,7 @@ export type InboxStatus = 'Processing' | 'Ready' | 'Review' | 'Published';
 export type ReceiptSource = 'mobile' | 'email' | 'web_upload' | 'bank_import';
 
 export type UserRole = 'Business_Admin' | 'Standard_Employee';
-export type UserStatus = 'pending_invite' | 'active';
+export type UserStatus = 'pending_invite' | 'pending_confirmation' | 'active';
 export type UkTaxRate = '20% Standard' | '5% Reduced' | '0% Zero' | 'Exempt' | 'No VAT';
 export type BillingPlanId = 'capture' | 'control' | 'operations' | 'enterprise' | 'legacy';
 export type BillingStatus = 'trialing' | 'active' | 'past_due' | 'canceled' | 'inactive' | 'legacy';

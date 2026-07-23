@@ -36,6 +36,14 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
+    if (user.status === 'pending_confirmation') {
+      return jsonResponse(403, {
+        success: false,
+        error: 'email_confirmation_required',
+        message: 'Confirm your email address from the message we sent before signing in.',
+      });
+    }
+
     const isValid = await verifyPassword(password, user.passwordHash);
     if (!isValid) {
       return jsonResponse(401, {

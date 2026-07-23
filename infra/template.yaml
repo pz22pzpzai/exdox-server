@@ -23,6 +23,9 @@ Parameters:
   InviteBaseUrl:
     Type: String
     Default: 'exdox://signup'
+  ConfirmEmailBaseUrl:
+    Type: String
+    Default: 'https://www.exdox.co.uk/confirm-email'
   ReceiptStoreMode:
     Type: String
     Default: s3
@@ -105,6 +108,7 @@ Globals:
         JWT_SECRET: !Ref JwtSecret
         INVITE_EMAIL_FROM: !Ref InviteEmailFrom
         INVITE_BASE_URL: !Ref InviteBaseUrl
+        CONFIRM_EMAIL_BASE_URL: !Ref ConfirmEmailBaseUrl
         RECEIPT_STORE_MODE: !Ref ReceiptStoreMode
         DB_HOST: !Ref DbHost
         DB_PORT: !Ref DbPort
@@ -325,6 +329,21 @@ Resources:
           Properties:
             RestApiId: !Ref ReceiptApi
             Path: /register
+            Method: POST
+
+  ConfirmEmailFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/confirmEmail.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        ConfirmEmailRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /confirm-email
             Method: POST
 
   InviteFunction:
