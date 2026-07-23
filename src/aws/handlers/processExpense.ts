@@ -133,7 +133,7 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: { id: 
     locale: options.locale,
     extractionProvider: 'openai',
     extractionModel: awsEnv.openAiModel,
-    rawExtractionJson: document,
+    rawExtractionJson: extractedDocument,
     document,
   });
 
@@ -246,7 +246,7 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: { id: numbe
     locale: options.locale,
     extractionProvider: 'openai',
     extractionModel: awsEnv.openAiModel,
-    rawExtractionJson: document,
+    rawExtractionJson: extractedDocument,
     document,
   });
 

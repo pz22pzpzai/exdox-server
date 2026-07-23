@@ -653,15 +653,19 @@ export async function createUser(input: {
     const [orgResult] = await connection.execute<mysql.ResultSetHeader>(
       `INSERT INTO organisations (
         name,
+        is_vat_registered,
+        default_tax_rate_costs,
         billing_plan,
         billing_status,
         billing_cycle,
         trial_ends_at,
         monthly_document_limit,
         included_users
-      ) VALUES (?, ?, 'trialing', ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, 'trialing', ?, ?, ?, ?)`,
       [
         organisationName,
+        1,
+        '20% Standard',
         billingPlan,
         billingCycle,
         defaultTrialEndsAt(billingPlan),
@@ -908,14 +912,14 @@ export async function getOrganisationTaxProfile(organisationId: number) {
     try {
       const organisation = await getS3Organisation(organisationId);
       return {
-        isVatRegistered: Boolean((organisation as StoredOrganisation & { isVatRegistered?: boolean }).isVatRegistered),
+        isVatRegistered: (organisation as StoredOrganisation & { isVatRegistered?: boolean }).isVatRegistered !== false,
         defaultTaxRateCosts:
-          (organisation as StoredOrganisation & { defaultTaxRateCosts?: string }).defaultTaxRateCosts || 'No VAT',
+          (organisation as StoredOrganisation & { defaultTaxRateCosts?: string }).defaultTaxRateCosts || '20% Standard',
       };
     } catch {
       return {
-        isVatRegistered: false,
-        defaultTaxRateCosts: 'No VAT',
+        isVatRegistered: true,
+        defaultTaxRateCosts: '20% Standard',
       };
     }
   }
@@ -930,8 +934,8 @@ export async function getOrganisationTaxProfile(organisationId: number) {
   }
 
   return {
-    isVatRegistered: Boolean(row.is_vat_registered),
-    defaultTaxRateCosts: row.default_tax_rate_costs ? String(row.default_tax_rate_costs) : 'No VAT',
+    isVatRegistered: row.is_vat_registered == null ? true : Boolean(row.is_vat_registered),
+    defaultTaxRateCosts: row.default_tax_rate_costs ? String(row.default_tax_rate_costs) : '20% Standard',
   };
 }
 
@@ -941,9 +945,9 @@ export async function getOrganisationSettings(organisationId: number): Promise<O
     return {
       organisationId: organisation.id,
       organisationName: organisation.name,
-      isVatRegistered: Boolean((organisation as StoredOrganisation & { isVatRegistered?: boolean }).isVatRegistered),
+      isVatRegistered: (organisation as StoredOrganisation & { isVatRegistered?: boolean }).isVatRegistered !== false,
       defaultTaxRate:
-        (organisation as StoredOrganisation & { defaultTaxRateCosts?: string }).defaultTaxRateCosts || 'No VAT',
+        (organisation as StoredOrganisation & { defaultTaxRateCosts?: string }).defaultTaxRateCosts || '20% Standard',
     };
   }
 
@@ -962,8 +966,8 @@ export async function getOrganisationSettings(organisationId: number): Promise<O
   return {
     organisationId: Number(row.id),
     organisationName: String(row.name),
-    isVatRegistered: Boolean(row.is_vat_registered),
-    defaultTaxRate: row.default_tax_rate_costs ? String(row.default_tax_rate_costs) : 'No VAT',
+    isVatRegistered: row.is_vat_registered == null ? true : Boolean(row.is_vat_registered),
+    defaultTaxRate: row.default_tax_rate_costs ? String(row.default_tax_rate_costs) : '20% Standard',
   };
 }
 
@@ -1044,7 +1048,7 @@ export async function updateOrganisationSettings(input: {
     const next = {
       ...organisation,
       isVatRegistered: input.isVatRegistered,
-      defaultTaxRateCosts: sanitizeText(input.defaultTaxRate) || 'No VAT',
+      defaultTaxRateCosts: sanitizeText(input.defaultTaxRate) || '20% Standard',
     };
     await putReceiptJsonObject(buildOrganisationKey(input.organisationId), next);
     return getOrganisationSettings(input.organisationId);
@@ -1054,7 +1058,7 @@ export async function updateOrganisationSettings(input: {
     `UPDATE organisations
      SET is_vat_registered = ?, default_tax_rate_costs = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
-    [input.isVatRegistered ? 1 : 0, sanitizeText(input.defaultTaxRate) || 'No VAT', input.organisationId],
+    [input.isVatRegistered ? 1 : 0, sanitizeText(input.defaultTaxRate) || '20% Standard', input.organisationId],
   );
 
   return getOrganisationSettings(input.organisationId);
@@ -1139,14 +1143,35 @@ export async function updateReceiptById(
 ) {
   if (!pool) {
     const existing = await getReceiptById(user, receiptId);
+    const taxProfile = await getOrganisationTaxProfile(user.organisationId);
     const next = {
       ...existing,
       ...updates,
+      ...applyVatTrackingPreferenceToReceiptValues(
+        {
+          totalAmount: updates.totalAmount ?? existing.totalAmount,
+          netAmount: updates.netAmount ?? existing.netAmount,
+          vatAmount: updates.vatAmount ?? existing.vatAmount,
+          taxRateApplied: updates.taxRateApplied ?? existing.taxRateApplied,
+        },
+        taxProfile,
+      ),
       updatedAt: new Date().toISOString(),
     };
     await putReceiptJsonObject(buildReceiptMetadataKey(next), next);
     return next;
   }
+
+  const taxProfile = await getOrganisationTaxProfile(user.organisationId);
+  const normalizedVatValues = applyVatTrackingPreferenceToReceiptValues(
+    {
+      totalAmount: updates.totalAmount ?? null,
+      netAmount: updates.netAmount ?? null,
+      vatAmount: updates.vatAmount ?? null,
+      taxRateApplied: updates.taxRateApplied ?? null,
+    },
+    taxProfile,
+  );
 
   await pool.execute(
     `UPDATE receipts
@@ -1172,10 +1197,10 @@ export async function updateReceiptById(
       updates.category ?? null,
       updates.description ?? null,
       updates.customer ?? null,
-      updates.netAmount ?? null,
-      updates.vatAmount ?? null,
-      updates.totalAmount ?? null,
-      updates.taxRateApplied ?? null,
+      normalizedVatValues.netAmount ?? null,
+      normalizedVatValues.vatAmount ?? null,
+      normalizedVatValues.totalAmount ?? null,
+      normalizedVatValues.taxRateApplied ?? null,
       updates.status ?? 'Review',
       receiptId,
       user.organisationId,
@@ -1663,6 +1688,28 @@ function hydrateClaimTotals(claim: StoredClaim, receipts: ReceiptRow[]): Expense
   };
 }
 
+function applyVatTrackingPreferenceToReceiptValues(
+  values: Pick<ReceiptRow, 'totalAmount' | 'netAmount' | 'vatAmount' | 'taxRateApplied'>,
+  taxProfile: { isVatRegistered: boolean },
+) {
+  if (taxProfile.isVatRegistered) {
+    return values;
+  }
+
+  const grossAmount =
+    values.totalAmount ??
+    (values.netAmount !== null && values.netAmount !== undefined
+      ? values.netAmount + (values.vatAmount ?? 0)
+      : null);
+
+  return {
+    totalAmount: grossAmount,
+    netAmount: grossAmount,
+    vatAmount: grossAmount === null ? 0 : 0,
+    taxRateApplied: 'No VAT' as ReceiptRow['taxRateApplied'],
+  };
+}
+
 function validateClaimableReceipt(receipt: ReceiptRow, user: AuthenticatedUser) {
   if (!filterReceiptForUser(receipt, user)) {
     throw forbiddenError('You do not have access to this receipt.');
@@ -1910,8 +1957,8 @@ async function createS3Organisation(
   const organisation = {
     id: Date.now(),
     name,
-    isVatRegistered: false,
-    defaultTaxRateCosts: 'No VAT',
+    isVatRegistered: true,
+    defaultTaxRateCosts: '20% Standard',
     billingPlan,
     billingStatus: (billingPlan === 'legacy' ? 'legacy' : 'trialing') as BillingStatus,
     billingCycle,

@@ -1,13 +1,12 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { getOrganisationSettings } from '../shared/db.js';
-import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
+import { requireAuthenticatedUser } from '../shared/auth.js';
 import { jsonResponse } from '../shared/http.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
-    requireAdminUser(user);
     const settings = await getOrganisationSettings(user.organisationId);
 
     return jsonResponse(200, {
