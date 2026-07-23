@@ -323,6 +323,12 @@ Resources:
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref ReceiptBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: '*'
       Events:
         RegisterRoute:
           Type: Api
