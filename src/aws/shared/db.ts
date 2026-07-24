@@ -182,6 +182,9 @@ export async function insertReceiptRecord(input: {
     return record.id;
   }
 
+  const createdAt = new Date().toISOString();
+  const fallbackInvoiceDate = normalizeReceiptDate(input.document.invoiceDate, createdAt);
+
   const [result] = await pool.execute<mysql.ResultSetHeader>(
     `INSERT INTO receipts (
       organisation_id,
@@ -240,7 +243,7 @@ export async function insertReceiptRecord(input: {
       input.locale,
       input.document.documentType,
       input.document.vendorName,
-      input.document.invoiceDate,
+      fallbackInvoiceDate,
       input.document.dueDate,
       input.document.invoiceNumber,
       input.document.currency,
@@ -1805,6 +1808,7 @@ function safeJsonArrayParse(value: unknown) {
 }
 
 function mapReceiptRow(row: mysql.RowDataPacket): ReceiptRow {
+  const createdAt = new Date(row.created_at).toISOString();
   return {
     id: Number(row.id),
     organisationId: Number(row.organisation_id),
@@ -1824,7 +1828,7 @@ function mapReceiptRow(row: mysql.RowDataPacket): ReceiptRow {
     locale: String(row.locale),
     documentType: row.document_type,
     vendorName: row.vendor_name,
-    invoiceDate: row.invoice_date ? new Date(row.invoice_date).toISOString().slice(0, 10) : null,
+    invoiceDate: normalizeReceiptDate(row.invoice_date ? new Date(row.invoice_date).toISOString().slice(0, 10) : null, createdAt),
     dueDate: row.due_date ? new Date(row.due_date).toISOString().slice(0, 10) : null,
     invoiceNumber: row.invoice_number,
     currency: row.currency,
@@ -1843,7 +1847,7 @@ function mapReceiptRow(row: mysql.RowDataPacket): ReceiptRow {
     taxBreakdown: safeJsonArrayParse(row.tax_breakdown),
     notes: safeJsonArrayParse(row.notes),
     rawTextSummary: row.raw_text_summary,
-    createdAt: new Date(row.created_at).toISOString(),
+    createdAt,
     updatedAt: new Date(row.updated_at).toISOString(),
   };
 }
@@ -1947,6 +1951,7 @@ function buildS3BackedReceiptRow(input: {
 }): ReceiptRow {
   const createdAt = new Date().toISOString();
   const id = Date.now() + Math.floor(Math.random() * 1000);
+  const invoiceDate = normalizeReceiptDate(input.document.invoiceDate, createdAt);
   return {
     id,
     organisationId: input.organisationId,
@@ -1966,7 +1971,7 @@ function buildS3BackedReceiptRow(input: {
     locale: input.locale,
     documentType: input.document.documentType,
     vendorName: input.document.vendorName,
-    invoiceDate: input.document.invoiceDate,
+    invoiceDate,
     dueDate: input.document.dueDate,
     invoiceNumber: input.document.invoiceNumber,
     currency: input.document.currency,
@@ -1988,6 +1993,10 @@ function buildS3BackedReceiptRow(input: {
     createdAt,
     updatedAt: createdAt,
   };
+}
+
+function normalizeReceiptDate(invoiceDate: string | null | undefined, createdAt: string) {
+  return invoiceDate ?? createdAt.slice(0, 10);
 }
 
 function buildReceiptMetadataKey(record: ReceiptRow) {
