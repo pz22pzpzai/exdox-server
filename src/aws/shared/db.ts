@@ -1816,7 +1816,7 @@ function mapReceiptRow(row: mysql.RowDataPacket): ReceiptRow {
     workspaceContext: String(row.workspace_context) as WorkspaceContext,
     paymentMethod: String(row.payment_method) as PaymentMethod,
     claimId: row.claim_id === null ? null : Number(row.claim_id),
-    status: (row.status ? String(row.status) : 'Review') as ReceiptRow['status'],
+    status: normalizeReceiptStatus(row.status),
     category: row.category ? String(row.category) : null,
     description: row.description ? String(row.description) : null,
     customer: row.customer_name ? String(row.customer_name) : null,
@@ -1997,6 +1997,14 @@ function buildS3BackedReceiptRow(input: {
 
 function normalizeReceiptDate(invoiceDate: string | null | undefined, createdAt: string) {
   return invoiceDate ?? createdAt.slice(0, 10);
+}
+
+function normalizeReceiptStatus(status: unknown): ReceiptRow['status'] {
+  const trimmed = typeof status === 'string' ? status.trim() : '';
+  if (trimmed === 'Processing' || trimmed === 'Ready' || trimmed === 'Review' || trimmed === 'Published') {
+    return trimmed;
+  }
+  return 'Review';
 }
 
 function buildReceiptMetadataKey(record: ReceiptRow) {
