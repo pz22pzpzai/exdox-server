@@ -275,6 +275,7 @@ export async function findDuplicateReceiptForOrganisation(input: {
   document: NormalizedExpenseDocument;
   sourceFileName: string;
 }) {
+  const normalizedIncomingExactFileName = normalizeExactDuplicateFileName(input.sourceFileName);
   const candidateKeys = buildDuplicateCandidateKeys({
     workspaceContext: input.workspaceContext,
     sourceFilename: input.sourceFileName,
@@ -295,6 +296,12 @@ export async function findDuplicateReceiptForOrganisation(input: {
 
   return (
     receipts.find((receipt) => {
+      if (
+        normalizedIncomingExactFileName &&
+        normalizeExactDuplicateFileName(receipt.sourceFilename) === normalizedIncomingExactFileName
+      ) {
+        return true;
+      }
       const existingKeys = buildDuplicateCandidateKeys(receipt);
       return existingKeys.some((key) => candidateKeys.includes(key));
     }) ?? null
@@ -1967,6 +1974,10 @@ function duplicateCandidateDate(record: Pick<ReceiptRow, 'invoiceDate' | 'create
 
 function normalizeDuplicateText(value: string | null | undefined) {
   return value?.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() ?? '';
+}
+
+function normalizeExactDuplicateFileName(value: string | null | undefined) {
+  return value?.trim().toLowerCase().replace(/[^a-z0-9.]+/g, '') ?? '';
 }
 
 function buildS3BackedReceiptRow(input: {
