@@ -1,22 +1,9 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { hashPassword, signUserToken } from '../shared/auth.js';
-import { normalizeBillingCycle, normalizePlanId } from '../shared/billing.js';
-import { sendRegistrationConfirmationEmail } from '../shared/confirmationMail.js';
-import { activateInvitedUser, buildConfirmationEmailLink, createUser } from '../shared/db.js';
+import { activateInvitedUser } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
-
-function normalizeOptionalPositiveInteger(value: unknown) {
-  if (value === null || value === undefined || value === '') {
-    return undefined;
-  }
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    return undefined;
-  }
-  return parsed;
-}
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
@@ -24,12 +11,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const email = sanitizeText(body.email).toLowerCase();
     const password = sanitizeText(body.password);
     const fullName = sanitizeText(body.fullName) || null;
-    const organisationName = sanitizeText(body.organisationName) || null;
     const inviteToken = sanitizeText(body.inviteToken);
-    const billingPlan = normalizePlanId(body.billingPlan);
-    const billingCycle = normalizeBillingCycle(body.billingCycle);
-    const monthlyDocumentLimit = normalizeOptionalPositiveInteger(body.monthlyDocumentLimit);
-    const includedUsers = normalizeOptionalPositiveInteger(body.includedUsers);
 
     if (!email || !password) {
       return jsonResponse(400, {
@@ -71,44 +53,11 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
-    const user = await createUser({
-      email,
-      passwordHash,
-      fullName,
-      organisationName,
-      billingPlan,
-      billingCycle,
-      monthlyDocumentLimit,
-      includedUsers,
-    });
-
-    const confirmationToken = user.inviteToken;
-    if (!confirmationToken) {
-      throw new Error('Confirmation token missing for pending registration.');
-    }
-
-    const confirmationLink = buildConfirmationEmailLink(confirmationToken, user.email);
-    const organisationLabel = organisationName || `${fullName || 'exdox'} Workspace`;
-    const delivery = await sendRegistrationConfirmationEmail({
-      toEmail: user.email,
-      fullName: user.fullName,
-      organisationName: organisationLabel,
-      confirmationLink,
-    });
-
-    return jsonResponse(201, {
-      success: true,
-      requiresEmailConfirmation: true,
-      message: `We've sent a confirmation email to ${user.email}. Open the link in that message to activate your workspace.`,
-      delivery,
-      user: {
-        id: user.id,
-        organisationId: user.organisationId,
-        email: user.email,
-        fullName: user.fullName,
-        role: user.role,
-        status: user.status,
-      },
+    return jsonResponse(403, {
+      success: false,
+      error: 'self_serve_signup_disabled',
+      message:
+        'Online sign-up is temporarily unavailable until Stripe card checkout is live. Please use an invite link or contact support.',
     });
   } catch (error) {
     const statusCode =
