@@ -461,7 +461,9 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
       .slice(0, limit);
 
     const allReceipts = await listReceipts(user, { limit: 500 });
-    return relevantClaims.map((claim) => hydrateClaimTotals(claim, allReceipts));
+    return relevantClaims
+      .map((claim) => hydrateClaimTotals(claim, allReceipts))
+      .filter((claim) => claim.documentCount > 0);
   }
 
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
@@ -482,6 +484,7 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
     WHERE c.organisation_id = ?
       AND (? = 'Business_Admin' OR c.created_by_user_id = ?)
     GROUP BY c.id
+    HAVING COUNT(r.id) > 0
     ORDER BY c.created_at DESC
     LIMIT ?`,
     [user.organisationId, user.role, user.id, limit],
@@ -1285,10 +1288,22 @@ export async function deleteReceiptById(user: AuthenticatedUser, receiptId: numb
       deleteReceiptObject(buildReceiptMetadataKey(existing)),
       deleteReceiptObject(existing.s3Key),
     ]);
+    if (existing.claimId !== null) {
+      await deleteEmptyClaimIfOrphaned(user.organisationId, existing.claimId);
+    }
     return { success: true };
   }
 
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT claim_id FROM receipts WHERE id = ? AND organisation_id = ? LIMIT 1`,
+    [receiptId, user.organisationId],
+  );
+  const claimId = rows[0]?.claim_id === null || rows[0]?.claim_id === undefined ? null : Number(rows[0].claim_id);
+
   await pool.execute(`DELETE FROM receipts WHERE id = ? AND organisation_id = ?`, [receiptId, user.organisationId]);
+  if (claimId !== null) {
+    await deleteEmptyClaimIfOrphaned(user.organisationId, claimId);
+  }
   return { success: true };
 }
 
@@ -1755,6 +1770,32 @@ function hydrateClaimTotals(claim: StoredClaim, receipts: ReceiptRow[]): Expense
   };
 }
 
+async function deleteEmptyClaimIfOrphaned(organisationId: number, claimId: number) {
+  if (!pool) {
+    const claim = await getS3Claim(organisationId, claimId);
+    if (!claim) {
+      return;
+    }
+    const receipts = await listOrganisationWorkspaceReceiptsFromS3(organisationId, 'cost', 1000);
+    const stillAttached = receipts.some((receipt) => receipt.claimId === claimId);
+    if (!stillAttached) {
+      await deleteReceiptObject(buildClaimKey(claim));
+    }
+    return;
+  }
+
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT COUNT(*) AS receipt_count
+     FROM receipts
+     WHERE organisation_id = ? AND claim_id = ?`,
+    [organisationId, claimId],
+  );
+  const receiptCount = Number(rows[0]?.receipt_count ?? 0);
+  if (receiptCount === 0) {
+    await pool.execute(`DELETE FROM expense_claims WHERE id = ? AND organisation_id = ?`, [claimId, organisationId]);
+  }
+}
+
 function applyVatTrackingPreferenceToReceiptValues(
   values: Pick<ReceiptRow, 'totalAmount' | 'netAmount' | 'vatAmount' | 'taxRateApplied'>,
   taxProfile: { isVatRegistered: boolean },
@@ -2056,6 +2097,15 @@ async function createS3Organisation(
 
 async function getS3Organisation(organisationId: number): Promise<StoredOrganisation> {
   return getReceiptJsonObject<StoredOrganisation>(buildOrganisationKey(organisationId));
+}
+
+async function getS3Claim(organisationId: number, claimId: number): Promise<StoredClaim | null> {
+  const keys = await listReceiptJsonKeys(`expense-claims/org-${organisationId}/`, 1000);
+  const matchingKey = keys.find((key) => key.endsWith(`/${claimId}.json`));
+  if (!matchingKey) {
+    return null;
+  }
+  return getReceiptJsonObject<StoredClaim>(matchingKey);
 }
 
 async function listS3Organisations() {
