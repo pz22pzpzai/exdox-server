@@ -433,6 +433,18 @@ Resources:
             Path: /billing/portal-session
             Method: POST
 
+  StripeWebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/stripeWebhook.handler
+      Events:
+        StripeWebhookRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /billing/webhook
+            Method: POST
+
   GetReceiptFunction:
     Type: AWS::Serverless::Function
     Properties:

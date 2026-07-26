@@ -171,6 +171,7 @@ export type OrganisationBillingSummary = {
   currentUserCount: number;
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
+  cancellationScheduledFor: string | null;
 };
 
 export type AuthenticatedUser = {

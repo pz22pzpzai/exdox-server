@@ -613,6 +613,7 @@ export async function createUser(input: {
   const organisationName = normalizeName(input.organisationName) || `${fullName || 'exdox'} Workspace`;
   const billingPlan = normalizePlanId(input.billingPlan);
   const billingCycle = normalizeBillingCycle(input.billingCycle);
+  const initialBillingStatus = billingPlan === 'legacy' ? 'legacy' : 'inactive';
   const confirmationToken = crypto.randomBytes(24).toString('hex');
 
   if (!pool) {
@@ -675,14 +676,15 @@ export async function createUser(input: {
         trial_ends_at,
         monthly_document_limit,
         included_users
-      ) VALUES (?, ?, ?, ?, 'trialing', ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         organisationName,
         1,
         '20% Standard',
         billingPlan,
+        initialBillingStatus,
         billingCycle,
-        defaultTrialEndsAt(billingPlan),
+        initialBillingStatus === 'inactive' ? null : defaultTrialEndsAt(billingPlan),
         input.monthlyDocumentLimit ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
         input.includedUsers ?? defaultIncludedUsersForPlan(billingPlan),
       ],
@@ -1059,13 +1061,16 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
       planId: billingPlan,
       status: normalizeBillingStatus(organisation.billingStatus, billingPlan),
       billingCycle: normalizeBillingCycle(organisation.billingCycle),
-      trialEndsAt: organisation.trialEndsAt ?? defaultTrialEndsAt(billingPlan),
+      trialEndsAt:
+        organisation.trialEndsAt
+        ?? (normalizeBillingStatus(organisation.billingStatus, billingPlan) === 'inactive' ? null : defaultTrialEndsAt(billingPlan)),
       monthlyDocumentLimit: normalizeNullableNumber(organisation.monthlyDocumentLimit) ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
       monthlyDocumentUsage,
       includedUsers: normalizeNullableNumber(organisation.includedUsers) ?? defaultIncludedUsersForPlan(billingPlan),
       currentUserCount: users.length,
       stripeCustomerId: organisation.stripeCustomerId ?? null,
       stripeSubscriptionId: organisation.stripeSubscriptionId ?? null,
+      cancellationScheduledFor: null,
     };
   }
 
@@ -1101,17 +1106,19 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
   }
 
   const billingPlan = normalizePlanId(row.billing_plan);
+  const status = normalizeBillingStatus(row.billing_status, billingPlan);
   return {
     planId: billingPlan,
-    status: normalizeBillingStatus(row.billing_status, billingPlan),
+    status,
     billingCycle: normalizeBillingCycle(row.billing_cycle),
-    trialEndsAt: row.trial_ends_at ? new Date(row.trial_ends_at).toISOString() : defaultTrialEndsAt(billingPlan),
+    trialEndsAt: row.trial_ends_at ? new Date(row.trial_ends_at).toISOString() : (status === 'inactive' ? null : defaultTrialEndsAt(billingPlan)),
     monthlyDocumentLimit: normalizeNullableNumber(row.monthly_document_limit) ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
     monthlyDocumentUsage: Number(row.monthly_document_usage ?? 0),
     includedUsers: normalizeNullableNumber(row.included_users) ?? defaultIncludedUsersForPlan(billingPlan),
     currentUserCount: Number(row.current_user_count ?? 0),
     stripeCustomerId: row.stripe_customer_id ? String(row.stripe_customer_id) : null,
     stripeSubscriptionId: row.stripe_subscription_id ? String(row.stripe_subscription_id) : null,
+    cancellationScheduledFor: null,
   };
 }
 
@@ -1174,26 +1181,43 @@ export async function updateOrganisationBillingProfile(input: {
     return getOrganisationBillingSummary(input.organisationId);
   }
 
+  const hasBillingPlan = Object.prototype.hasOwnProperty.call(input, 'billingPlan');
+  const hasBillingStatus = Object.prototype.hasOwnProperty.call(input, 'billingStatus');
+  const hasBillingCycle = Object.prototype.hasOwnProperty.call(input, 'billingCycle');
+  const hasTrialEndsAt = Object.prototype.hasOwnProperty.call(input, 'trialEndsAt');
+  const hasMonthlyDocumentLimit = Object.prototype.hasOwnProperty.call(input, 'monthlyDocumentLimit');
+  const hasIncludedUsers = Object.prototype.hasOwnProperty.call(input, 'includedUsers');
+  const hasStripeCustomerId = Object.prototype.hasOwnProperty.call(input, 'stripeCustomerId');
+  const hasStripeSubscriptionId = Object.prototype.hasOwnProperty.call(input, 'stripeSubscriptionId');
+
   await pool.execute(
     `UPDATE organisations
-     SET billing_plan = COALESCE(?, billing_plan),
-         billing_status = COALESCE(?, billing_status),
-         billing_cycle = COALESCE(?, billing_cycle),
-         trial_ends_at = COALESCE(?, trial_ends_at),
-         monthly_document_limit = COALESCE(?, monthly_document_limit),
-         included_users = COALESCE(?, included_users),
-         stripe_customer_id = COALESCE(?, stripe_customer_id),
-         stripe_subscription_id = COALESCE(?, stripe_subscription_id),
+     SET billing_plan = CASE WHEN ? THEN ? ELSE billing_plan END,
+         billing_status = CASE WHEN ? THEN ? ELSE billing_status END,
+         billing_cycle = CASE WHEN ? THEN ? ELSE billing_cycle END,
+         trial_ends_at = CASE WHEN ? THEN ? ELSE trial_ends_at END,
+         monthly_document_limit = CASE WHEN ? THEN ? ELSE monthly_document_limit END,
+         included_users = CASE WHEN ? THEN ? ELSE included_users END,
+         stripe_customer_id = CASE WHEN ? THEN ? ELSE stripe_customer_id END,
+         stripe_subscription_id = CASE WHEN ? THEN ? ELSE stripe_subscription_id END,
          updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
     [
+      hasBillingPlan ? 1 : 0,
       input.billingPlan ?? null,
+      hasBillingStatus ? 1 : 0,
       input.billingStatus ?? null,
+      hasBillingCycle ? 1 : 0,
       input.billingCycle ?? null,
+      hasTrialEndsAt ? 1 : 0,
       input.trialEndsAt ?? null,
+      hasMonthlyDocumentLimit ? 1 : 0,
       input.monthlyDocumentLimit ?? null,
+      hasIncludedUsers ? 1 : 0,
       input.includedUsers ?? null,
+      hasStripeCustomerId ? 1 : 0,
       input.stripeCustomerId ?? null,
+      hasStripeSubscriptionId ? 1 : 0,
       input.stripeSubscriptionId ?? null,
       input.organisationId,
     ],
@@ -2087,15 +2111,16 @@ async function createS3Organisation(
   monthlyDocumentLimit?: number | null,
   includedUsers?: number | null,
 ): Promise<StoredOrganisation> {
+  const initialBillingStatus = (billingPlan === 'legacy' ? 'legacy' : 'inactive') as BillingStatus;
   const organisation = {
     id: Date.now(),
     name,
     isVatRegistered: true,
     defaultTaxRateCosts: '20% Standard',
     billingPlan,
-    billingStatus: (billingPlan === 'legacy' ? 'legacy' : 'trialing') as BillingStatus,
+    billingStatus: initialBillingStatus,
     billingCycle,
-    trialEndsAt: defaultTrialEndsAt(billingPlan),
+    trialEndsAt: initialBillingStatus === 'inactive' ? null : defaultTrialEndsAt(billingPlan),
     monthlyDocumentLimit: monthlyDocumentLimit ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
     includedUsers: includedUsers ?? defaultIncludedUsersForPlan(billingPlan),
     stripeCustomerId: null,
@@ -2222,6 +2247,60 @@ export function buildConfirmationEmailLink(confirmationToken: string, email: str
   const base = awsEnv.confirmEmailBaseUrl.replace(/\/$/, '');
   const separator = base.includes('?') ? '&' : '?';
   return `${base}${separator}token=${encodeURIComponent(confirmationToken)}&email=${encodeURIComponent(email)}`;
+}
+
+export async function findOrganisationIdByStripeCustomerId(stripeCustomerId: string): Promise<number | null> {
+  if (!stripeCustomerId) {
+    return null;
+  }
+
+  if (!pool) {
+    const keys = await listReceiptJsonKeys('organisations/', 1000);
+    for (const key of keys) {
+      const organisation = await getReceiptJsonObject<StoredOrganisation>(key);
+      if (organisation.stripeCustomerId === stripeCustomerId) {
+        return organisation.id;
+      }
+    }
+    return null;
+  }
+
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT id
+     FROM organisations
+     WHERE stripe_customer_id = ?
+     LIMIT 1`,
+    [stripeCustomerId],
+  );
+  const row = rows[0];
+  return row ? Number(row.id) : null;
+}
+
+export async function findOrganisationIdByStripeSubscriptionId(stripeSubscriptionId: string): Promise<number | null> {
+  if (!stripeSubscriptionId) {
+    return null;
+  }
+
+  if (!pool) {
+    const keys = await listReceiptJsonKeys('organisations/', 1000);
+    for (const key of keys) {
+      const organisation = await getReceiptJsonObject<StoredOrganisation>(key);
+      if (organisation.stripeSubscriptionId === stripeSubscriptionId) {
+        return organisation.id;
+      }
+    }
+    return null;
+  }
+
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT id
+     FROM organisations
+     WHERE stripe_subscription_id = ?
+     LIMIT 1`,
+    [stripeSubscriptionId],
+  );
+  const row = rows[0];
+  return row ? Number(row.id) : null;
 }
 
 function normalizeEmail(value: string) {

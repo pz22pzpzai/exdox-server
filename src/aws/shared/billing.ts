@@ -322,6 +322,25 @@ export function getStripePriceId(planId: BillingPlanId, billingCycle: BillingCyc
   return map[`${planId}:${billingCycle}`] ?? null;
 }
 
+export function getPlanIdFromStripePriceId(priceId: string | null | undefined): BillingPlanId | null {
+  if (!priceId) {
+    return null;
+  }
+
+  const map: Record<string, BillingPlanId> = {
+    [awsEnv.stripePriceCaptureMonthly || '']: 'capture',
+    [awsEnv.stripePriceCaptureAnnual || '']: 'capture',
+    [awsEnv.stripePriceControlMonthly || '']: 'control',
+    [awsEnv.stripePriceControlAnnual || '']: 'control',
+    [awsEnv.stripePriceOperationsMonthly || '']: 'operations',
+    [awsEnv.stripePriceOperationsAnnual || '']: 'operations',
+    [awsEnv.stripePriceEnterpriseMonthly || '']: 'enterprise',
+    [awsEnv.stripePriceEnterpriseAnnual || '']: 'enterprise',
+  };
+
+  return map[priceId] ?? null;
+}
+
 function billingLockedError(message: string) {
   const error = new Error(message) as Error & { statusCode?: number; code?: string };
   error.statusCode = 402;

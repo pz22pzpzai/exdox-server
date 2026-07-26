@@ -37,8 +37,17 @@ export async function handler(event: APIGatewayProxyEventV2) {
     });
 
     const billing = await getOrganisationBillingSummary(user.organisationId);
+    if (billing.stripeSubscriptionId && billing.status !== 'inactive' && billing.status !== 'canceled') {
+      return jsonResponse(409, {
+        success: false,
+        error: 'subscription_already_exists',
+        message: 'This workspace already has an active or trial subscription. Use the billing portal to manage or cancel it.',
+      });
+    }
+
     const organisationName = await getOrganisationName(user.organisationId);
     let customerId = billing.stripeCustomerId;
+    const planDefinition = getPlanDefinition(planId);
 
     if (!customerId) {
       const customer = await stripe.customers.create({
@@ -61,17 +70,29 @@ export async function handler(event: APIGatewayProxyEventV2) {
       customer: customerId,
       success_url: awsEnv.stripeCheckoutSuccessUrl,
       cancel_url: awsEnv.stripeCheckoutCancelUrl,
+      payment_method_collection: 'always',
+      consent_collection: {
+        terms_of_service: 'required',
+      },
       line_items: [{ price: priceId, quantity: 1 }],
       metadata: {
         organisationId: String(user.organisationId),
         planId,
         billingCycle,
+        termsVersion: '2026-07-26',
       },
       subscription_data: {
+        trial_period_days: planDefinition.trialDays ?? undefined,
+        trial_settings: {
+          end_behavior: {
+            missing_payment_method: 'cancel',
+          },
+        },
         metadata: {
           organisationId: String(user.organisationId),
           planId,
           billingCycle,
+          termsVersion: '2026-07-26',
         },
       },
     });

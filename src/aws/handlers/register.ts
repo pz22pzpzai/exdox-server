@@ -1,7 +1,8 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { hashPassword, signUserToken } from '../shared/auth.js';
-import { activateInvitedUser } from '../shared/db.js';
+import { sendRegistrationConfirmationEmail } from '../shared/confirmationMail.js';
+import { activateInvitedUser, buildConfirmationEmailLink, createUser } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
 
@@ -11,7 +12,10 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const email = sanitizeText(body.email).toLowerCase();
     const password = sanitizeText(body.password);
     const fullName = sanitizeText(body.fullName) || null;
+    const organisationName = sanitizeText(body.organisationName) || null;
     const inviteToken = sanitizeText(body.inviteToken);
+    const termsAccepted = body.termsAccepted === true;
+    const termsVersion = sanitizeText(body.termsVersion) || '2026-07-26';
 
     if (!email || !password) {
       return jsonResponse(400, {
@@ -53,11 +57,56 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
-    return jsonResponse(403, {
-      success: false,
-      error: 'self_serve_signup_disabled',
+    if (!organisationName) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'missing_organisation_name',
+        message: 'Enter your organisation name to create a workspace.',
+      });
+    }
+
+    if (!termsAccepted) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'terms_required',
+        message: 'You must accept the Exdox Terms and Conditions before starting a free trial.',
+      });
+    }
+
+    const user = await createUser({
+      email,
+      passwordHash,
+      fullName,
+      organisationName,
+      billingPlan: sanitizeText(body.billingPlan) as never,
+      billingCycle: sanitizeText(body.billingCycle) as never,
+      monthlyDocumentLimit: typeof body.monthlyDocumentLimit === 'number' ? body.monthlyDocumentLimit : undefined,
+      includedUsers: typeof body.includedUsers === 'number' ? body.includedUsers : undefined,
+    });
+
+    if (user.inviteToken) {
+      const confirmationLink = buildConfirmationEmailLink(user.inviteToken, user.email);
+      await sendRegistrationConfirmationEmail({
+        toEmail: user.email,
+        fullName: user.fullName,
+        organisationName,
+        confirmationLink,
+      });
+    }
+
+    return jsonResponse(201, {
+      success: true,
+      requiresEmailConfirmation: true,
       message:
-        'Online sign-up is temporarily unavailable until Stripe card checkout is live. Please use an invite link or contact support.',
+        `Check your email to confirm your Exdox workspace. After confirmation, add your card to start the free trial. Terms version ${termsVersion} was accepted during registration.`,
+      user: {
+        id: user.id,
+        organisationId: user.organisationId,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        status: user.status,
+      },
     });
   } catch (error) {
     const statusCode =
