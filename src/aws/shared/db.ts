@@ -136,6 +136,7 @@ type StoredOrganisation = {
   includedUsers?: number | null;
   stripeCustomerId?: string | null;
   stripeSubscriptionId?: string | null;
+  cancellationScheduledFor?: string | null;
   createdAt: string;
 };
 
@@ -1070,7 +1071,7 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
       currentUserCount: users.length,
       stripeCustomerId: organisation.stripeCustomerId ?? null,
       stripeSubscriptionId: organisation.stripeSubscriptionId ?? null,
-      cancellationScheduledFor: null,
+      cancellationScheduledFor: organisation.cancellationScheduledFor ?? null,
     };
   }
 
@@ -1158,6 +1159,7 @@ export async function updateOrganisationBillingProfile(input: {
   includedUsers?: number | null;
   stripeCustomerId?: string | null;
   stripeSubscriptionId?: string | null;
+  cancellationScheduledFor?: string | null;
 }) {
   if (!pool) {
     const organisation = await getS3Organisation(input.organisationId);
@@ -1176,6 +1178,10 @@ export async function updateOrganisationBillingProfile(input: {
         input.stripeSubscriptionId === undefined
           ? organisation.stripeSubscriptionId ?? null
           : input.stripeSubscriptionId,
+      cancellationScheduledFor:
+        input.cancellationScheduledFor === undefined
+          ? organisation.cancellationScheduledFor ?? null
+          : input.cancellationScheduledFor,
     };
     await putReceiptJsonObject(buildOrganisationKey(input.organisationId), next);
     return getOrganisationBillingSummary(input.organisationId);

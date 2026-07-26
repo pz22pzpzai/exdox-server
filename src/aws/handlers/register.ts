@@ -84,21 +84,31 @@ export async function handler(event: APIGatewayProxyEventV2) {
       includedUsers: typeof body.includedUsers === 'number' ? body.includedUsers : undefined,
     });
 
+    let confirmationDelivered = false;
     if (user.inviteToken) {
       const confirmationLink = buildConfirmationEmailLink(user.inviteToken, user.email);
-      await sendRegistrationConfirmationEmail({
-        toEmail: user.email,
-        fullName: user.fullName,
-        organisationName,
-        confirmationLink,
-      });
+      try {
+        const delivery = await sendRegistrationConfirmationEmail({
+          toEmail: user.email,
+          fullName: user.fullName,
+          organisationName,
+          confirmationLink,
+        });
+        confirmationDelivered = delivery.delivered;
+      } catch (error) {
+        console.warn('Could not send registration confirmation email.', {
+          email: user.email,
+          message: error instanceof Error ? error.message : 'Unknown email error',
+        });
+      }
     }
 
     return jsonResponse(201, {
       success: true,
       requiresEmailConfirmation: true,
-      message:
-        `Check your email to confirm your Exdox workspace. After confirmation, add your card to start the free trial. Terms version ${termsVersion} was accepted during registration.`,
+      message: confirmationDelivered
+        ? `Check your email to confirm your Exdox workspace. After confirmation, add your card to start the free trial. Terms version ${termsVersion} was accepted during registration.`
+        : `Your workspace has been created, but we could not send the confirmation email right now. Contact hello@exdox.co.uk so we can activate access. Terms version ${termsVersion} was accepted during registration.`,
       user: {
         id: user.id,
         organisationId: user.organisationId,

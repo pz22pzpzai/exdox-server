@@ -352,6 +352,27 @@ Resources:
             Path: /confirm-email
             Method: POST
 
+  ResendConfirmationEmailFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/resendConfirmationEmail.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: '*'
+      Events:
+        ResendConfirmationEmailRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /confirm-email/resend
+            Method: POST
+
   InviteFunction:
     Type: AWS::Serverless::Function
     Properties:

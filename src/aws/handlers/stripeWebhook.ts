@@ -17,6 +17,10 @@ function toStripeBillingStatus(status: string) {
   return 'inactive';
 }
 
+function toIsoDate(timestamp: number | null | undefined) {
+  return typeof timestamp === 'number' && timestamp > 0 ? new Date(timestamp * 1000).toISOString() : null;
+}
+
 async function syncSubscription(subscription: Stripe.Subscription) {
   const customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer?.id ?? null;
   const organisationIdFromMetadata = subscription.metadata.organisationId ? Number(subscription.metadata.organisationId) : null;
@@ -31,7 +35,11 @@ async function syncSubscription(subscription: Stripe.Subscription) {
 
   const firstItem = subscription.items.data[0];
   const priceId = firstItem?.price?.id ?? null;
-  const planIdFromMetadata = subscription.metadata.planId ? normalizePlanId(subscription.metadata.planId) : null;
+  const metadataPlanId = subscription.metadata.planId?.trim();
+  const planIdFromMetadata =
+    metadataPlanId === 'capture' || metadataPlanId === 'control' || metadataPlanId === 'operations' || metadataPlanId === 'enterprise'
+      ? normalizePlanId(metadataPlanId)
+      : null;
   const inferredPlanId = planIdFromMetadata ?? getPlanIdFromStripePriceId(priceId) ?? 'legacy';
   const billingCycle = subscription.metadata.billingCycle ? normalizeBillingCycle(subscription.metadata.billingCycle) : 'monthly';
 
@@ -40,9 +48,12 @@ async function syncSubscription(subscription: Stripe.Subscription) {
     billingPlan: inferredPlanId,
     billingStatus: normalizeBillingStatus(toStripeBillingStatus(subscription.status), inferredPlanId),
     billingCycle,
-    trialEndsAt: subscription.trial_end ? new Date(subscription.trial_end * 1000).toISOString() : null,
+    trialEndsAt: toIsoDate(subscription.trial_end),
     stripeCustomerId: customerId,
     stripeSubscriptionId: subscription.status === 'canceled' ? null : subscription.id,
+    cancellationScheduledFor: subscription.cancel_at_period_end
+      ? toIsoDate(subscription.cancel_at) ?? toIsoDate(subscription.trial_end) ?? toIsoDate(subscription.billing_cycle_anchor)
+      : null,
   });
 }
 

@@ -4,12 +4,13 @@ import { requireAuthenticatedUser } from '../shared/auth.js';
 import { buildEntitlements, isStripeConfigured, resolveAllowedWebRoutes } from '../shared/billing.js';
 import { getOrganisationBillingSummary, getOrganisationSettings } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
+import { hydrateBillingSummaryFromStripe } from '../shared/stripeBilling.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     const organisation = await getOrganisationSettings(user.organisationId);
-    const billing = await getOrganisationBillingSummary(user.organisationId);
+    const billing = await hydrateBillingSummaryFromStripe(await getOrganisationBillingSummary(user.organisationId));
     const allowedWebRoutes = resolveAllowedWebRoutes(billing, user.role);
 
     return jsonResponse(200, {
