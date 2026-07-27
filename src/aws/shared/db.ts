@@ -2007,7 +2007,10 @@ function normalizeDuplicateText(value: string | null | undefined) {
 }
 
 function normalizeExactDuplicateFileName(value: string | null | undefined) {
-  return value?.trim().toLowerCase().replace(/[^a-z0-9.]+/g, '') ?? '';
+  const trimmed = value?.trim().toLowerCase() ?? '';
+  const fileNameOnly = trimmed.split(/[\\/]/).pop() ?? trimmed;
+  const stem = fileNameOnly.replace(/\.[a-z0-9]+$/i, '');
+  return stem.replace(/[^a-z0-9]+/g, '');
 }
 
 function buildS3BackedReceiptRow(input: {
