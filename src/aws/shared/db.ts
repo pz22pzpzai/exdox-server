@@ -470,8 +470,7 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
 
     const allReceipts = await listReceipts(user, { limit: 500 });
     return relevantClaims
-      .map((claim) => hydrateClaimTotals(claim, allReceipts))
-      .filter((claim) => claim.documentCount > 0);
+      .map((claim) => hydrateClaimTotals(claim, allReceipts));
   }
 
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
@@ -492,7 +491,6 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
     WHERE c.organisation_id = ?
       AND (? = 'Business_Admin' OR c.created_by_user_id = ?)
     GROUP BY c.id
-    HAVING COUNT(r.id) > 0
     ORDER BY c.created_at DESC
     LIMIT ?`,
     [user.organisationId, user.role, user.id, limit],
