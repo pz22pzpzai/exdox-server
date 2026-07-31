@@ -16,7 +16,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       return jsonResponse(503, {
         success: false,
         error: 'billing_not_configured',
-        message: 'Online checkout is not available for this workspace yet. Contact hello@exdox.co.uk to change plans.',
+        message: 'Online checkout is not available for this workspace yet. Contact contact@exdox.co.uk to change plans.',
       });
     }
 
@@ -28,7 +28,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       return jsonResponse(400, {
         success: false,
         error: 'missing_price_mapping',
-        message: `Online checkout is not available yet for the ${getPlanDefinition(planId).label} ${billingCycle} plan. Contact hello@exdox.co.uk to change plans.`,
+        message: `Online checkout is not available yet for the ${getPlanDefinition(planId).label} ${billingCycle} plan. Contact contact@exdox.co.uk to change plans.`,
       });
     }
 

@@ -108,7 +108,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       requiresEmailConfirmation: true,
       message: confirmationDelivered
         ? `Check your email to confirm your Exdox workspace. After confirmation, add your card to start the free trial. Terms version ${termsVersion} was accepted during registration.`
-        : `Your workspace has been created, but we could not send the confirmation email right now. Contact hello@exdox.co.uk so we can activate access. Terms version ${termsVersion} was accepted during registration.`,
+        : `Your workspace has been created, but we could not send the confirmation email right now. Contact contact@exdox.co.uk so we can activate access. Terms version ${termsVersion} was accepted during registration.`,
       user: {
         id: user.id,
         organisationId: user.organisationId,

@@ -50,7 +50,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       delivered,
       message: delivered
         ? `A fresh confirmation email has been sent to ${user.email}.`
-        : 'We could not send the confirmation email right now. Contact hello@exdox.co.uk and we will help you activate the workspace.',
+        : 'We could not send the confirmation email right now. Contact contact@exdox.co.uk and we will help you activate the workspace.',
     });
   } catch (error) {
     const statusCode =
@@ -70,4 +70,3 @@ export async function handler(event: APIGatewayProxyEventV2) {
     });
   }
 }
-
