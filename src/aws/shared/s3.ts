@@ -73,11 +73,14 @@ export async function createReceiptUploadUrl(input: {
 
 export async function createReceiptDownloadUrl(input: {
   key: string;
+  fileName?: string;
+  disposition?: 'inline' | 'attachment';
   expiresInSeconds?: number;
 }) {
   const command = new GetObjectCommand({
     Bucket: awsEnv.receiptBucketName,
     Key: input.key,
+    ResponseContentDisposition: `${input.disposition ?? 'attachment'}; filename="${sanitizeDispositionFilename(input.fileName ?? input.key.split('/').pop() ?? 'document')}"`,
   });
 
   const downloadUrl = await getSignedUrl(s3, command, {
@@ -90,6 +93,10 @@ export async function createReceiptDownloadUrl(input: {
     downloadUrl,
     expiresInSeconds: input.expiresInSeconds ?? 900,
   };
+}
+
+function sanitizeDispositionFilename(value: string) {
+  return value.replace(/["\\\r\n]+/g, '_');
 }
 
 export async function putReceiptJsonObject(key: string, value: unknown) {

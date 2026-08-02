@@ -23,13 +23,28 @@ export async function handler(event: APIGatewayProxyEventV2) {
       getReceiptById(user, receiptId),
     ]);
     assertWorkspaceAccess(billing, receipt.workspaceContext);
-    const asset = await createReceiptDownloadUrl({
-      key: receipt.s3Key,
-    });
+    const [preview, download] = await Promise.all([
+      createReceiptDownloadUrl({
+        key: receipt.s3Key,
+        fileName: receipt.sourceFilename,
+        disposition: 'inline',
+      }),
+      createReceiptDownloadUrl({
+        key: receipt.s3Key,
+        fileName: receipt.sourceFilename,
+        disposition: 'attachment',
+      }),
+    ]);
 
     return jsonResponse(200, {
       success: true,
-      asset,
+      asset: {
+        previewUrl: preview.downloadUrl,
+        downloadUrl: download.downloadUrl,
+        bucket: preview.bucket,
+        key: preview.key,
+        expiresInSeconds: preview.expiresInSeconds,
+      },
     });
   } catch (error) {
     const status =
