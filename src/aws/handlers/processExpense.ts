@@ -92,7 +92,7 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: { id: 
   });
 
   const extractedDocument = options.skipProcessing
-    ? buildStoredDocumentPlaceholder(fileName, options.documentType)
+    ? buildStoredDocumentPlaceholder(fileName, options.documentType, options.workspaceContext)
     : await processExpenseBuffer({
         fileName,
         mimeType,
@@ -205,7 +205,7 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: { id: numbe
 
   const fileBuffer = await getReceiptObjectBuffer(s3Key);
   const extractedDocument = options.skipProcessing
-    ? buildStoredDocumentPlaceholder(fileName, options.documentType)
+    ? buildStoredDocumentPlaceholder(fileName, options.documentType, options.workspaceContext)
     : await processExpenseBuffer({
         fileName,
         mimeType,
@@ -305,7 +305,11 @@ function isAllowedStorageKey(
   return workspaceContext === 'vault' ? key.startsWith(vaultPrefix) : key.startsWith(receiptPrefix);
 }
 
-function buildStoredDocumentPlaceholder(fileName: string, documentType: DocumentType): NormalizedExpenseDocument {
+function buildStoredDocumentPlaceholder(
+  fileName: string,
+  documentType: DocumentType,
+  workspaceContext: ExpenseRequestOptions['workspaceContext'],
+): NormalizedExpenseDocument {
   const cleanName = sanitizeText(fileName.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ')) || 'Uploaded document';
   return {
     vendorName: cleanName,
@@ -322,10 +326,10 @@ function buildStoredDocumentPlaceholder(fileName: string, documentType: Document
     documentType,
     confidenceScore: null,
     confidenceSource: 'unavailable',
-    needsReview: true,
+    needsReview: workspaceContext === 'vault' ? false : true,
     lineItems: [],
     taxBreakdown: [],
-    notes: ['Stored without OCR processing.'],
-    rawTextSummary: 'Saved without OCR processing.',
+    notes: [workspaceContext === 'vault' ? 'Stored as a processed vault document.' : 'Stored without OCR processing.'],
+    rawTextSummary: workspaceContext === 'vault' ? 'Stored as a processed vault document.' : 'Saved without OCR processing.',
   };
 }
