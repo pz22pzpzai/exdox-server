@@ -1293,6 +1293,13 @@ export async function updateReceiptById(
     Pick<ReceiptRow, 'vendorName' | 'invoiceDate' | 'dueDate' | 'invoiceNumber' | 'category' | 'description' | 'customer' | 'netAmount' | 'vatAmount' | 'totalAmount' | 'taxRateApplied' | 'status'>
   >,
 ) {
+  const normalizedNeedsReview =
+    updates.status === 'Ready' || updates.status === 'Published'
+      ? false
+      : updates.status === 'Review' || updates.status === 'Processing'
+        ? true
+        : undefined;
+
   if (!pool) {
     const existing = await getReceiptById(user, receiptId);
     const taxProfile = await getOrganisationTaxProfile(user.organisationId);
@@ -1308,6 +1315,7 @@ export async function updateReceiptById(
         },
         taxProfile,
       ),
+      needsReview: normalizedNeedsReview ?? existing.needsReview,
       updatedAt: new Date().toISOString(),
     };
     await putReceiptJsonObject(buildReceiptMetadataKey(next), next);
@@ -1339,6 +1347,7 @@ export async function updateReceiptById(
          total_amount = ?,
          tax_rate_applied = ?,
          status = ?,
+         needs_review = ?,
          updated_at = CURRENT_TIMESTAMP
      WHERE id = ? AND organisation_id = ?`,
     [
@@ -1354,6 +1363,7 @@ export async function updateReceiptById(
       normalizedVatValues.totalAmount ?? null,
       normalizedVatValues.taxRateApplied ?? null,
       updates.status ?? 'Review',
+      normalizedNeedsReview ?? true,
       receiptId,
       user.organisationId,
     ],
