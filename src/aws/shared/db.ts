@@ -969,6 +969,53 @@ export async function findUserByEmail(emailInput: string): Promise<UserRecord | 
   };
 }
 
+export async function updateUserPassword(input: {
+  email: string;
+  userId: number;
+  passwordHash: string;
+}): Promise<UserRecord> {
+  const email = normalizeEmail(input.email);
+
+  if (!pool) {
+    const existing = await findUserByEmail(email);
+    if (!existing || existing.id !== input.userId) {
+      throw notFoundError('Account not found for this password reset request.');
+    }
+
+    const updated = buildStoredUser({
+      id: existing.id,
+      organisationId: existing.organisationId,
+      email: existing.email,
+      passwordHash: input.passwordHash,
+      fullName: existing.fullName,
+      role: existing.role,
+      status: existing.status,
+      inviteToken: existing.inviteToken,
+      invitedByUserId: existing.invitedByUserId,
+    });
+    await putReceiptJsonObject(buildUserKey(email), updated);
+    return toUserRecord(updated);
+  }
+
+  const [result] = await pool.execute<mysql.ResultSetHeader>(
+    `UPDATE users
+     SET password_hash = ?
+     WHERE id = ? AND LOWER(TRIM(email)) = ?`,
+    [input.passwordHash, input.userId, email],
+  );
+
+  if (!result.affectedRows) {
+    throw notFoundError('Account not found for this password reset request.');
+  }
+
+  const updated = await findUserByEmail(email);
+  if (!updated || updated.id !== input.userId) {
+    throw notFoundError('Account not found for this password reset request.');
+  }
+
+  return updated;
+}
+
 export async function getOrganisationName(organisationId: number) {
   if (!pool) {
     const organisation = await getS3Organisation(organisationId);
@@ -2254,6 +2301,12 @@ export function buildConfirmationEmailLink(confirmationToken: string, email: str
   const base = awsEnv.confirmEmailBaseUrl.replace(/\/$/, '');
   const separator = base.includes('?') ? '&' : '?';
   return `${base}${separator}token=${encodeURIComponent(confirmationToken)}&email=${encodeURIComponent(email)}`;
+}
+
+export function buildPasswordResetLink(resetToken: string, email: string) {
+  const base = awsEnv.resetPasswordBaseUrl.replace(/\/$/, '');
+  const separator = base.includes('?') ? '&' : '?';
+  return `${base}${separator}token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
 }
 
 export async function findOrganisationIdByStripeCustomerId(stripeCustomerId: string): Promise<number | null> {

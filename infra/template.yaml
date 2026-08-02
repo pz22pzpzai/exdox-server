@@ -26,6 +26,9 @@ Parameters:
   ConfirmEmailBaseUrl:
     Type: String
     Default: 'https://www.exdox.co.uk/confirm-email'
+  ResetPasswordBaseUrl:
+    Type: String
+    Default: 'https://www.exdox.co.uk/reset-password'
   ReceiptStoreMode:
     Type: String
     Default: s3
@@ -109,6 +112,7 @@ Globals:
         INVITE_EMAIL_FROM: !Ref InviteEmailFrom
         INVITE_BASE_URL: !Ref InviteBaseUrl
         CONFIRM_EMAIL_BASE_URL: !Ref ConfirmEmailBaseUrl
+        RESET_PASSWORD_BASE_URL: !Ref ResetPasswordBaseUrl
         RECEIPT_STORE_MODE: !Ref ReceiptStoreMode
         DB_HOST: !Ref DbHost
         DB_PORT: !Ref DbPort
@@ -371,6 +375,42 @@ Resources:
           Properties:
             RestApiId: !Ref ReceiptApi
             Path: /confirm-email/resend
+            Method: POST
+
+  RequestPasswordResetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/requestPasswordReset.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: '*'
+      Events:
+        RequestPasswordResetRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /password-reset/request
+            Method: POST
+
+  ResetPasswordFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/resetPassword.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        ResetPasswordRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /password-reset/complete
             Method: POST
 
   InviteFunction:

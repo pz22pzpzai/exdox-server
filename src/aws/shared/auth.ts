@@ -6,6 +6,7 @@ import { awsEnv } from './env.js';
 import { type AuthenticatedUser, type UserRole, type UserStatus } from '../types.js';
 
 const JWT_EXPIRY = '30d';
+const PASSWORD_RESET_EXPIRY = '1h';
 
 type JwtPayload = {
   email: string;
@@ -13,6 +14,11 @@ type JwtPayload = {
   organisationId: number;
   role: UserRole;
   status: UserStatus;
+};
+
+type PasswordResetJwtPayload = {
+  email: string;
+  purpose: 'password_reset';
 };
 
 export async function hashPassword(password: string) {
@@ -38,6 +44,44 @@ export function signUserToken(user: AuthenticatedUser) {
       subject: String(user.id),
     },
   );
+}
+
+export function signPasswordResetToken(user: AuthenticatedUser) {
+  return jwt.sign(
+    {
+      email: user.email,
+      purpose: 'password_reset',
+    } satisfies PasswordResetJwtPayload,
+    awsEnv.jwtSecret,
+    {
+      expiresIn: PASSWORD_RESET_EXPIRY,
+      subject: String(user.id),
+    },
+  );
+}
+
+export function verifyPasswordResetToken(token: string) {
+  try {
+    const decoded = jwt.verify(token, awsEnv.jwtSecret) as jwt.JwtPayload & Partial<PasswordResetJwtPayload>;
+    const userId = Number(decoded.sub);
+    const email = typeof decoded.email === 'string' ? decoded.email.trim().toLowerCase() : '';
+    const purpose = decoded.purpose;
+
+    if (!Number.isFinite(userId) || userId <= 0) {
+      throw unauthorized('Invalid password reset token.');
+    }
+
+    if (!email || purpose !== 'password_reset') {
+      throw unauthorized('Invalid password reset token.');
+    }
+
+    return {
+      userId,
+      email,
+    };
+  } catch {
+    throw unauthorized('Invalid or expired password reset link.');
+  }
 }
 
 export function requireAuthenticatedUser(event: APIGatewayProxyEventV2): AuthenticatedUser {
