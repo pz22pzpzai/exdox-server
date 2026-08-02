@@ -125,7 +125,7 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: { id: 
     paymentMethod: supplierRuleOutcome.paymentMethod,
     category: supplierRuleOutcome.category,
     receiptSource: 'web_upload',
-    status: options.skipProcessing ? 'Processing' : document.needsReview ? 'Review' : 'Ready',
+    status: determineInitialReceiptStatus(options, document),
     sourceFileName: fileName,
     sourceMimeType: mimeType,
     s3Bucket: awsEnv.receiptBucketName,
@@ -238,7 +238,7 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: { id: numbe
     paymentMethod: supplierRuleOutcome.paymentMethod,
     category: supplierRuleOutcome.category,
     receiptSource: 'web_upload',
-    status: options.skipProcessing ? 'Processing' : document.needsReview ? 'Review' : 'Ready',
+    status: determineInitialReceiptStatus(options, document),
     sourceFileName: fileName,
     sourceMimeType: mimeType,
     s3Bucket: awsEnv.receiptBucketName,
@@ -265,6 +265,19 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: { id: numbe
     options,
     document,
   });
+}
+
+function determineInitialReceiptStatus(
+  options: ExpenseRequestOptions,
+  document: { needsReview: boolean },
+): 'Processing' | 'Review' | 'Ready' {
+  if (options.workspaceContext === 'vault' && options.skipProcessing) {
+    return 'Ready';
+  }
+  if (options.skipProcessing) {
+    return 'Processing';
+  }
+  return document.needsReview ? 'Review' : 'Ready';
 }
 
 function buildStorageKey(
