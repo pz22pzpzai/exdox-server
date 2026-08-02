@@ -57,12 +57,25 @@ export async function handler(event: APIGatewayProxyEventV2) {
       role: 'Standard_Employee',
     });
 
-    const delivery = await sendInviteEmail({
-      toEmail: email,
-      inviterName: user.fullName || user.email,
-      organisationName: invite.organisationName,
-      inviteLink: invite.inviteLink,
-    });
+    let delivery: { delivered: boolean; method: string } = {
+      delivered: false,
+      method: 'manual_link_only',
+    };
+
+    try {
+      delivery = await sendInviteEmail({
+        toEmail: email,
+        inviterName: user.fullName || user.email,
+        organisationName: invite.organisationName,
+        inviteLink: invite.inviteLink,
+      });
+    } catch (error) {
+      console.warn('Invite email delivery failed after invite creation.', {
+        organisationId: user.organisationId,
+        invitedEmail: email,
+        message: error instanceof Error ? error.message : 'unknown delivery failure',
+      });
+    }
 
     return jsonResponse(201, {
       success: true,

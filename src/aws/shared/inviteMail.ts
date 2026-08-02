@@ -17,7 +17,7 @@ export async function sendInviteEmail(input: {
     });
     return {
       delivered: false,
-      channel: 'not_configured' as const,
+      method: 'not_configured' as const,
     };
   }
 
@@ -49,6 +49,6 @@ export async function sendInviteEmail(input: {
 
   return {
     delivered: true,
-    channel: 'ses' as const,
+    method: 'email' as const,
   };
 }
