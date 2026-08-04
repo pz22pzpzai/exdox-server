@@ -398,6 +398,27 @@ Resources:
             Path: /password-reset/request
             Method: POST
 
+  ContactFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/contact.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: '*'
+      Events:
+        ContactRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /contact
+            Method: POST
+
   ResetPasswordFunction:
     Type: AWS::Serverless::Function
     Properties:

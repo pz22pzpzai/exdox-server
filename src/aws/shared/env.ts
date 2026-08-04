@@ -24,6 +24,7 @@ export const awsEnv = {
   openAiModel: process.env.OPENAI_MODEL?.trim() || 'gpt-4.1-nano',
   jwtSecret: requireEnv('JWT_SECRET'),
   inviteEmailFrom: optionalEnv('INVITE_EMAIL_FROM'),
+  contactInboxEmail: process.env.CONTACT_INBOX_EMAIL?.trim() || 'contact@exdox.co.uk',
   inviteBaseUrl: process.env.INVITE_BASE_URL?.trim() || 'exdox://signup',
   confirmEmailBaseUrl: process.env.CONFIRM_EMAIL_BASE_URL?.trim() || 'https://www.exdox.co.uk/confirm-email',
   resetPasswordBaseUrl: process.env.RESET_PASSWORD_BASE_URL?.trim() || 'https://www.exdox.co.uk/reset-password',
