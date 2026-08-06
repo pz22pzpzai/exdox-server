@@ -23,7 +23,8 @@ export const awsEnv = {
   openAiApiKey: requireEnv('OPENAI_API_KEY'),
   openAiModel: process.env.OPENAI_MODEL?.trim() || 'gpt-4.1-nano',
   jwtSecret: requireEnv('JWT_SECRET'),
-  inviteEmailFrom: optionalEnv('INVITE_EMAIL_FROM'),
+  // All account emails use the verified Exdox support identity unless a deployment override is supplied.
+  inviteEmailFrom: optionalEnv('INVITE_EMAIL_FROM') || 'contact@exdox.co.uk',
   contactInboxEmail: process.env.CONTACT_INBOX_EMAIL?.trim() || 'contact@exdox.co.uk',
   inviteBaseUrl: process.env.INVITE_BASE_URL?.trim() || 'exdox://signup',
   confirmEmailBaseUrl: process.env.CONFIRM_EMAIL_BASE_URL?.trim() || 'https://www.exdox.co.uk/confirm-email',

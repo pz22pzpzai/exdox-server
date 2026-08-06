@@ -19,7 +19,7 @@ Parameters:
     NoEcho: true
   InviteEmailFrom:
     Type: String
-    Default: ''
+    Default: 'contact@exdox.co.uk'
   InviteBaseUrl:
     Type: String
     Default: 'exdox://signup'
