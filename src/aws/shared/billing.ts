@@ -19,6 +19,14 @@ export type PlanDefinition = {
   highlight?: string;
 };
 
+export type SelfServeSubscriptionSelection = {
+  planId: Extract<BillingPlanId, 'capture' | 'control' | 'operations'>;
+  monthlyDocumentLimit: number;
+  includedUsers: number;
+  monthlyAmountPence: number;
+  label: string;
+};
+
 const ACTIVE_BILLING_STATUSES = new Set<BillingStatus>(['trialing', 'active', 'legacy']);
 
 const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
@@ -301,6 +309,60 @@ function getAllPlanRoutes() {
 
 export function isStripeConfigured() {
   return Boolean(awsEnv.stripeSecretKey);
+}
+
+export function resolveSelfServeSubscriptionSelection(input: {
+  planId: BillingPlanId;
+  monthlyDocumentLimit?: number | null;
+  includedUsers?: number | null;
+}): SelfServeSubscriptionSelection {
+  const includedUsers = Number(input.includedUsers);
+  const monthlyDocumentLimit = Number(input.monthlyDocumentLimit);
+  const isFiveUserIncrement = Number.isInteger(includedUsers) && includedUsers % 5 === 0;
+  const hasExpectedDocumentAllowance = monthlyDocumentLimit === includedUsers * 50;
+
+  if (!isFiveUserIncrement || !hasExpectedDocumentAllowance) {
+    throw invalidSubscriptionSelectionError();
+  }
+
+  if (input.planId === 'capture' && includedUsers >= 5 && includedUsers <= 25) {
+    return buildSelfServeSelection('capture', includedUsers, monthlyDocumentLimit, includedUsers * 300);
+  }
+
+  if (input.planId === 'control' && includedUsers >= 30 && includedUsers <= 55) {
+    return buildSelfServeSelection('control', includedUsers, monthlyDocumentLimit, 7500 + ((includedUsers - 25) / 5) * 1400);
+  }
+
+  if (input.planId === 'operations' && includedUsers >= 60 && includedUsers <= 100) {
+    const monthlyAmountPence = includedUsers <= 80
+      ? 17300 + ((includedUsers - 60) / 5) * 1441
+      : 23062 + ((includedUsers - 80) / 5) * 1441;
+    return buildSelfServeSelection('operations', includedUsers, monthlyDocumentLimit, monthlyAmountPence);
+  }
+
+  throw invalidSubscriptionSelectionError();
+}
+
+function buildSelfServeSelection(
+  planId: SelfServeSubscriptionSelection['planId'],
+  includedUsers: number,
+  monthlyDocumentLimit: number,
+  monthlyAmountPence: number,
+): SelfServeSubscriptionSelection {
+  return {
+    planId,
+    includedUsers,
+    monthlyDocumentLimit,
+    monthlyAmountPence: Math.round(monthlyAmountPence),
+    label: `${getPlanDefinition(planId).label} - ${includedUsers} users`,
+  };
+}
+
+function invalidSubscriptionSelectionError() {
+  const error = new Error('The selected plan allowance is not available. Return to Pricing and choose a published package.');
+  (error as Error & { statusCode?: number; code?: string }).statusCode = 400;
+  (error as Error & { statusCode?: number; code?: string }).code = 'invalid_subscription_selection';
+  return error;
 }
 
 export function getStripePriceId(planId: BillingPlanId, billingCycle: BillingCycle) {

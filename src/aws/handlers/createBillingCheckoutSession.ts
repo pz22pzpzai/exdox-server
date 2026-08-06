@@ -2,7 +2,7 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import Stripe from 'stripe';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
-import { getPlanDefinition, getStripePriceId, isStripeConfigured, normalizeBillingCycle, normalizePlanId } from '../shared/billing.js';
+import { getPlanDefinition, isStripeConfigured, normalizeBillingCycle, normalizePlanId, resolveSelfServeSubscriptionSelection } from '../shared/billing.js';
 import { awsEnv } from '../shared/env.js';
 import { getOrganisationBillingSummary, getOrganisationName, updateOrganisationBillingProfile } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
@@ -23,15 +23,6 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
     const planId = normalizePlanId(body.planId);
     const billingCycle = normalizeBillingCycle(body.billingCycle);
-    const priceId = getStripePriceId(planId, billingCycle);
-    if (!priceId) {
-      return jsonResponse(400, {
-        success: false,
-        error: 'missing_price_mapping',
-        message: `Online checkout is not available yet for the ${getPlanDefinition(planId).label} ${billingCycle} plan. Contact contact@exdox.co.uk to change plans.`,
-      });
-    }
-
     const stripe = new Stripe(awsEnv.stripeSecretKey, {
       apiVersion: '2026-06-24.dahlia',
     });
@@ -45,9 +36,23 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
+    if (billing.status === 'inactive' && planId !== billing.planId) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'checkout_selection_mismatch',
+        message: 'Start checkout for the plan selected during registration, or return to Pricing to choose a different package before registering.',
+      });
+    }
+
+    const selection = resolveSelfServeSubscriptionSelection({
+      planId: billing.status === 'inactive' ? billing.planId : planId,
+      monthlyDocumentLimit: billing.status === 'inactive' ? billing.monthlyDocumentLimit : getPlanDefinition(planId).monthlyDocumentLimit,
+      includedUsers: billing.status === 'inactive' ? billing.includedUsers : getPlanDefinition(planId).includedUsers,
+    });
+
     const organisationName = await getOrganisationName(user.organisationId);
     let customerId = billing.stripeCustomerId;
-    const planDefinition = getPlanDefinition(planId);
+    const planDefinition = getPlanDefinition(selection.planId);
 
     if (!customerId) {
       const customer = await stripe.customers.create({
@@ -74,11 +79,29 @@ export async function handler(event: APIGatewayProxyEventV2) {
       consent_collection: {
         terms_of_service: 'required',
       },
-      line_items: [{ price: priceId, quantity: 1 }],
+      line_items: [{
+        price_data: {
+          currency: 'gbp',
+          product_data: {
+            name: `Exdox ${selection.label}`,
+            metadata: {
+              planId: selection.planId,
+              includedUsers: String(selection.includedUsers),
+              monthlyDocumentLimit: String(selection.monthlyDocumentLimit),
+            },
+          },
+          unit_amount: selection.monthlyAmountPence,
+          recurring: { interval: 'month' },
+        },
+        quantity: 1,
+      }],
       metadata: {
         organisationId: String(user.organisationId),
-        planId,
+        planId: selection.planId,
         billingCycle,
+        includedUsers: String(selection.includedUsers),
+        monthlyDocumentLimit: String(selection.monthlyDocumentLimit),
+        monthlyAmountPence: String(selection.monthlyAmountPence),
         termsVersion: '2026-07-26',
       },
       subscription_data: {
@@ -90,8 +113,11 @@ export async function handler(event: APIGatewayProxyEventV2) {
         },
         metadata: {
           organisationId: String(user.organisationId),
-          planId,
+          planId: selection.planId,
           billingCycle,
+          includedUsers: String(selection.includedUsers),
+          monthlyDocumentLimit: String(selection.monthlyDocumentLimit),
+          monthlyAmountPence: String(selection.monthlyAmountPence),
           termsVersion: '2026-07-26',
         },
       },

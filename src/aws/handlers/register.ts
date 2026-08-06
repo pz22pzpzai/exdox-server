@@ -1,6 +1,7 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { hashPassword, signUserToken } from '../shared/auth.js';
+import { normalizeBillingCycle, normalizePlanId, resolveSelfServeSubscriptionSelection } from '../shared/billing.js';
 import { sendRegistrationConfirmationEmail } from '../shared/confirmationMail.js';
 import { activateInvitedUser, buildConfirmationEmailLink, createUser } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
@@ -73,15 +74,21 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
+    const billingSelection = resolveSelfServeSubscriptionSelection({
+      planId: normalizePlanId(body.billingPlan),
+      monthlyDocumentLimit: typeof body.monthlyDocumentLimit === 'number' ? body.monthlyDocumentLimit : null,
+      includedUsers: typeof body.includedUsers === 'number' ? body.includedUsers : null,
+    });
+
     const user = await createUser({
       email,
       passwordHash,
       fullName,
       organisationName,
-      billingPlan: sanitizeText(body.billingPlan) as never,
-      billingCycle: sanitizeText(body.billingCycle) as never,
-      monthlyDocumentLimit: typeof body.monthlyDocumentLimit === 'number' ? body.monthlyDocumentLimit : undefined,
-      includedUsers: typeof body.includedUsers === 'number' ? body.includedUsers : undefined,
+      billingPlan: billingSelection.planId,
+      billingCycle: normalizeBillingCycle(body.billingCycle),
+      monthlyDocumentLimit: billingSelection.monthlyDocumentLimit,
+      includedUsers: billingSelection.includedUsers,
     });
 
     let confirmationDelivered = false;
@@ -107,7 +114,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       success: true,
       requiresEmailConfirmation: true,
       message: confirmationDelivered
-        ? `Check your email to confirm your Exdox workspace. After confirmation, add your card to start the free trial. Terms version ${termsVersion} was accepted during registration.`
+        ? `Check your email to confirm your Exdox workspace. Your ${billingSelection.label} package (${formatGbp(billingSelection.monthlyAmountPence)} per month, VAT included) is reserved for checkout after confirmation. Terms version ${termsVersion} was accepted during registration.`
         : `Your workspace has been created, but we could not send the confirmation email right now. Contact contact@exdox.co.uk so we can activate access. Terms version ${termsVersion} was accepted during registration.`,
       user: {
         id: user.id,
@@ -135,4 +142,11 @@ export async function handler(event: APIGatewayProxyEventV2) {
       message,
     });
   }
+}
+
+function formatGbp(amountPence: number) {
+  return new Intl.NumberFormat('en-GB', {
+    style: 'currency',
+    currency: 'GBP',
+  }).format(amountPence / 100);
 }
