@@ -6,9 +6,17 @@ import { sanitizeText } from '../shared/helpers.js';
 import { signUserToken } from '../shared/auth.js';
 import { awsEnv } from '../shared/env.js';
 
-export async function handler(event: APIGatewayProxyEventV2) {
+type ConfirmationEvent = APIGatewayProxyEventV2 & {
+  httpMethod?: string;
+};
+
+export async function handler(event: ConfirmationEvent) {
   try {
-    const isGetRequest = event.requestContext.http.method === 'GET';
+    const requestMethod =
+      event.requestContext?.http?.method ??
+      event.httpMethod ??
+      (event.body ? 'POST' : 'GET');
+    const isGetRequest = requestMethod.toUpperCase() === 'GET';
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
     const query = event.queryStringParameters ?? {};
     const email = sanitizeText(isGetRequest ? query.email : body.email).toLowerCase();
