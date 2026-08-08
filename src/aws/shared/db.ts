@@ -621,11 +621,6 @@ export async function createUser(input: {
       throw duplicateUserError();
     }
 
-    const existingOrganisation = await findS3OrganisationByName(organisationName);
-    if (existingOrganisation) {
-      throw duplicateOrganisationError(existingOrganisation.name);
-    }
-
     const organisation = await createS3Organisation(
       organisationName,
       billingPlan,
@@ -651,18 +646,6 @@ export async function createUser(input: {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-
-    const [existingOrgRows] = await connection.query<mysql.RowDataPacket[]>(
-      `SELECT id, name
-       FROM organisations
-       WHERE LOWER(TRIM(name)) = ?
-       LIMIT 1`,
-      [normalizeOrganisationNameKey(organisationName)],
-    );
-    const existingOrganisation = existingOrgRows[0];
-    if (existingOrganisation) {
-      throw duplicateOrganisationError(String(existingOrganisation.name));
-    }
 
     const [orgResult] = await connection.execute<mysql.ResultSetHeader>(
       `INSERT INTO organisations (
@@ -2213,14 +2196,6 @@ async function listS3Organisations() {
   return Promise.all(keys.map((key) => getReceiptJsonObject<StoredOrganisation>(key)));
 }
 
-async function findS3OrganisationByName(name: string) {
-  const normalizedTarget = normalizeOrganisationNameKey(name);
-  const organisations = await listS3Organisations();
-  return (
-    organisations.find((organisation) => normalizeOrganisationNameKey(organisation.name) === normalizedTarget) ?? null
-  );
-}
-
 async function listS3UsersForOrganisation(organisationId: number) {
   const keys = await listReceiptJsonKeys('users/', 500);
   const users = await Promise.all(keys.map((key) => getReceiptJsonObject<StoredUser>(key)));
@@ -2382,11 +2357,6 @@ function normalizeName(value: string | null | undefined) {
   return text || null;
 }
 
-function normalizeOrganisationNameKey(value: string | null | undefined) {
-  const text = normalizeName(value)?.toLowerCase() || '';
-  return text.replace(/\s+/g, ' ').trim();
-}
-
 function isDuplicateKeyError(error: unknown) {
   return Boolean(
     typeof error === 'object' &&
@@ -2403,18 +2373,6 @@ function duplicateUserError(message = 'An account with this email already exists
   };
   error.statusCode = 409;
   error.code = 'user_exists';
-  return error;
-}
-
-function duplicateOrganisationError(organisationName: string) {
-  const error = new Error(
-    `An organisation named "${organisationName}" already exists. Please sign in, ask an existing admin to invite you, or contact support if this business should be onboarded separately.`,
-  ) as Error & {
-    statusCode?: number;
-    code?: string;
-  };
-  error.statusCode = 409;
-  error.code = 'organisation_exists';
   return error;
 }
 
