@@ -28,6 +28,9 @@ export const awsEnv = {
   contactInboxEmail: process.env.CONTACT_INBOX_EMAIL?.trim() || 'contact@exdox.co.uk',
   inviteBaseUrl: process.env.INVITE_BASE_URL?.trim() || 'exdox://signup',
   confirmEmailBaseUrl: process.env.CONFIRM_EMAIL_BASE_URL?.trim() || 'https://exdox.co.uk/confirm-email',
+  confirmEmailEndpointBaseUrl:
+    process.env.CONFIRM_EMAIL_ENDPOINT_BASE_URL?.trim() || 'https://hz2zkm6jkf.execute-api.eu-west-2.amazonaws.com/prod/confirm-email',
+  confirmEmailLoginUrl: process.env.CONFIRM_EMAIL_LOGIN_URL?.trim() || 'https://exdox.co.uk/login',
   resetPasswordBaseUrl: process.env.RESET_PASSWORD_BASE_URL?.trim() || 'https://exdox.co.uk/reset-password',
   receiptStoreMode: process.env.RECEIPT_STORE_MODE?.trim() || 's3',
   dbHost: optionalEnv('DB_HOST'),

@@ -4,12 +4,15 @@ import { confirmRegisteredUserEmail } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
 import { signUserToken } from '../shared/auth.js';
+import { awsEnv } from '../shared/env.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
+    const isGetRequest = event.requestContext.http.method === 'GET';
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
-    const email = sanitizeText(body.email).toLowerCase();
-    const confirmationToken = sanitizeText(body.token);
+    const query = event.queryStringParameters ?? {};
+    const email = sanitizeText(isGetRequest ? query.email : body.email).toLowerCase();
+    const confirmationToken = sanitizeText(isGetRequest ? query.token : body.token);
 
     if (!email || !confirmationToken) {
       return jsonResponse(400, {
@@ -23,6 +26,20 @@ export async function handler(event: APIGatewayProxyEventV2) {
       email,
       confirmationToken,
     });
+
+    if (isGetRequest) {
+      const loginUrl = new URL(awsEnv.confirmEmailLoginUrl);
+      loginUrl.searchParams.set('email', email);
+      loginUrl.searchParams.set('confirmed', '1');
+      return {
+        statusCode: 302,
+        headers: {
+          Location: loginUrl.toString(),
+          'Cache-Control': 'no-store',
+        },
+        body: '',
+      };
+    }
 
     return jsonResponse(200, {
       success: true,

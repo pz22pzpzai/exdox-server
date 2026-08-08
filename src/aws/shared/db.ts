@@ -2283,7 +2283,7 @@ function buildInviteLink(inviteToken: string, email: string) {
 }
 
 export function buildConfirmationEmailLink(confirmationToken: string, email: string) {
-  const base = awsEnv.confirmEmailBaseUrl.replace(/\/$/, '');
+  const base = awsEnv.confirmEmailEndpointBaseUrl.replace(/\/$/, '');
   const separator = base.includes('?') ? '&' : '?';
   return `${base}${separator}token=${encodeURIComponent(confirmationToken)}&email=${encodeURIComponent(email)}`;
 }

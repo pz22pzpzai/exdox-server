@@ -26,6 +26,12 @@ Parameters:
   ConfirmEmailBaseUrl:
     Type: String
     Default: 'https://exdox.co.uk/confirm-email'
+  ConfirmEmailEndpointBaseUrl:
+    Type: String
+    Default: 'https://hz2zkm6jkf.execute-api.eu-west-2.amazonaws.com/prod/confirm-email'
+  ConfirmEmailLoginUrl:
+    Type: String
+    Default: 'https://exdox.co.uk/login'
   ResetPasswordBaseUrl:
     Type: String
     Default: 'https://exdox.co.uk/reset-password'
@@ -112,6 +118,8 @@ Globals:
         INVITE_EMAIL_FROM: !Ref InviteEmailFrom
         INVITE_BASE_URL: !Ref InviteBaseUrl
         CONFIRM_EMAIL_BASE_URL: !Ref ConfirmEmailBaseUrl
+        CONFIRM_EMAIL_ENDPOINT_BASE_URL: !Ref ConfirmEmailEndpointBaseUrl
+        CONFIRM_EMAIL_LOGIN_URL: !Ref ConfirmEmailLoginUrl
         RESET_PASSWORD_BASE_URL: !Ref ResetPasswordBaseUrl
         RECEIPT_STORE_MODE: !Ref ReceiptStoreMode
         DB_HOST: !Ref DbHost
@@ -355,6 +363,12 @@ Resources:
             RestApiId: !Ref ReceiptApi
             Path: /confirm-email
             Method: POST
+        ConfirmEmailBrowserRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /confirm-email
+            Method: GET
 
   ResendConfirmationEmailFunction:
     Type: AWS::Serverless::Function
