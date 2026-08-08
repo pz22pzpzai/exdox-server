@@ -25,10 +25,10 @@ Parameters:
     Default: 'exdox://signup'
   ConfirmEmailBaseUrl:
     Type: String
-    Default: 'https://www.exdox.co.uk/confirm-email'
+    Default: 'https://exdox.co.uk/confirm-email'
   ResetPasswordBaseUrl:
     Type: String
-    Default: 'https://www.exdox.co.uk/reset-password'
+    Default: 'https://exdox.co.uk/reset-password'
   ReceiptStoreMode:
     Type: String
     Default: s3
@@ -64,13 +64,13 @@ Parameters:
     NoEcho: true
   StripeCheckoutSuccessUrl:
     Type: String
-    Default: 'https://app.exdox.co.uk/billing?checkout=success'
+    Default: 'https://exdox.co.uk/billing?checkout=success'
   StripeCheckoutCancelUrl:
     Type: String
-    Default: 'https://app.exdox.co.uk/billing?checkout=cancelled'
+    Default: 'https://exdox.co.uk/billing?checkout=cancelled'
   StripeBillingPortalReturnUrl:
     Type: String
-    Default: 'https://app.exdox.co.uk/billing'
+    Default: 'https://exdox.co.uk/billing'
   StripePriceCaptureMonthly:
     Type: String
     Default: ''

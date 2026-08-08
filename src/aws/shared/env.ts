@@ -27,8 +27,8 @@ export const awsEnv = {
   inviteEmailFrom: optionalEnv('INVITE_EMAIL_FROM') || 'contact@exdox.co.uk',
   contactInboxEmail: process.env.CONTACT_INBOX_EMAIL?.trim() || 'contact@exdox.co.uk',
   inviteBaseUrl: process.env.INVITE_BASE_URL?.trim() || 'exdox://signup',
-  confirmEmailBaseUrl: process.env.CONFIRM_EMAIL_BASE_URL?.trim() || 'https://www.exdox.co.uk/confirm-email',
-  resetPasswordBaseUrl: process.env.RESET_PASSWORD_BASE_URL?.trim() || 'https://www.exdox.co.uk/reset-password',
+  confirmEmailBaseUrl: process.env.CONFIRM_EMAIL_BASE_URL?.trim() || 'https://exdox.co.uk/confirm-email',
+  resetPasswordBaseUrl: process.env.RESET_PASSWORD_BASE_URL?.trim() || 'https://exdox.co.uk/reset-password',
   receiptStoreMode: process.env.RECEIPT_STORE_MODE?.trim() || 's3',
   dbHost: optionalEnv('DB_HOST'),
   dbPort: Number(process.env.DB_PORT ?? 3306),
@@ -44,11 +44,11 @@ export const awsEnv = {
   stripeSecretKey: optionalEnv('STRIPE_SECRET_KEY'),
   stripeWebhookSecret: optionalEnv('STRIPE_WEBHOOK_SECRET'),
   stripeCheckoutSuccessUrl:
-    process.env.STRIPE_CHECKOUT_SUCCESS_URL?.trim() || 'https://app.exdox.co.uk/billing?checkout=success',
+    process.env.STRIPE_CHECKOUT_SUCCESS_URL?.trim() || 'https://exdox.co.uk/billing?checkout=success',
   stripeCheckoutCancelUrl:
-    process.env.STRIPE_CHECKOUT_CANCEL_URL?.trim() || 'https://app.exdox.co.uk/billing?checkout=cancelled',
+    process.env.STRIPE_CHECKOUT_CANCEL_URL?.trim() || 'https://exdox.co.uk/billing?checkout=cancelled',
   stripeBillingPortalReturnUrl:
-    process.env.STRIPE_BILLING_PORTAL_RETURN_URL?.trim() || 'https://app.exdox.co.uk/billing',
+    process.env.STRIPE_BILLING_PORTAL_RETURN_URL?.trim() || 'https://exdox.co.uk/billing',
   stripePriceCaptureMonthly: optionalEnv('STRIPE_PRICE_CAPTURE_MONTHLY'),
   stripePriceCaptureAnnual: optionalEnv('STRIPE_PRICE_CAPTURE_ANNUAL'),
   stripePriceControlMonthly: optionalEnv('STRIPE_PRICE_CONTROL_MONTHLY'),
