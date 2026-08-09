@@ -39,6 +39,7 @@ export async function handler(event: ConfirmationEvent) {
 
     if (isGetRequest) {
       const loginUrl = new URL(awsEnv.confirmEmailLoginUrl);
+      loginUrl.pathname = '/overview';
       loginUrl.searchParams.set('email', email);
       loginUrl.searchParams.set('confirmed', '1');
       return {

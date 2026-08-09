@@ -730,7 +730,7 @@ export async function confirmRegisteredUserEmail(input: {
       inviteToken: null,
       invitedByUserId: existing.invitedByUserId,
       createdAt: existing.createdAt ?? undefined,
-      emailConfirmationGraceStartedAt: existing.emailConfirmationGraceStartedAt ?? null,
+      emailConfirmationGraceStartedAt: null,
     });
     await putReceiptJsonObject(buildUserKey(email), activated);
     return toAuthenticatedUser(activated);
