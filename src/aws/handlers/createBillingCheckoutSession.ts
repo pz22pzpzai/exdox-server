@@ -76,9 +76,6 @@ export async function handler(event: APIGatewayProxyEventV2) {
       success_url: awsEnv.stripeCheckoutSuccessUrl,
       cancel_url: awsEnv.stripeCheckoutCancelUrl,
       payment_method_collection: 'always',
-      consent_collection: {
-        terms_of_service: 'required',
-      },
       line_items: [{
         price_data: {
           currency: 'gbp',
@@ -103,6 +100,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
         monthlyDocumentLimit: String(selection.monthlyDocumentLimit),
         monthlyAmountPence: String(selection.monthlyAmountPence),
         termsVersion: '2026-07-26',
+        termsAcceptanceSource: 'registration',
       },
       subscription_data: {
         trial_period_days: planDefinition.trialDays ?? undefined,
@@ -119,6 +117,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
           monthlyDocumentLimit: String(selection.monthlyDocumentLimit),
           monthlyAmountPence: String(selection.monthlyAmountPence),
           termsVersion: '2026-07-26',
+          termsAcceptanceSource: 'registration',
         },
       },
     });
