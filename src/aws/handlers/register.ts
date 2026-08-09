@@ -2,6 +2,7 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { hashPassword, signUserToken } from '../shared/auth.js';
 import { normalizeBillingCycle, normalizePlanId, resolveSelfServeSubscriptionSelection } from '../shared/billing.js';
+import { buildSignupCheckoutReturnUrl, createSelfServeCheckoutSession } from '../shared/billingCheckout.js';
 import { sendRegistrationConfirmationEmail } from '../shared/confirmationMail.js';
 import { activateInvitedUser, buildConfirmationEmailLink, createUser } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
@@ -110,12 +111,36 @@ export async function handler(event: APIGatewayProxyEventV2) {
       }
     }
 
+    let checkoutUrl: string | null = null;
+    try {
+      const successUrl = buildSignupCheckoutReturnUrl(user.email, 'success');
+      const cancelUrl = buildSignupCheckoutReturnUrl(user.email, 'cancelled');
+      const checkout = await createSelfServeCheckoutSession({
+        user,
+        planId: billingSelection.planId,
+        billingCycle: normalizeBillingCycle(body.billingCycle),
+        successUrl,
+        cancelUrl,
+      });
+      checkoutUrl = checkout.checkoutUrl;
+    } catch (error) {
+      console.warn('Could not start registration checkout.', {
+        email: user.email,
+        message: error instanceof Error ? error.message : 'Unknown checkout error',
+      });
+    }
+
     return jsonResponse(201, {
       success: true,
       requiresEmailConfirmation: true,
-      message: confirmationDelivered
-        ? `Check your email to confirm your Exdox workspace. Your ${billingSelection.label} package (${formatGbp(billingSelection.monthlyAmountPence)} per month, VAT included) is reserved for checkout after confirmation. Terms version ${termsVersion} was accepted during registration.`
-        : `Your workspace has been created, but we could not send the confirmation email right now. Contact contact@exdox.co.uk so we can activate access. Terms version ${termsVersion} was accepted during registration.`,
+      checkoutUrl,
+      message: buildRegistrationMessage({
+        confirmationDelivered,
+        checkoutReady: Boolean(checkoutUrl),
+        packageLabel: billingSelection.label,
+        monthlyAmountPence: billingSelection.monthlyAmountPence,
+        termsVersion,
+      }),
       user: {
         id: user.id,
         organisationId: user.organisationId,
@@ -149,4 +174,21 @@ function formatGbp(amountPence: number) {
     style: 'currency',
     currency: 'GBP',
   }).format(amountPence / 100);
+}
+
+function buildRegistrationMessage(input: {
+  confirmationDelivered: boolean;
+  checkoutReady: boolean;
+  packageLabel: string;
+  monthlyAmountPence: number;
+  termsVersion: string;
+}) {
+  const packageSummary = `${input.packageLabel} package (${formatGbp(input.monthlyAmountPence)} per month, VAT included)`;
+  const confirmationSummary = input.confirmationDelivered
+    ? 'We have sent your confirmation email.'
+    : 'We could not send the confirmation email right now; contact contact@exdox.co.uk so we can activate access.';
+  const checkoutSummary = input.checkoutReady
+    ? 'Continue to secure card setup now.'
+    : 'Secure card setup is temporarily unavailable; confirm your email and log in to try again.';
+  return `${checkoutSummary} ${confirmationSummary} Your ${packageSummary} is reserved. Workspace access stays locked until email confirmation. Terms version ${input.termsVersion} was accepted during registration.`;
 }

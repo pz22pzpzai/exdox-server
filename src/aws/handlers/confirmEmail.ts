@@ -72,7 +72,7 @@ export async function handler(event: ConfirmationEvent) {
       if (queryEmail) {
         loginUrl.searchParams.set('email', queryEmail);
       }
-      loginUrl.searchParams.set('confirmation', code === 'invalid_invite' ? 'used' : 'failed');
+      loginUrl.searchParams.set('confirmation', code === 'invalid_invite' ? 'invalid' : 'failed');
       return {
         statusCode: 302,
         headers: {

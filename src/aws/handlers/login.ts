@@ -1,7 +1,8 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { signUserToken, verifyPassword } from '../shared/auth.js';
-import { findUserByEmail } from '../shared/db.js';
+import { buildSignupCheckoutReturnUrl, createSelfServeCheckoutSession } from '../shared/billingCheckout.js';
+import { findUserByEmail, getOrganisationBillingSummary } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
 
@@ -36,20 +37,53 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
-    if (user.status === 'pending_confirmation') {
-      return jsonResponse(403, {
-        success: false,
-        error: 'email_confirmation_required',
-        message: 'Confirm your email address from the message we sent before signing in.',
-      });
-    }
-
     const isValid = await verifyPassword(password, user.passwordHash);
     if (!isValid) {
       return jsonResponse(401, {
         success: false,
         error: 'invalid_credentials',
         message: 'Incorrect email or password.',
+      });
+    }
+
+    if (user.status === 'pending_confirmation') {
+      const authUser = {
+        id: user.id,
+        organisationId: user.organisationId,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        status: user.status,
+      };
+      const billing = await getOrganisationBillingSummary(user.organisationId);
+      let checkoutUrl: string | null = null;
+
+      if (billing.status === 'inactive') {
+        try {
+          const checkout = await createSelfServeCheckoutSession({
+            user: authUser,
+            planId: billing.planId,
+            billingCycle: billing.billingCycle,
+            successUrl: buildSignupCheckoutReturnUrl(user.email, 'success'),
+            cancelUrl: buildSignupCheckoutReturnUrl(user.email, 'cancelled'),
+          });
+          checkoutUrl = checkout.checkoutUrl;
+        } catch (error) {
+          console.warn('Could not resume pending registration checkout.', {
+            email: user.email,
+            message: error instanceof Error ? error.message : 'Unknown checkout error',
+          });
+        }
+      }
+
+      return jsonResponse(200, {
+        success: true,
+        requiresEmailConfirmation: true,
+        checkoutUrl,
+        message: checkoutUrl
+          ? 'Continue to secure card setup. Your workspace will remain locked until you confirm your email.'
+          : 'Card setup is complete or temporarily unavailable. Confirm your email address from the latest Exdox message before entering the workspace.',
+        user: authUser,
       });
     }
 
