@@ -10,6 +10,7 @@ import {
 } from './billing.js';
 import { getOrganisationBillingSummary, getOrganisationName, updateOrganisationBillingProfile } from './db.js';
 import { awsEnv } from './env.js';
+import { reconcileStripeSubscription } from './stripeSubscription.js';
 
 type CheckoutError = Error & { statusCode?: number; code?: string };
 
@@ -33,7 +34,8 @@ export async function createSelfServeCheckoutSession(input: {
   const stripe = new Stripe(awsEnv.stripeSecretKey, {
     apiVersion: '2026-06-24.dahlia',
   });
-  const billing = await getOrganisationBillingSummary(input.user.organisationId);
+  const storedBilling = await getOrganisationBillingSummary(input.user.organisationId);
+  const billing = await reconcileStripeSubscription(input.user.organisationId, storedBilling, stripe);
 
   if (billing.stripeSubscriptionId && billing.status !== 'inactive' && billing.status !== 'canceled') {
     throw checkoutError(

@@ -5,6 +5,7 @@ import { buildSignupCheckoutReturnUrl, createSelfServeCheckoutSession } from '..
 import { findUserByEmail, getOrganisationBillingSummary } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
+import { reconcileStripeSubscription } from '../shared/stripeSubscription.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
@@ -46,6 +47,16 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
+    let billing = await getOrganisationBillingSummary(user.organisationId);
+    try {
+      billing = await reconcileStripeSubscription(user.organisationId, billing);
+    } catch (error) {
+      console.warn('Could not reconcile Stripe billing during login.', {
+        email: user.email,
+        message: error instanceof Error ? error.message : 'Unknown Stripe reconciliation error',
+      });
+    }
+
     if (user.status === 'pending_confirmation') {
       const authUser = {
         id: user.id,
@@ -55,7 +66,6 @@ export async function handler(event: APIGatewayProxyEventV2) {
         role: user.role,
         status: user.status,
       };
-      const billing = await getOrganisationBillingSummary(user.organisationId);
       let checkoutUrl: string | null = null;
 
       if (billing.status === 'inactive') {
