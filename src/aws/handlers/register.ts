@@ -190,5 +190,5 @@ function buildRegistrationMessage(input: {
   const checkoutSummary = input.checkoutReady
     ? 'Continue to secure card setup now.'
     : 'Secure card setup is temporarily unavailable; confirm your email and log in to try again.';
-  return `${checkoutSummary} ${confirmationSummary} Your ${packageSummary} is reserved. Workspace access stays locked until email confirmation. Terms version ${input.termsVersion} was accepted during registration.`;
+  return `${checkoutSummary} ${confirmationSummary} Your ${packageSummary} is reserved. After card setup, you can use the workspace immediately and have three days to confirm your email. Terms version ${input.termsVersion} was accepted during registration.`;
 }

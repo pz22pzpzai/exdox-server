@@ -1,8 +1,8 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
-import { signUserToken, verifyPassword } from '../shared/auth.js';
+import { emailConfirmationDueAt, signUserToken, verifyPassword } from '../shared/auth.js';
 import { buildSignupCheckoutReturnUrl, createSelfServeCheckoutSession } from '../shared/billingCheckout.js';
-import { findUserByEmail, getOrganisationBillingSummary } from '../shared/db.js';
+import { ensureEmailConfirmationGraceStarted, findUserByEmail, getOrganisationBillingSummary } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
 import { reconcileStripeSubscription } from '../shared/stripeSubscription.js';
@@ -58,7 +58,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     }
 
     if (user.status === 'pending_confirmation') {
-      const authUser = {
+      const authUser: import('../types.js').AuthenticatedUser = {
         id: user.id,
         organisationId: user.organisationId,
         email: user.email,
@@ -67,6 +67,34 @@ export async function handler(event: APIGatewayProxyEventV2) {
         status: user.status,
       };
       let checkoutUrl: string | null = null;
+      const cardSetupComplete = billing.status === 'trialing' || billing.status === 'active' || billing.status === 'past_due';
+
+      if (cardSetupComplete) {
+        const graceUserRecord = await ensureEmailConfirmationGraceStarted(user.email);
+        const confirmationDueAt = emailConfirmationDueAt(
+          graceUserRecord?.emailConfirmationGraceStartedAt ?? graceUserRecord?.createdAt,
+        );
+        if (Date.parse(confirmationDueAt) <= Date.now()) {
+          return jsonResponse(403, {
+            success: false,
+            error: 'email_confirmation_required',
+            message: 'Your three-day email confirmation period has ended. Confirm your email address before signing in.',
+          });
+        }
+
+        const graceUser = {
+          ...authUser,
+          emailConfirmationDueAt: confirmationDueAt,
+        };
+        return jsonResponse(200, {
+          success: true,
+          token: signUserToken(graceUser),
+          user: graceUser,
+          emailConfirmationRequired: true,
+          emailConfirmationDueAt: confirmationDueAt,
+          message: 'Card setup is complete. You can use your workspace now, but you must confirm your email within three days.',
+        });
+      }
 
       if (billing.status === 'inactive') {
         try {
@@ -91,8 +119,8 @@ export async function handler(event: APIGatewayProxyEventV2) {
         requiresEmailConfirmation: true,
         checkoutUrl,
         message: checkoutUrl
-          ? 'Continue to secure card setup. Your workspace will remain locked until you confirm your email.'
-          : 'Card setup is complete or temporarily unavailable. Confirm your email address from the latest Exdox message before entering the workspace.',
+          ? 'Continue to secure card setup. After it is complete, you can use the workspace while you confirm your email.'
+          : 'Card setup is temporarily unavailable. Complete secure card setup before entering the workspace.',
         user: authUser,
       });
     }

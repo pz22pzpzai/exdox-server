@@ -181,10 +181,13 @@ export type AuthenticatedUser = {
   fullName: string | null;
   role: UserRole;
   status: UserStatus;
+  emailConfirmationDueAt?: string | null;
 };
 
 export type UserRecord = AuthenticatedUser & {
   passwordHash: string | null;
   inviteToken: string | null;
   invitedByUserId: number | null;
+  createdAt?: string | null;
+  emailConfirmationGraceStartedAt?: string | null;
 };

@@ -7,6 +7,7 @@ import { type AuthenticatedUser, type UserRole, type UserStatus } from '../types
 
 const JWT_EXPIRY = '30d';
 const PASSWORD_RESET_EXPIRY = '1h';
+const EMAIL_CONFIRMATION_GRACE_MS = 3 * 24 * 60 * 60 * 1000;
 
 type JwtPayload = {
   email: string;
@@ -14,6 +15,7 @@ type JwtPayload = {
   organisationId: number;
   role: UserRole;
   status: UserStatus;
+  emailConfirmationDueAt?: string | null;
 };
 
 type PasswordResetJwtPayload = {
@@ -37,6 +39,7 @@ export function signUserToken(user: AuthenticatedUser) {
       organisationId: user.organisationId,
       role: user.role,
       status: user.status,
+      emailConfirmationDueAt: user.emailConfirmationDueAt ?? null,
     } satisfies JwtPayload,
     awsEnv.jwtSecret,
     {
@@ -114,8 +117,17 @@ export function requireAuthenticatedUser(event: APIGatewayProxyEventV2): Authent
       throw unauthorized('Invalid role scope.');
     }
 
-    if (status !== 'active' && status !== 'pending_invite') {
+    if (status !== 'active' && status !== 'pending_invite' && status !== 'pending_confirmation') {
       throw unauthorized('Invalid account status.');
+    }
+
+    const emailConfirmationDueAt =
+      typeof decoded.emailConfirmationDueAt === 'string' ? decoded.emailConfirmationDueAt : null;
+    if (status === 'pending_confirmation') {
+      const confirmationDeadline = emailConfirmationDueAt ? Date.parse(emailConfirmationDueAt) : Number.NaN;
+      if (!Number.isFinite(confirmationDeadline) || confirmationDeadline <= Date.now()) {
+        throw unauthorized('Your three-day email confirmation period has ended. Confirm your email address to continue.');
+      }
     }
 
     return {
@@ -125,10 +137,22 @@ export function requireAuthenticatedUser(event: APIGatewayProxyEventV2): Authent
       fullName: typeof decoded.fullName === 'string' ? decoded.fullName : null,
       role,
       status,
+      emailConfirmationDueAt,
     };
-  } catch {
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'statusCode' in error) {
+      throw error;
+    }
     throw unauthorized('Invalid or expired token.');
   }
+}
+
+export function emailConfirmationDueAt(createdAt: string | null | undefined) {
+  const createdTimestamp = createdAt ? Date.parse(createdAt) : Number.NaN;
+  if (!Number.isFinite(createdTimestamp)) {
+    throw unauthorized('This account is missing its email confirmation deadline. Request a new confirmation email.');
+  }
+  return new Date(createdTimestamp + EMAIL_CONFIRMATION_GRACE_MS).toISOString();
 }
 
 export function requireAdminUser(user: AuthenticatedUser) {

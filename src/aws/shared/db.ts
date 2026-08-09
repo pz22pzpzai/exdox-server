@@ -151,6 +151,7 @@ type StoredUser = {
   inviteToken: string | null;
   invitedByUserId: number | null;
   createdAt: string;
+  emailConfirmationGraceStartedAt?: string | null;
 };
 
 type StoredClaim = ExpenseClaimRow;
@@ -728,6 +729,8 @@ export async function confirmRegisteredUserEmail(input: {
       status: 'active',
       inviteToken: null,
       invitedByUserId: existing.invitedByUserId,
+      createdAt: existing.createdAt ?? undefined,
+      emailConfirmationGraceStartedAt: existing.emailConfirmationGraceStartedAt ?? null,
     });
     await putReceiptJsonObject(buildUserKey(email), activated);
     return toAuthenticatedUser(activated);
@@ -929,7 +932,8 @@ export async function findUserByEmail(emailInput: string): Promise<UserRecord | 
       user_role AS role,
       status,
       invite_token,
-      invited_by_user_id
+      invited_by_user_id,
+      created_at
     FROM users
     WHERE email = ? LIMIT 1`,
     [email],
@@ -949,6 +953,7 @@ export async function findUserByEmail(emailInput: string): Promise<UserRecord | 
     status: String(row.status) as UserRecord['status'],
     inviteToken: row.invite_token ? String(row.invite_token) : null,
     invitedByUserId: row.invited_by_user_id === null ? null : Number(row.invited_by_user_id),
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
   };
 }
 
@@ -971,6 +976,8 @@ export async function rotateRegistrationConfirmationToken(emailInput: string): P
       status: existing.status,
       inviteToken: confirmationToken,
       invitedByUserId: existing.invitedByUserId,
+      createdAt: existing.createdAt ?? undefined,
+      emailConfirmationGraceStartedAt: existing.emailConfirmationGraceStartedAt ?? null,
     });
     await putReceiptJsonObject(buildUserKey(email), updated);
     return toUserRecord(updated);
@@ -989,6 +996,42 @@ export async function rotateRegistrationConfirmationToken(emailInput: string): P
   return {
     ...existing,
     inviteToken: confirmationToken,
+  };
+}
+
+export async function ensureEmailConfirmationGraceStarted(emailInput: string): Promise<UserRecord | null> {
+  const email = normalizeEmail(emailInput);
+  const existing = await findUserByEmail(email);
+  if (!existing || existing.status !== 'pending_confirmation') {
+    return existing;
+  }
+  if (existing.emailConfirmationGraceStartedAt) {
+    return existing;
+  }
+
+  const startedAt = new Date().toISOString();
+  if (!pool) {
+    const updated = buildStoredUser({
+      id: existing.id,
+      organisationId: existing.organisationId,
+      email: existing.email,
+      passwordHash: existing.passwordHash,
+      fullName: existing.fullName,
+      role: existing.role,
+      status: existing.status,
+      inviteToken: existing.inviteToken,
+      invitedByUserId: existing.invitedByUserId,
+      createdAt: existing.createdAt ?? undefined,
+      emailConfirmationGraceStartedAt: startedAt,
+    });
+    await putReceiptJsonObject(buildUserKey(email), updated);
+    return toUserRecord(updated);
+  }
+
+  // The live service uses S3. The optional SQL store currently anchors this grace period to account creation.
+  return {
+    ...existing,
+    emailConfirmationGraceStartedAt: existing.createdAt ?? startedAt,
   };
 }
 
@@ -1015,6 +1058,8 @@ export async function updateUserPassword(input: {
       status: existing.status,
       inviteToken: existing.inviteToken,
       invitedByUserId: existing.invitedByUserId,
+      createdAt: existing.createdAt ?? undefined,
+      emailConfirmationGraceStartedAt: existing.emailConfirmationGraceStartedAt ?? null,
     });
     await putReceiptJsonObject(buildUserKey(email), updated);
     return toUserRecord(updated);
@@ -2313,6 +2358,8 @@ function toUserRecord(user: StoredUser): UserRecord {
     passwordHash: user.passwordHash,
     inviteToken: user.inviteToken,
     invitedByUserId: user.invitedByUserId,
+    createdAt: user.createdAt,
+    emailConfirmationGraceStartedAt: user.emailConfirmationGraceStartedAt ?? null,
   };
 }
 
