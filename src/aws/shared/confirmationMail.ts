@@ -57,3 +57,21 @@ export async function sendRegistrationConfirmationEmail(input: {
     channel: 'ses' as const,
   };
 }
+
+export async function sendRegistrationConfirmationEmailWithRetry(
+  input: Parameters<typeof sendRegistrationConfirmationEmail>[0],
+  attempts = 3,
+) {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await sendRegistrationConfirmationEmail(input);
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 400));
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Could not send the confirmation email.');
+}

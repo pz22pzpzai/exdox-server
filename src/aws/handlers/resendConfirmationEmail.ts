@@ -1,6 +1,6 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
-import { sendRegistrationConfirmationEmail } from '../shared/confirmationMail.js';
+import { sendRegistrationConfirmationEmailWithRetry } from '../shared/confirmationMail.js';
 import {
   buildConfirmationEmailLink,
   findUserByEmail,
@@ -44,7 +44,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
 
     let delivered = false;
     try {
-      const delivery = await sendRegistrationConfirmationEmail({
+      const delivery = await sendRegistrationConfirmationEmailWithRetry({
         toEmail: refreshedUser.email,
         fullName: refreshedUser.fullName,
         organisationName,

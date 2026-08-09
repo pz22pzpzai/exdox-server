@@ -2,7 +2,14 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { emailConfirmationDueAt, signUserToken, verifyPassword } from '../shared/auth.js';
 import { buildSignupCheckoutReturnUrl, createSelfServeCheckoutSession } from '../shared/billingCheckout.js';
-import { ensureEmailConfirmationGraceStarted, findUserByEmail, getOrganisationBillingSummary } from '../shared/db.js';
+import { sendRegistrationConfirmationEmailWithRetry } from '../shared/confirmationMail.js';
+import {
+  buildConfirmationEmailLink,
+  ensureEmailConfirmationGraceStarted,
+  findUserByEmail,
+  getOrganisationBillingSummary,
+  getOrganisationName,
+} from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
 import { reconcileStripeSubscription } from '../shared/stripeSubscription.js';
@@ -70,10 +77,26 @@ export async function handler(event: APIGatewayProxyEventV2) {
       const cardSetupComplete = billing.status === 'trialing' || billing.status === 'active' || billing.status === 'past_due';
 
       if (cardSetupComplete) {
+        const firstGraceLogin = !user.emailConfirmationGraceStartedAt;
         const graceUserRecord = await ensureEmailConfirmationGraceStarted(user.email);
         const confirmationDueAt = emailConfirmationDueAt(
           graceUserRecord?.emailConfirmationGraceStartedAt ?? graceUserRecord?.createdAt,
         );
+        if (firstGraceLogin && graceUserRecord?.inviteToken) {
+          try {
+            await sendRegistrationConfirmationEmailWithRetry({
+              toEmail: graceUserRecord.email,
+              fullName: graceUserRecord.fullName,
+              organisationName: await getOrganisationName(graceUserRecord.organisationId),
+              confirmationLink: buildConfirmationEmailLink(graceUserRecord.inviteToken, graceUserRecord.email),
+            }, 2);
+          } catch (error) {
+            console.warn('Could not send the post-checkout confirmation reminder.', {
+              email: graceUserRecord.email,
+              message: error instanceof Error ? error.message : 'Unknown email error',
+            });
+          }
+        }
         if (Date.parse(confirmationDueAt) <= Date.now()) {
           return jsonResponse(403, {
             success: false,

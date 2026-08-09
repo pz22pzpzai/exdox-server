@@ -3,7 +3,7 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { hashPassword, signUserToken } from '../shared/auth.js';
 import { normalizeBillingCycle, normalizePlanId, resolveSelfServeSubscriptionSelection } from '../shared/billing.js';
 import { buildSignupCheckoutReturnUrl, createSelfServeCheckoutSession } from '../shared/billingCheckout.js';
-import { sendRegistrationConfirmationEmail } from '../shared/confirmationMail.js';
+import { sendRegistrationConfirmationEmailWithRetry } from '../shared/confirmationMail.js';
 import { activateInvitedUser, buildConfirmationEmailLink, createUser } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
@@ -96,7 +96,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     if (user.inviteToken) {
       const confirmationLink = buildConfirmationEmailLink(user.inviteToken, user.email);
       try {
-        const delivery = await sendRegistrationConfirmationEmail({
+        const delivery = await sendRegistrationConfirmationEmailWithRetry({
           toEmail: user.email,
           fullName: user.fullName,
           organisationName,
