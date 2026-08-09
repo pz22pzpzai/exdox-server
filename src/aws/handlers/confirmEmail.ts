@@ -1,10 +1,11 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
-import { confirmRegisteredUserEmail } from '../shared/db.js';
+import { confirmRegisteredUserEmail, getOrganisationName } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
 import { signUserToken } from '../shared/auth.js';
 import { awsEnv } from '../shared/env.js';
+import { sendWorkspaceWelcomeEmail } from '../shared/confirmationMail.js';
 
 type ConfirmationEvent = APIGatewayProxyEventV2 & {
   httpMethod?: string;
@@ -36,6 +37,19 @@ export async function handler(event: ConfirmationEvent) {
       email,
       confirmationToken,
     });
+
+    try {
+      await sendWorkspaceWelcomeEmail({
+        toEmail: user.email,
+        fullName: user.fullName,
+        organisationName: await getOrganisationName(user.organisationId),
+      });
+    } catch (error) {
+      console.warn('Could not send the workspace welcome email.', {
+        email: user.email,
+        message: error instanceof Error ? error.message : 'Unknown email error',
+      });
+    }
 
     if (isGetRequest) {
       const loginUrl = new URL(awsEnv.confirmEmailLoginUrl);

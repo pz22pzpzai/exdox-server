@@ -75,3 +75,46 @@ export async function sendRegistrationConfirmationEmailWithRetry(
   }
   throw lastError instanceof Error ? lastError : new Error('Could not send the confirmation email.');
 }
+
+export async function sendWorkspaceWelcomeEmail(input: {
+  toEmail: string;
+  fullName: string | null;
+  organisationName: string;
+}) {
+  const recipientName = input.fullName || input.toEmail;
+  await ses.send(
+    new SendEmailCommand({
+      FromEmailAddress: awsEnv.inviteEmailFrom,
+      Destination: {
+        ToAddresses: [input.toEmail],
+      },
+      Content: {
+        Simple: {
+          Subject: {
+            Data: `Welcome to exdox - ${input.organisationName}`,
+          },
+          Body: {
+            Text: {
+              Data: [
+                `Hi ${recipientName},`,
+                '',
+                'Your email is confirmed and your exdox workspace is ready.',
+                '',
+                'Recommended next steps:',
+                '1. Upload your first receipt or invoice.',
+                '2. Review the extracted details and approve the document.',
+                '3. Invite your team from Profile/Settings.',
+                '',
+                'Open your workspace: https://exdox.co.uk/overview',
+                'Help and support: https://exdox.co.uk/contact',
+                '',
+                'Exdox support',
+                'contact@exdox.co.uk',
+              ].join('\n'),
+            },
+          },
+        },
+      },
+    }),
+  );
+}
