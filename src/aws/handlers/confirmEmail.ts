@@ -11,14 +11,16 @@ type ConfirmationEvent = APIGatewayProxyEventV2 & {
 };
 
 export async function handler(event: ConfirmationEvent) {
+  const requestMethod =
+    event.requestContext?.http?.method ??
+    event.httpMethod ??
+    (event.body ? 'POST' : 'GET');
+  const isGetRequest = requestMethod.toUpperCase() === 'GET';
+  const query = event.queryStringParameters ?? {};
+  const queryEmail = sanitizeText(query.email).toLowerCase();
+
   try {
-    const requestMethod =
-      event.requestContext?.http?.method ??
-      event.httpMethod ??
-      (event.body ? 'POST' : 'GET');
-    const isGetRequest = requestMethod.toUpperCase() === 'GET';
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
-    const query = event.queryStringParameters ?? {};
     const email = sanitizeText(isGetRequest ? query.email : body.email).toLowerCase();
     const confirmationToken = sanitizeText(isGetRequest ? query.token : body.token);
 
@@ -64,6 +66,22 @@ export async function handler(event: ConfirmationEvent) {
         ? String((error as { code?: string }).code)
         : 'confirmation_failed';
     const message = error instanceof Error ? error.message : 'Email confirmation failed.';
+
+    if (isGetRequest) {
+      const loginUrl = new URL(awsEnv.confirmEmailLoginUrl);
+      if (queryEmail) {
+        loginUrl.searchParams.set('email', queryEmail);
+      }
+      loginUrl.searchParams.set('confirmation', code === 'invalid_invite' ? 'used' : 'failed');
+      return {
+        statusCode: 302,
+        headers: {
+          Location: loginUrl.toString(),
+          'Cache-Control': 'no-store',
+        },
+        body: '',
+      };
+    }
 
     return jsonResponse(statusCode, {
       success: false,
