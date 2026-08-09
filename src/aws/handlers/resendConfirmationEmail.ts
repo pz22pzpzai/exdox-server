@@ -1,7 +1,12 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { sendRegistrationConfirmationEmail } from '../shared/confirmationMail.js';
-import { buildConfirmationEmailLink, findUserByEmail, getOrganisationName } from '../shared/db.js';
+import {
+  buildConfirmationEmailLink,
+  findUserByEmail,
+  getOrganisationName,
+  rotateRegistrationConfirmationToken,
+} from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
 
@@ -26,21 +31,29 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
-    const organisationName = await getOrganisationName(user.organisationId);
-    const confirmationLink = buildConfirmationEmailLink(user.inviteToken, user.email);
+    const refreshedUser = await rotateRegistrationConfirmationToken(user.email);
+    if (!refreshedUser?.inviteToken) {
+      return jsonResponse(200, {
+        success: true,
+        message: 'If this email still needs confirmation, a fresh confirmation link will be sent.',
+      });
+    }
+
+    const organisationName = await getOrganisationName(refreshedUser.organisationId);
+    const confirmationLink = buildConfirmationEmailLink(refreshedUser.inviteToken, refreshedUser.email);
 
     let delivered = false;
     try {
       const delivery = await sendRegistrationConfirmationEmail({
-        toEmail: user.email,
-        fullName: user.fullName,
+        toEmail: refreshedUser.email,
+        fullName: refreshedUser.fullName,
         organisationName,
         confirmationLink,
       });
       delivered = delivery.delivered;
     } catch (error) {
       console.warn('Could not resend registration confirmation email.', {
-        email: user.email,
+        email: refreshedUser.email,
         message: error instanceof Error ? error.message : 'Unknown email error',
       });
     }
@@ -49,7 +62,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       success: true,
       delivered,
       message: delivered
-        ? `A fresh confirmation email has been sent to ${user.email}.`
+        ? `A fresh confirmation email has been sent to ${refreshedUser.email}. All earlier confirmation links are now invalid.`
         : 'We could not send the confirmation email right now. Contact contact@exdox.co.uk and we will help you activate the workspace.',
     });
   } catch (error) {

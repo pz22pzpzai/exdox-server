@@ -952,6 +952,46 @@ export async function findUserByEmail(emailInput: string): Promise<UserRecord | 
   };
 }
 
+export async function rotateRegistrationConfirmationToken(emailInput: string): Promise<UserRecord | null> {
+  const email = normalizeEmail(emailInput);
+  const existing = await findUserByEmail(email);
+  if (!existing || existing.status !== 'pending_confirmation') {
+    return null;
+  }
+
+  const confirmationToken = crypto.randomBytes(24).toString('hex');
+  if (!pool) {
+    const updated = buildStoredUser({
+      id: existing.id,
+      organisationId: existing.organisationId,
+      email: existing.email,
+      passwordHash: existing.passwordHash,
+      fullName: existing.fullName,
+      role: existing.role,
+      status: existing.status,
+      inviteToken: confirmationToken,
+      invitedByUserId: existing.invitedByUserId,
+    });
+    await putReceiptJsonObject(buildUserKey(email), updated);
+    return toUserRecord(updated);
+  }
+
+  const [result] = await pool.execute<mysql.ResultSetHeader>(
+    `UPDATE users
+     SET invite_token = ?, invite_sent_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND status = 'pending_confirmation'`,
+    [confirmationToken, existing.id],
+  );
+  if (!result.affectedRows) {
+    return null;
+  }
+
+  return {
+    ...existing,
+    inviteToken: confirmationToken,
+  };
+}
+
 export async function updateUserPassword(input: {
   email: string;
   userId: number;
