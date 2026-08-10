@@ -34,7 +34,10 @@ export async function handler(event: APIGatewayProxyEventV2) {
     }
 
     const organisation = await getOrganisationSettings(user.organisationId);
-    const billing = await hydrateBillingSummaryFromStripe(await getOrganisationBillingSummary(user.organisationId));
+    const billing = await hydrateBillingSummaryFromStripe(
+      await getOrganisationBillingSummary(user.organisationId),
+      user.organisationId,
+    );
     const allowedWebRoutes = resolveAllowedWebRoutes(billing, user.role);
 
     return jsonResponse(200, {

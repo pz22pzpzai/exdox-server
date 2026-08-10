@@ -6,6 +6,7 @@ import { isStripeConfigured } from '../shared/billing.js';
 import { awsEnv } from '../shared/env.js';
 import { getOrganisationBillingSummary } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
+import { reconcileStripeSubscription } from '../shared/stripeSubscription.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
@@ -20,7 +21,10 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
-    const billing = await getOrganisationBillingSummary(user.organisationId);
+    const billing = await reconcileStripeSubscription(
+      user.organisationId,
+      await getOrganisationBillingSummary(user.organisationId),
+    );
     if (!billing.stripeCustomerId) {
       return jsonResponse(400, {
         success: false,

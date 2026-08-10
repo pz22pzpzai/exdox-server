@@ -10,7 +10,10 @@ export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
-    const billing = await hydrateBillingSummaryFromStripe(await getOrganisationBillingSummary(user.organisationId));
+    const billing = await hydrateBillingSummaryFromStripe(
+      await getOrganisationBillingSummary(user.organisationId),
+      user.organisationId,
+    );
 
     return jsonResponse(200, {
       success: true,

@@ -2,6 +2,7 @@ import Stripe from 'stripe';
 
 import type { OrganisationBillingSummary } from '../types.js';
 import { normalizeBillingStatus } from './billing.js';
+import { clearMissingStripeBillingReferences, isStripeResourceMissing } from './stripeSubscription.js';
 import { awsEnv } from './env.js';
 
 function toStripeBillingStatus(status: string) {
@@ -29,6 +30,7 @@ function getCancellationScheduledFor(subscription: Stripe.Subscription) {
 
 export async function hydrateBillingSummaryFromStripe(
   summary: OrganisationBillingSummary,
+  organisationId?: number,
 ): Promise<OrganisationBillingSummary> {
   if (!awsEnv.stripeSecretKey || !summary.stripeSubscriptionId) {
     return summary;
@@ -52,6 +54,12 @@ export async function hydrateBillingSummaryFromStripe(
       stripeSubscriptionId: subscription.status === 'canceled' ? null : subscription.id,
     };
   } catch (error) {
+    if (organisationId && isStripeResourceMissing(error)) {
+      console.info('Clearing a Stripe subscription reference that is not present in the configured Stripe account.', {
+        organisationId,
+      });
+      return clearMissingStripeBillingReferences(organisationId);
+    }
     console.warn('Could not hydrate billing summary from Stripe.', {
       subscriptionId: summary.stripeSubscriptionId,
       message: error instanceof Error ? error.message : 'Unknown Stripe error',

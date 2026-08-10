@@ -27,6 +27,26 @@ function toIsoDate(timestamp: number | null | undefined) {
   return typeof timestamp === 'number' && timestamp > 0 ? new Date(timestamp * 1000).toISOString() : null;
 }
 
+export function isStripeResourceMissing(error: unknown) {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const stripeError = error as { code?: unknown; type?: unknown };
+  return stripeError.code === 'resource_missing' && stripeError.type === 'StripeInvalidRequestError';
+}
+
+export async function clearMissingStripeBillingReferences(organisationId: number) {
+  return updateOrganisationBillingProfile({
+    organisationId,
+    billingStatus: 'inactive',
+    trialEndsAt: null,
+    stripeCustomerId: null,
+    stripeSubscriptionId: null,
+    cancellationScheduledFor: null,
+  });
+}
+
 export async function syncStripeSubscription(subscription: Stripe.Subscription) {
   const customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer?.id ?? null;
   const organisationIdFromMetadata = subscription.metadata.organisationId
@@ -91,11 +111,22 @@ export async function reconcileStripeSubscription(
   const stripe = stripeClient ?? new Stripe(awsEnv.stripeSecretKey, {
     apiVersion: '2026-06-24.dahlia',
   });
-  const subscriptions = await stripe.subscriptions.list({
-    customer: billing.stripeCustomerId,
-    status: 'all',
-    limit: 10,
-  });
+  let subscriptions: Stripe.ApiList<Stripe.Subscription>;
+  try {
+    subscriptions = await stripe.subscriptions.list({
+      customer: billing.stripeCustomerId,
+      status: 'all',
+      limit: 10,
+    });
+  } catch (error) {
+    if (isStripeResourceMissing(error)) {
+      console.info('Clearing Stripe references that do not exist in the configured Stripe account.', {
+        organisationId,
+      });
+      return clearMissingStripeBillingReferences(organisationId);
+    }
+    throw error;
+  }
   const completedSubscription = subscriptions.data.find((subscription) =>
     subscription.status === 'trialing'
     || subscription.status === 'active'
