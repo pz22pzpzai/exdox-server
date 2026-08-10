@@ -29,7 +29,7 @@ jobs:
       DB_IAM_AUTH_ENABLED: ${{ secrets.DB_IAM_AUTH_ENABLED }}
       DB_IAM_REGION: ${{ secrets.DB_IAM_REGION }}
       AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
-      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_LIVE_SECRET_KEY }}
       STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
       STRIPE_CHECKOUT_SUCCESS_URL: ${{ secrets.STRIPE_CHECKOUT_SUCCESS_URL }}
       STRIPE_CHECKOUT_CANCEL_URL: ${{ secrets.STRIPE_CHECKOUT_CANCEL_URL }}
@@ -82,7 +82,7 @@ jobs:
           RECEIPT_BUCKET_NAME: ${{ secrets.RECEIPT_BUCKET_NAME }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_LIVE_SECRET_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
         run: |
           test -n "$AWS_ACCESS_KEY_ID" || { echo "Missing AWS_ACCESS_KEY_ID GitHub secret"; exit 1; }
