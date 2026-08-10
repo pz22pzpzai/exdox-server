@@ -82,12 +82,22 @@ jobs:
           RECEIPT_BUCKET_NAME: ${{ secrets.RECEIPT_BUCKET_NAME }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
         run: |
           test -n "$AWS_ACCESS_KEY_ID" || { echo "Missing AWS_ACCESS_KEY_ID GitHub secret"; exit 1; }
           test -n "$AWS_SECRET_ACCESS_KEY" || { echo "Missing AWS_SECRET_ACCESS_KEY GitHub secret"; exit 1; }
           test -n "$RECEIPT_BUCKET_NAME" || { echo "Missing RECEIPT_BUCKET_NAME GitHub secret"; exit 1; }
           test -n "$OPENAI_API_KEY" || { echo "Missing OPENAI_API_KEY GitHub secret"; exit 1; }
           test -n "$JWT_SECRET" || { echo "Missing JWT_SECRET GitHub secret"; exit 1; }
+          case "$STRIPE_SECRET_KEY" in
+            sk_live_*) ;;
+            *) echo "Production STRIPE_SECRET_KEY must be a live Stripe key"; exit 1 ;;
+          esac
+          case "$STRIPE_WEBHOOK_SECRET" in
+            whsec_*) ;;
+            *) echo "Missing or invalid STRIPE_WEBHOOK_SECRET GitHub secret"; exit 1 ;;
+          esac
 
       - name: Set up AWS SAM
         uses: aws-actions/setup-sam@v2
