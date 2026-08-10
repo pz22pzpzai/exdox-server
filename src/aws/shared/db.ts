@@ -702,10 +702,14 @@ export async function createUser(input: {
   }
 }
 
+function confirmedRegistrationTokenMarker(confirmationToken: string) {
+  return `confirmed:${crypto.createHash('sha256').update(confirmationToken).digest('hex')}`;
+}
+
 export async function confirmRegisteredUserEmail(input: {
   email: string;
   confirmationToken: string;
-}): Promise<AuthenticatedUser> {
+}): Promise<{ user: AuthenticatedUser; alreadyConfirmed: boolean }> {
   const email = normalizeEmail(input.email);
   const confirmationToken = sanitizeText(input.confirmationToken);
 
@@ -715,6 +719,13 @@ export async function confirmRegisteredUserEmail(input: {
 
   if (!pool) {
     const existing = await findUserByEmail(email);
+    const confirmedTokenMarker = confirmedRegistrationTokenMarker(confirmationToken);
+    if (existing?.status === 'active' && existing.inviteToken === confirmedTokenMarker) {
+      return {
+        user: toAuthenticatedUser(existing),
+        alreadyConfirmed: true,
+      };
+    }
     if (!existing || existing.status !== 'pending_confirmation' || existing.inviteToken !== confirmationToken) {
       throw invalidInviteError('This confirmation link is invalid or has already been used.');
     }
@@ -727,13 +738,16 @@ export async function confirmRegisteredUserEmail(input: {
       fullName: existing.fullName,
       role: existing.role,
       status: 'active',
-      inviteToken: null,
+      inviteToken: confirmedTokenMarker,
       invitedByUserId: existing.invitedByUserId,
       createdAt: existing.createdAt ?? undefined,
       emailConfirmationGraceStartedAt: null,
     });
     await putReceiptJsonObject(buildUserKey(email), activated);
-    return toAuthenticatedUser(activated);
+    return {
+      user: toAuthenticatedUser(activated),
+      alreadyConfirmed: false,
+    };
   }
 
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
@@ -743,24 +757,41 @@ export async function confirmRegisteredUserEmail(input: {
     [email],
   );
   const row = rows[0];
+  const confirmedTokenMarker = confirmedRegistrationTokenMarker(confirmationToken);
+  if (row && String(row.status) === 'active' && String(row.invite_token) === confirmedTokenMarker) {
+    return {
+      user: {
+        id: Number(row.id),
+        organisationId: Number(row.organisation_id),
+        email: String(row.email),
+        fullName: row.full_name ? String(row.full_name) : null,
+        role: normalizeUserRole(row.role),
+        status: 'active',
+      },
+      alreadyConfirmed: true,
+    };
+  }
   if (!row || String(row.status) !== 'pending_confirmation' || String(row.invite_token) !== confirmationToken) {
     throw invalidInviteError('This confirmation link is invalid or has already been used.');
   }
 
   await pool.execute(
     `UPDATE users
-     SET status = 'active', invite_token = NULL, invitation_accepted_at = CURRENT_TIMESTAMP
+     SET status = 'active', invite_token = ?, invitation_accepted_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
-    [row.id],
+    [confirmedTokenMarker, row.id],
   );
 
   return {
-    id: Number(row.id),
-    organisationId: Number(row.organisation_id),
-    email: String(row.email),
-    fullName: row.full_name ? String(row.full_name) : null,
-    role: normalizeUserRole(row.role),
-    status: 'active',
+    user: {
+      id: Number(row.id),
+      organisationId: Number(row.organisation_id),
+      email: String(row.email),
+      fullName: row.full_name ? String(row.full_name) : null,
+      role: normalizeUserRole(row.role),
+      status: 'active',
+    },
+    alreadyConfirmed: false,
   };
 }
 

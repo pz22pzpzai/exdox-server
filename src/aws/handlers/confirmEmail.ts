@@ -33,22 +33,25 @@ export async function handler(event: ConfirmationEvent) {
       });
     }
 
-    const user = await confirmRegisteredUserEmail({
+    const confirmation = await confirmRegisteredUserEmail({
       email,
       confirmationToken,
     });
+    const { user } = confirmation;
 
-    try {
-      await sendWorkspaceWelcomeEmail({
-        toEmail: user.email,
-        fullName: user.fullName,
-        organisationName: await getOrganisationName(user.organisationId),
-      });
-    } catch (error) {
-      console.warn('Could not send the workspace welcome email.', {
-        email: user.email,
-        message: error instanceof Error ? error.message : 'Unknown email error',
-      });
+    if (!confirmation.alreadyConfirmed) {
+      try {
+        await sendWorkspaceWelcomeEmail({
+          toEmail: user.email,
+          fullName: user.fullName,
+          organisationName: await getOrganisationName(user.organisationId),
+        });
+      } catch (error) {
+        console.warn('Could not send the workspace welcome email.', {
+          email: user.email,
+          message: error instanceof Error ? error.message : 'Unknown email error',
+        });
+      }
     }
 
     if (isGetRequest) {
