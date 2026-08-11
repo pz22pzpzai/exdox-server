@@ -20,6 +20,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
     const email = sanitizeText(body.email).toLowerCase();
     const password = sanitizeText(body.password);
+    const confirmPassword = sanitizeText(body.confirmPassword);
     const fullName = sanitizeText(body.fullName) || null;
     const organisationName = sanitizeText(body.organisationName) || null;
     const inviteToken = sanitizeText(body.inviteToken);
@@ -31,11 +32,19 @@ export async function handler(event: APIGatewayProxyEventV2) {
         ? 'sole_trader'
         : 'owner';
 
-    if (!email || !password) {
+    if (!email || !password || !confirmPassword) {
       return jsonResponse(400, {
         success: false,
         error: 'missing_credentials',
-        message: 'Provide email and password to create an account.',
+        message: 'Provide an email address and enter the password twice to create an account.',
+      });
+    }
+
+    if (password !== confirmPassword) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'password_mismatch',
+        message: 'The passwords do not match. Enter the same password in both fields.',
       });
     }
 
