@@ -25,7 +25,11 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const inviteToken = sanitizeText(body.inviteToken);
     const termsAccepted = body.termsAccepted === true;
     const termsVersion = sanitizeText(body.termsVersion) || '2026-07-26';
-    const accountType = body.accountType === 'employee' ? 'employee' : 'owner';
+    const accountType = body.accountType === 'employee'
+      ? 'employee'
+      : body.accountType === 'sole_trader'
+        ? 'sole_trader'
+        : 'owner';
 
     if (!email || !password) {
       return jsonResponse(400, {
@@ -128,7 +132,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
-    if (!organisationName) {
+    if (accountType === 'owner' && !organisationName) {
       return jsonResponse(400, {
         success: false,
         error: 'missing_organisation_name',
@@ -149,12 +153,13 @@ export async function handler(event: APIGatewayProxyEventV2) {
       monthlyDocumentLimit: typeof body.monthlyDocumentLimit === 'number' ? body.monthlyDocumentLimit : null,
       includedUsers: typeof body.includedUsers === 'number' ? body.includedUsers : null,
     });
+    const workspaceName = organisationName || `${fullName || email.split('@')[0]} Workspace`;
 
     const user = await createUser({
       email,
       passwordHash,
       fullName,
-      organisationName,
+      organisationName: workspaceName,
       billingPlan: billingSelection.planId,
       billingCycle: normalizeBillingCycle(body.billingCycle),
       monthlyDocumentLimit: billingSelection.monthlyDocumentLimit,
@@ -168,7 +173,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
         const delivery = await sendRegistrationConfirmationEmailWithRetry({
           toEmail: user.email,
           fullName: user.fullName,
-          organisationName,
+          organisationName: workspaceName,
           confirmationLink,
         });
         confirmationDelivered = delivery.delivered;
