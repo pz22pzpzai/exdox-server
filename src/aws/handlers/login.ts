@@ -119,7 +119,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
         });
       }
 
-      if (billing.status === 'inactive') {
+      if (billing.status === 'inactive' && user.role === 'Business_Admin') {
         try {
           const checkout = await createSelfServeCheckoutSession({
             user: authUser,
@@ -143,7 +143,9 @@ export async function handler(event: APIGatewayProxyEventV2) {
         checkoutUrl,
         message: checkoutUrl
           ? 'Continue to secure card setup. After it is complete, you can use the workspace while you confirm your email.'
-          : 'Card setup is temporarily unavailable. Complete secure card setup before entering the workspace.',
+          : user.role === 'Standard_Employee'
+            ? 'Your company workspace is not active yet. Ask the business owner to complete the company subscription setup.'
+            : 'Card setup is temporarily unavailable. Complete secure card setup before entering the workspace.',
         user: authUser,
       });
     }

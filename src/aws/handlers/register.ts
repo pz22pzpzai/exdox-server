@@ -1,10 +1,17 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { hashPassword, signUserToken } from '../shared/auth.js';
-import { normalizeBillingCycle, normalizePlanId, resolveSelfServeSubscriptionSelection } from '../shared/billing.js';
+import { canInviteUser, getPlanLimitMessage, normalizeBillingCycle, normalizePlanId, resolveSelfServeSubscriptionSelection } from '../shared/billing.js';
 import { buildSignupCheckoutReturnUrl, createSelfServeCheckoutSession } from '../shared/billingCheckout.js';
 import { sendRegistrationConfirmationEmailWithRetry } from '../shared/confirmationMail.js';
-import { activateInvitedUser, buildConfirmationEmailLink, createUser } from '../shared/db.js';
+import {
+  activateInvitedUser,
+  buildConfirmationEmailLink,
+  createDomainEmployeeUser,
+  createUser,
+  findConfirmedAdminOrganisationForEmailDomain,
+  getOrganisationBillingSummary,
+} from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
 
@@ -18,6 +25,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const inviteToken = sanitizeText(body.inviteToken);
     const termsAccepted = body.termsAccepted === true;
     const termsVersion = sanitizeText(body.termsVersion) || '2026-07-26';
+    const accountType = body.accountType === 'employee' ? 'employee' : 'owner';
 
     if (!email || !password) {
       return jsonResponse(400, {
@@ -56,6 +64,67 @@ export async function handler(event: APIGatewayProxyEventV2) {
         success: true,
         token: signUserToken(user),
         user,
+      });
+    }
+
+    const matchedOrganisation = await findConfirmedAdminOrganisationForEmailDomain(email);
+    if (matchedOrganisation) {
+      const billing = await getOrganisationBillingSummary(matchedOrganisation.organisationId);
+      if (!canInviteUser(billing)) {
+        const error = new Error(getPlanLimitMessage(billing, 'users')) as Error & { statusCode?: number; code?: string };
+        error.statusCode = 403;
+        error.code = 'user_limit_reached';
+        throw error;
+      }
+
+      const user = await createDomainEmployeeUser({
+        organisationId: matchedOrganisation.organisationId,
+        email,
+        passwordHash,
+        fullName,
+      });
+      let confirmationDelivered = false;
+      if (user.inviteToken) {
+        try {
+          const delivery = await sendRegistrationConfirmationEmailWithRetry({
+            toEmail: user.email,
+            fullName: user.fullName,
+            organisationName: matchedOrganisation.organisationName,
+            confirmationLink: buildConfirmationEmailLink(user.inviteToken, user.email),
+          });
+          confirmationDelivered = delivery.delivered;
+        } catch (error) {
+          console.warn('Could not send employee confirmation email.', {
+            email: user.email,
+            message: error instanceof Error ? error.message : 'Unknown email error',
+          });
+        }
+      }
+
+      return jsonResponse(201, {
+        success: true,
+        requiresEmailConfirmation: true,
+        checkoutUrl: null,
+        accountType: 'employee',
+        message: confirmationDelivered
+          ? `You have joined ${matchedOrganisation.organisationName}. Check your email to confirm your address, then sign in to use the Exdox app. No card setup is required.`
+          : `You have joined ${matchedOrganisation.organisationName}, but the confirmation email could not be sent. Use resend confirmation or contact contact@exdox.co.uk. No card setup is required.`,
+        user: {
+          id: user.id,
+          organisationId: user.organisationId,
+          email: user.email,
+          fullName: user.fullName,
+          role: user.role,
+          status: user.status,
+        },
+      });
+    }
+
+    if (accountType === 'employee') {
+      return jsonResponse(404, {
+        success: false,
+        error: 'company_workspace_not_found',
+        message: 'We could not find an active Exdox workspace for this company email domain. Ask the business owner to create and confirm the company workspace first.',
       });
     }
 

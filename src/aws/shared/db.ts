@@ -702,6 +702,126 @@ export async function createUser(input: {
   }
 }
 
+const PUBLIC_EMAIL_DOMAINS = new Set([
+  'aol.com',
+  'gmail.com',
+  'googlemail.com',
+  'hotmail.co.uk',
+  'hotmail.com',
+  'icloud.com',
+  'live.co.uk',
+  'live.com',
+  'mail.com',
+  'outlook.co.uk',
+  'outlook.com',
+  'proton.me',
+  'protonmail.com',
+  'yahoo.co.uk',
+  'yahoo.com',
+]);
+
+export async function findConfirmedAdminOrganisationForEmailDomain(emailInput: string): Promise<{
+  organisationId: number;
+  organisationName: string;
+} | null> {
+  const domain = emailDomain(emailInput);
+  if (!domain || PUBLIC_EMAIL_DOMAINS.has(domain)) {
+    return null;
+  }
+
+  if (!pool) {
+    const keys = await listReceiptJsonKeys('users/', 2000);
+    const users = await Promise.all(keys.map((key) => getReceiptJsonObject<StoredUser>(key)));
+    const organisationIds = [...new Set(
+      users
+        .filter((user) => user.role === 'Business_Admin' && user.status === 'active' && emailDomain(user.email) === domain)
+        .map((user) => user.organisationId),
+    )];
+
+    if (organisationIds.length > 1) {
+      throw domainConflictError();
+    }
+    if (!organisationIds[0]) {
+      return null;
+    }
+    const organisation = await getS3Organisation(organisationIds[0]);
+    return { organisationId: organisation.id, organisationName: organisation.name };
+  }
+
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT DISTINCT u.organisation_id, o.name AS organisation_name
+     FROM users u
+     INNER JOIN organisations o ON o.id = u.organisation_id
+     WHERE u.user_role = 'Business_Admin'
+       AND u.status = 'active'
+       AND LOWER(SUBSTRING_INDEX(u.email, '@', -1)) = ?
+     LIMIT 2`,
+    [domain],
+  );
+  if (rows.length > 1) {
+    throw domainConflictError();
+  }
+  const row = rows[0];
+  return row
+    ? { organisationId: Number(row.organisation_id), organisationName: String(row.organisation_name) }
+    : null;
+}
+
+export async function createDomainEmployeeUser(input: {
+  organisationId: number;
+  email: string;
+  passwordHash: string;
+  fullName?: string | null;
+}): Promise<UserRecord> {
+  const email = normalizeEmail(input.email);
+  const fullName = normalizeName(input.fullName);
+  const confirmationToken = crypto.randomBytes(24).toString('hex');
+
+  if (!pool) {
+    if (await findUserByEmail(email)) {
+      throw duplicateUserError();
+    }
+    const user = buildStoredUser({
+      id: Date.now(),
+      organisationId: input.organisationId,
+      email,
+      passwordHash: input.passwordHash,
+      fullName,
+      role: 'Standard_Employee',
+      status: 'pending_confirmation',
+      inviteToken: confirmationToken,
+      invitedByUserId: null,
+    });
+    await putReceiptJsonObject(buildUserKey(email), user);
+    return toUserRecord(user);
+  }
+
+  try {
+    const [result] = await pool.execute<mysql.ResultSetHeader>(
+      `INSERT INTO users (
+        organisation_id, email, password_hash, full_name, user_role, status, invite_token, invited_by_user_id
+      ) VALUES (?, ?, ?, ?, 'Standard_Employee', 'pending_confirmation', ?, NULL)`,
+      [input.organisationId, email, input.passwordHash, fullName, confirmationToken],
+    );
+    return {
+      id: result.insertId,
+      organisationId: input.organisationId,
+      email,
+      passwordHash: input.passwordHash,
+      fullName,
+      role: 'Standard_Employee',
+      status: 'pending_confirmation',
+      inviteToken: confirmationToken,
+      invitedByUserId: null,
+    };
+  } catch (error) {
+    if (isDuplicateKeyError(error)) {
+      throw duplicateUserError();
+    }
+    throw error;
+  }
+}
+
 function confirmedRegistrationTokenMarker(confirmationToken: string) {
   return `confirmed:${crypto.createHash('sha256').update(confirmationToken).digest('hex')}`;
 }
@@ -2470,6 +2590,11 @@ function normalizeEmail(value: string) {
   return sanitizeText(value).toLowerCase();
 }
 
+function emailDomain(value: string) {
+  const parts = normalizeEmail(value).split('@');
+  return parts.length === 2 ? parts[1] : '';
+}
+
 function normalizeName(value: string | null | undefined) {
   const text = sanitizeText(value);
   return text || null;
@@ -2491,6 +2616,15 @@ function duplicateUserError(message = 'An account with this email already exists
   };
   error.statusCode = 409;
   error.code = 'user_exists';
+  return error;
+}
+
+function domainConflictError() {
+  const error = new Error(
+    'This company email domain is linked to more than one workspace. Contact contact@exdox.co.uk so we can verify the correct company.',
+  ) as Error & { statusCode?: number; code?: string };
+  error.statusCode = 409;
+  error.code = 'company_domain_conflict';
   return error;
 }
 
