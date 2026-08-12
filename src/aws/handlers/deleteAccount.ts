@@ -31,6 +31,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       || user.id !== authenticatedUser.id
       || user.organisationId !== authenticatedUser.organisationId
       || user.role !== 'Business_Admin'
+      || user.invitedByUserId !== null
       || !user.passwordHash
       || !(await verifyPassword(password, user.passwordHash))
     ) {
