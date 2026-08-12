@@ -517,6 +517,15 @@ export async function attachReceiptToClaim(input: {
   receiptId: number;
   claimId: number;
 }): Promise<ReceiptRow> {
+  const accessibleClaims = await listExpenseClaims(input.user, 200);
+  const targetClaim = accessibleClaims.find((claim) => claim.id === input.claimId);
+  if (!targetClaim) {
+    throw notFoundError('Expense claim not found.');
+  }
+  if (targetClaim.status === 'paid' || targetClaim.status === 'rejected') {
+    throw validationError('Receipts cannot be attached to a paid or rejected claim.');
+  }
+
   if (!pool) {
     const receipts = await listReceipts(input.user, { limit: 500 });
     const target = receipts.find((receipt) => receipt.id === input.receiptId);
@@ -1653,6 +1662,39 @@ export async function updateClaimStatus(user: AuthenticatedUser, claimId: number
   return claim;
 }
 
+export async function findUserById(organisationId: number, userId: number): Promise<UserRecord | null> {
+  if (!pool) {
+    const users = await listS3UsersForOrganisation(organisationId);
+    const user = users.find((candidate) => candidate.id === userId);
+    return user ? toUserRecord(user) : null;
+  }
+
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT id, organisation_id, email, password_hash, full_name, user_role AS role, status,
+            invite_token, invited_by_user_id, created_at
+     FROM users
+     WHERE id = ? AND organisation_id = ?
+     LIMIT 1`,
+    [userId, organisationId],
+  );
+  const row = rows[0];
+  if (!row) {
+    return null;
+  }
+  return {
+    id: Number(row.id),
+    organisationId: Number(row.organisation_id),
+    email: String(row.email),
+    passwordHash: row.password_hash ? String(row.password_hash) : null,
+    fullName: row.full_name ? String(row.full_name) : null,
+    role: normalizeUserRole(row.role),
+    status: String(row.status) as UserRecord['status'],
+    inviteToken: row.invite_token ? String(row.invite_token) : null,
+    invitedByUserId: row.invited_by_user_id === null ? null : Number(row.invited_by_user_id),
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+  };
+}
+
 export async function listSupplierRules(organisationId: number): Promise<SupplierRuleRow[]> {
   if (!pool) {
     const keys = await listReceiptJsonKeys(`supplier-rules/org-${organisationId}/`, 500);
@@ -2450,9 +2492,9 @@ function defaultMonthlyDocumentLimitForPlan(planId: BillingPlanId) {
     case 'capture':
       return 250;
     case 'control':
-      return 2500;
+      return 1500;
     case 'operations':
-      return 10000;
+      return 3000;
     default:
       return null;
   }
@@ -2463,9 +2505,9 @@ function defaultIncludedUsersForPlan(planId: BillingPlanId) {
     case 'capture':
       return 5;
     case 'control':
-      return 25;
+      return 30;
     case 'operations':
-      return 100;
+      return 60;
     default:
       return null;
   }

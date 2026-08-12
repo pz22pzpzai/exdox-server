@@ -51,8 +51,8 @@ const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
   control: {
     id: 'control',
     label: 'Control',
-    monthlyDocumentLimit: 2500,
-    includedUsers: 25,
+    monthlyDocumentLimit: 1500,
+    includedUsers: 30,
     routes: ['/overview', '/costs', '/sales', '/claims', '/settings', '/billing'],
     features: [
       'mobile_capture',
@@ -72,8 +72,8 @@ const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
   operations: {
     id: 'operations',
     label: 'Operations',
-    monthlyDocumentLimit: 10000,
-    includedUsers: 100,
+    monthlyDocumentLimit: 3000,
+    includedUsers: 60,
     routes: [
       '/overview',
       '/costs',
@@ -81,10 +81,7 @@ const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
       '/vault',
       '/claims',
       '/rules',
-      '/reconciliation',
       '/settings',
-      '/requisitions',
-      '/bank-callback',
       '/billing',
     ],
     features: [
@@ -100,12 +97,10 @@ const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
       'queue_exports',
       'supplier_rules',
       'vault',
-      'reconciliation',
-      'open_banking',
       'archive_access',
     ],
     trialDays: 14,
-    highlight: 'Rules, vault, and bank matching',
+    highlight: 'Rules, vault, and expanded review controls',
   },
   enterprise: {
     id: 'enterprise',
@@ -119,10 +114,7 @@ const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
       '/vault',
       '/claims',
       '/rules',
-      '/reconciliation',
       '/settings',
-      '/requisitions',
-      '/bank-callback',
       '/billing',
     ],
     features: [
@@ -138,8 +130,6 @@ const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
       'queue_exports',
       'supplier_rules',
       'vault',
-      'reconciliation',
-      'open_banking',
       'archive_access',
       'multi_entity',
       'priority_support',
@@ -159,10 +149,7 @@ const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
       '/vault',
       '/claims',
       '/rules',
-      '/reconciliation',
       '/settings',
-      '/requisitions',
-      '/bank-callback',
       '/billing',
     ],
     features: [
@@ -178,8 +165,6 @@ const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
       'queue_exports',
       'supplier_rules',
       'vault',
-      'reconciliation',
-      'open_banking',
       'archive_access',
       'multi_entity',
       'priority_support',
@@ -219,7 +204,7 @@ export function defaultTrialEndsAt(planId: BillingPlanId) {
 
 export function resolveAllowedWebRoutes(summary: OrganisationBillingSummary, role: UserRole) {
   if (role !== 'Business_Admin') {
-    return ['/dropbox'];
+    return ['/dropbox', '/claims'];
   }
 
   const definition = getPlanDefinition(summary.planId);
