@@ -529,6 +529,30 @@ Resources:
             Path: /billing/portal-session
             Method: POST
 
+  DeleteAccountFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/deleteAccount.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:ListBucketVersions
+              Resource: !GetAtt ReceiptStorageBucket.Arn
+            - Effect: Allow
+              Action:
+                - s3:DeleteObjectVersion
+              Resource: !Sub '${ReceiptStorageBucket.Arn}/*'
+      Events:
+        DeleteAccountRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /account
+            Method: DELETE
+
   StripeWebhookFunction:
     Type: AWS::Serverless::Function
     Properties:

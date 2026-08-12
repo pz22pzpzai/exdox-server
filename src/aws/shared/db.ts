@@ -5,7 +5,14 @@ import mysql from 'mysql2/promise';
 
 import { awsEnv } from './env.js';
 import { sanitizeText } from './helpers.js';
-import { deleteReceiptObject, getReceiptJsonObject, listReceiptJsonKeys, putReceiptJsonObject } from './s3.js';
+import {
+  deleteReceiptObject,
+  deleteReceiptPrefix,
+  getReceiptJsonObject,
+  listAllReceiptJsonKeys,
+  listReceiptJsonKeys,
+  putReceiptJsonObject,
+} from './s3.js';
 import {
   type AuthenticatedUser,
   type BankRequisitionRow,
@@ -1693,6 +1700,42 @@ export async function findUserById(organisationId: number, userId: number): Prom
     invitedByUserId: row.invited_by_user_id === null ? null : Number(row.invited_by_user_id),
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
   };
+}
+
+export async function deleteOrganisationAccount(organisationId: number) {
+  const userKeys = await listAllReceiptJsonKeys('users/');
+  const users = await Promise.all(userKeys.map(async (key) => ({
+    key,
+    user: await getReceiptJsonObject<StoredUser>(key),
+  })));
+  const organisationUserKeys = users
+    .filter(({ user }) => user.organisationId === organisationId)
+    .map(({ key }) => key);
+
+  const deletedRecordKeys = await listAllReceiptJsonKeys('deleted/');
+  const deletedRecords = await Promise.all(deletedRecordKeys.map(async (key) => ({
+    key,
+    record: await getReceiptJsonObject<Partial<ReceiptRow>>(key),
+  })));
+  const organisationDeletedRecordKeys = deletedRecords
+    .filter(({ record }) => record.organisationId === organisationId)
+    .map(({ key }) => key);
+
+  await Promise.all([
+    deleteReceiptPrefix(`organisations/${organisationId}.json`),
+    deleteReceiptPrefix(`receipt-records/org-${organisationId}/`),
+    deleteReceiptPrefix(`receipts/org-${organisationId}/`),
+    deleteReceiptPrefix(`expense-claims/org-${organisationId}/`),
+    deleteReceiptPrefix(`supplier-rules/org-${organisationId}/`),
+    ...organisationUserKeys.map((key) => deleteReceiptPrefix(key)),
+    ...organisationDeletedRecordKeys.map((key) => deleteReceiptPrefix(key)),
+  ]);
+
+  if (pool) {
+    await pool.execute(`DELETE FROM organisations WHERE id = ?`, [organisationId]);
+  }
+
+  return { success: true };
 }
 
 export async function listSupplierRules(organisationId: number): Promise<SupplierRuleRow[]> {

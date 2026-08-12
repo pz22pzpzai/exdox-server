@@ -1,4 +1,12 @@
-import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  DeleteObjectsCommand,
+  GetObjectCommand,
+  ListObjectsV2Command,
+  ListObjectVersionsCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 import { awsEnv } from './env.js';
@@ -120,6 +128,41 @@ export async function deleteReceiptObject(key: string) {
   );
 }
 
+export async function deleteReceiptPrefix(prefix: string) {
+  let keyMarker: string | undefined;
+  let versionIdMarker: string | undefined;
+  let hasMoreVersions = true;
+
+  while (hasMoreVersions) {
+    const response = await s3.send(
+      new ListObjectVersionsCommand({
+        Bucket: awsEnv.receiptBucketName,
+        Prefix: prefix,
+        KeyMarker: keyMarker,
+        VersionIdMarker: versionIdMarker,
+        MaxKeys: 1000,
+      }),
+    );
+    const objects = [
+      ...(response.Versions ?? []).map((item) => ({ Key: item.Key, VersionId: item.VersionId })),
+      ...(response.DeleteMarkers ?? []).map((item) => ({ Key: item.Key, VersionId: item.VersionId })),
+    ].filter((item): item is { Key: string; VersionId: string } => Boolean(item.Key && item.VersionId));
+
+    if (objects.length) {
+      await s3.send(
+        new DeleteObjectsCommand({
+          Bucket: awsEnv.receiptBucketName,
+          Delete: { Objects: objects, Quiet: true },
+        }),
+      );
+    }
+
+    hasMoreVersions = Boolean(response.IsTruncated);
+    keyMarker = hasMoreVersions ? response.NextKeyMarker : undefined;
+    versionIdMarker = hasMoreVersions ? response.NextVersionIdMarker : undefined;
+  }
+}
+
 export async function getReceiptJsonObject<T>(key: string): Promise<T> {
   const buffer = await getReceiptObjectBuffer(key);
   return JSON.parse(buffer.toString('utf8')) as T;
@@ -142,4 +185,24 @@ export async function listReceiptJsonKeys(prefix: string, maxKeys: number) {
       return rightTime - leftTime;
     })
     .map((item) => item.Key);
+}
+
+export async function listAllReceiptJsonKeys(prefix: string) {
+  const keys: string[] = [];
+  let continuationToken: string | undefined;
+
+  do {
+    const response = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: awsEnv.receiptBucketName,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+        MaxKeys: 1000,
+      }),
+    );
+    keys.push(...(response.Contents ?? []).map((item) => item.Key).filter((key): key is string => Boolean(key)));
+    continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  return keys;
 }
