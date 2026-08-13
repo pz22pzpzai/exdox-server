@@ -66,6 +66,7 @@ export type ReceiptRow = {
   receiptSource: ReceiptSource;
   sourceFilename: string;
   sourceMimeType: string;
+  contentSha256?: string | null;
   s3Bucket: string;
   s3Key: string;
   locale: string;

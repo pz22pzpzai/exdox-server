@@ -39,6 +39,7 @@ import {
   normalizeBillingStatus,
   normalizePlanId,
 } from './billing.js';
+import { contentHashesMatch } from './contentHash.js';
 
 const usesMysql =
   awsEnv.receiptStoreMode === 'mysql' &&
@@ -176,6 +177,7 @@ export async function insertReceiptRecord(input: {
   receiptSource?: ReceiptSource;
   sourceFileName: string;
   sourceMimeType: string;
+  contentSha256?: string | null;
   s3Bucket: string;
   s3Key: string;
   locale: string;
@@ -208,6 +210,7 @@ export async function insertReceiptRecord(input: {
       receipt_source,
       source_filename,
       source_mime_type,
+      content_sha256,
       s3_bucket,
       s3_key,
       locale,
@@ -247,6 +250,7 @@ export async function insertReceiptRecord(input: {
       input.receiptSource ?? 'web_upload',
       input.sourceFileName,
       input.sourceMimeType,
+      input.contentSha256 ?? null,
       input.s3Bucket,
       input.s3Key,
       input.locale,
@@ -283,6 +287,7 @@ export async function findDuplicateReceiptForOrganisation(input: {
   workspaceContext: WorkspaceContext;
   document: NormalizedExpenseDocument;
   sourceFileName: string;
+  contentSha256?: string | null;
 }) {
   const normalizedIncomingExactFileName = normalizeExactDuplicateFileName(input.sourceFileName);
   const candidateKeys = buildDuplicateCandidateKeys({
@@ -309,6 +314,9 @@ export async function findDuplicateReceiptForOrganisation(input: {
         normalizedIncomingExactFileName &&
         normalizeExactDuplicateFileName(receipt.sourceFilename) === normalizedIncomingExactFileName
       ) {
+        return true;
+      }
+      if (contentHashesMatch(input.contentSha256, receipt.contentSha256)) {
         return true;
       }
       const existingKeys = buildDuplicateCandidateKeys(receipt);
@@ -383,6 +391,7 @@ export async function listReceipts(
       receipt_source,
       source_filename,
       source_mime_type,
+      content_sha256,
       s3_bucket,
       s3_key,
       locale,
@@ -565,6 +574,7 @@ export async function attachReceiptToClaim(input: {
       receipt_source,
       source_filename,
       source_mime_type,
+      content_sha256,
       s3_bucket,
       s3_key,
       locale,
@@ -2115,6 +2125,7 @@ async function listOrganisationWorkspaceReceiptsFromMysql(
       receipt_source,
       source_filename,
       source_mime_type,
+      content_sha256,
       s3_bucket,
       s3_key,
       locale,
@@ -2260,6 +2271,7 @@ function mapReceiptRow(row: mysql.RowDataPacket): ReceiptRow {
     receiptSource: (row.receipt_source ? String(row.receipt_source) : 'web_upload') as ReceiptRow['receiptSource'],
     sourceFilename: String(row.source_filename),
     sourceMimeType: String(row.source_mime_type),
+    contentSha256: row.content_sha256 ? String(row.content_sha256) : null,
     s3Bucket: String(row.s3_bucket),
     s3Key: String(row.s3_key),
     locale: String(row.locale),
@@ -2385,6 +2397,7 @@ function buildS3BackedReceiptRow(input: {
   receiptSource?: ReceiptSource;
   sourceFileName: string;
   sourceMimeType: string;
+  contentSha256?: string | null;
   s3Bucket: string;
   s3Key: string;
   locale: string;
@@ -2410,6 +2423,7 @@ function buildS3BackedReceiptRow(input: {
     receiptSource: input.receiptSource ?? 'web_upload',
     sourceFilename: input.sourceFileName,
     sourceMimeType: input.sourceMimeType,
+    contentSha256: input.contentSha256 ?? null,
     s3Bucket: input.s3Bucket,
     s3Key: input.s3Key,
     locale: input.locale,

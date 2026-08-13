@@ -17,6 +17,7 @@ import {
   insertReceiptRecord,
 } from '../shared/db.js';
 import { type DocumentType, type ExpenseRequestOptions, type NormalizedExpenseDocument } from '../types.js';
+import { calculateContentSha256 } from '../shared/contentHash.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
@@ -83,6 +84,7 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: { id: 
   const fileBuffer = Buffer.isBuffer(file.content) ? file.content : Buffer.from(file.content);
   const fileName = sanitizeText(file.filename) || `receipt-${Date.now()}.jpg`;
   const mimeType = sanitizeText(file.contentType) || inferMimeType(fileName);
+  const contentSha256 = calculateContentSha256(fileBuffer);
   const s3Key = buildStorageKey(user.organisationId, user.id, fileName, options);
 
   await putReceiptObject({
@@ -112,6 +114,7 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: { id: 
     workspaceContext: options.workspaceContext,
     document,
     sourceFileName: fileName,
+    contentSha256,
   });
   if (duplicateReceipt) {
     await deleteReceiptObject(s3Key);
@@ -128,6 +131,7 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: { id: 
     status: determineInitialReceiptStatus(options, document),
     sourceFileName: fileName,
     sourceMimeType: mimeType,
+    contentSha256,
     s3Bucket: awsEnv.receiptBucketName,
     s3Key,
     locale: options.locale,
@@ -204,6 +208,7 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: { id: numbe
   }
 
   const fileBuffer = await getReceiptObjectBuffer(s3Key);
+  const contentSha256 = calculateContentSha256(fileBuffer);
   const extractedDocument = options.skipProcessing
     ? buildStoredDocumentPlaceholder(fileName, options.documentType, options.workspaceContext)
     : await processExpenseBuffer({
@@ -225,6 +230,7 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: { id: numbe
     workspaceContext: options.workspaceContext,
     document,
     sourceFileName: fileName,
+    contentSha256,
   });
   if (duplicateReceipt) {
     await deleteReceiptObject(s3Key);
@@ -241,6 +247,7 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: { id: numbe
     status: determineInitialReceiptStatus(options, document),
     sourceFileName: fileName,
     sourceMimeType: mimeType,
+    contentSha256,
     s3Bucket: awsEnv.receiptBucketName,
     s3Key,
     locale: options.locale,

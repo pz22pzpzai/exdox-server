@@ -1,0 +1,22 @@
+name: Exdox production health check
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check API health endpoint
+        run: |
+          curl --fail --silent --show-error --max-time 20 \
+            --retry 2 --retry-delay 5 \
+            https://hz2zkm6jkf.execute-api.eu-west-2.amazonaws.com/prod/health
+
+      - name: Check public website
+        run: |
+          curl --fail --silent --show-error --max-time 20 \
+            --retry 2 --retry-delay 5 \
+            https://exdox.co.uk/

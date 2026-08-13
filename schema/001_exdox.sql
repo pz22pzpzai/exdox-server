@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS receipts (
   receipt_source VARCHAR(32) NOT NULL DEFAULT 'web_upload',
   source_filename VARCHAR(255) NOT NULL,
   source_mime_type VARCHAR(120) NOT NULL,
+  content_sha256 CHAR(64) NULL,
   s3_bucket VARCHAR(255) NOT NULL,
   s3_key VARCHAR(1024) NOT NULL,
   locale VARCHAR(32) NOT NULL DEFAULT 'en-GB',
@@ -144,6 +145,7 @@ ALTER TABLE receipts
   ADD COLUMN IF NOT EXISTS description TEXT NULL AFTER category,
   ADD COLUMN IF NOT EXISTS customer_name VARCHAR(255) NULL AFTER description,
   ADD COLUMN IF NOT EXISTS receipt_source VARCHAR(32) NOT NULL DEFAULT 'web_upload' AFTER customer_name,
+  ADD COLUMN IF NOT EXISTS content_sha256 CHAR(64) NULL AFTER source_mime_type,
   ADD COLUMN IF NOT EXISTS net_amount DECIMAL(12, 2) NULL AFTER total_amount,
   ADD COLUMN IF NOT EXISTS vat_amount DECIMAL(12, 2) NULL AFTER net_amount,
   ADD COLUMN IF NOT EXISTS tax_rate_applied VARCHAR(64) NULL AFTER vat_amount;
