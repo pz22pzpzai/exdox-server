@@ -2620,7 +2620,9 @@ function buildInviteLink(inviteToken: string, email: string) {
 }
 
 export function buildConfirmationEmailLink(confirmationToken: string, email: string) {
-  const base = awsEnv.confirmEmailEndpointBaseUrl.replace(/\/$/, '');
+  // Send people to the Exdox website, not directly to the API. This keeps the
+  // confirmation flow usable from any device and avoids exposing raw API output.
+  const base = awsEnv.confirmEmailBaseUrl.replace(/\/$/, '');
   const separator = base.includes('?') ? '&' : '?';
   return `${base}${separator}token=${encodeURIComponent(confirmationToken)}&email=${encodeURIComponent(email)}`;
 }
