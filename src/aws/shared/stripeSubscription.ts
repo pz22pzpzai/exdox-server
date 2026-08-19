@@ -7,6 +7,7 @@ import {
   normalizeBillingCycle,
   normalizeBillingStatus,
   normalizePlanId,
+  resolveSelfServeSubscriptionSelection,
 } from './billing.js';
 import {
   findOrganisationIdByStripeCustomerId,
@@ -75,6 +76,7 @@ export async function syncStripeSubscription(subscription: Stripe.Subscription) 
   const billingCycle = subscription.metadata.billingCycle
     ? normalizeBillingCycle(subscription.metadata.billingCycle)
     : 'monthly';
+  const allowanceSelection = resolveSubscriptionAllowance(subscription.metadata, inferredPlanId);
 
   return updateOrganisationBillingProfile({
     organisationId,
@@ -84,10 +86,28 @@ export async function syncStripeSubscription(subscription: Stripe.Subscription) 
     trialEndsAt: toIsoDate(subscription.trial_end),
     stripeCustomerId: customerId,
     stripeSubscriptionId: subscription.status === 'canceled' ? null : subscription.id,
+    ...(allowanceSelection
+      ? {
+        monthlyDocumentLimit: allowanceSelection.monthlyDocumentLimit,
+        includedUsers: allowanceSelection.includedUsers,
+      }
+      : {}),
     cancellationScheduledFor: subscription.cancel_at_period_end
       ? toIsoDate(subscription.cancel_at) ?? toIsoDate(subscription.trial_end) ?? toIsoDate(subscription.billing_cycle_anchor)
       : null,
   });
+}
+
+function resolveSubscriptionAllowance(metadata: Stripe.Metadata, planId: ReturnType<typeof normalizePlanId>) {
+  try {
+    return resolveSelfServeSubscriptionSelection({
+      planId,
+      monthlyDocumentLimit: Number(metadata.monthlyDocumentLimit),
+      includedUsers: Number(metadata.includedUsers),
+    });
+  } catch {
+    return null;
+  }
 }
 
 export async function reconcileStripeSubscription(

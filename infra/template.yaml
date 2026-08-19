@@ -529,6 +529,21 @@ Resources:
             Path: /billing/portal-session
             Method: POST
 
+  UpgradeBillingPlanFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/upgradeBillingPlan.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        UpgradeBillingPlanRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /billing/upgrade-plan
+            Method: POST
+
   DeleteAccountFunction:
     Type: AWS::Serverless::Function
     Properties:
