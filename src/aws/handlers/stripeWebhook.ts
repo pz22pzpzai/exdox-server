@@ -56,6 +56,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     return jsonResponse(200, { success: true, received: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not process Stripe webhook.';
+    const isSignatureFailure = error instanceof Stripe.errors.StripeSignatureVerificationError;
 
     // Never log the request body or Stripe signature. The request ID lets us trace
     // rejected webhook deliveries in CloudWatch without exposing payment data.
@@ -64,10 +65,12 @@ export async function handler(event: APIGatewayProxyEventV2) {
       message,
     });
 
-    return jsonResponse(400, {
+    // Stripe should retry temporary processing failures. Only a malformed or
+    // incorrectly signed request is a permanent client error.
+    return jsonResponse(isSignatureFailure ? 400 : 500, {
       success: false,
-      error: 'stripe_webhook_failed',
-      message,
+      error: isSignatureFailure ? 'stripe_webhook_signature_invalid' : 'stripe_webhook_processing_failed',
+      message: isSignatureFailure ? 'Stripe signature verification failed.' : 'Could not process Stripe webhook.',
     });
   }
 }
