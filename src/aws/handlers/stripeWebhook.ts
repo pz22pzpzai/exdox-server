@@ -56,6 +56,14 @@ export async function handler(event: APIGatewayProxyEventV2) {
     return jsonResponse(200, { success: true, received: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not process Stripe webhook.';
+
+    // Never log the request body or Stripe signature. The request ID lets us trace
+    // rejected webhook deliveries in CloudWatch without exposing payment data.
+    console.error('Stripe webhook processing failed', {
+      requestId: event.requestContext.requestId,
+      message,
+    });
+
     return jsonResponse(400, {
       success: false,
       error: 'stripe_webhook_failed',
