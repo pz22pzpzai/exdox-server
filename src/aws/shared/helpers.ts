@@ -123,6 +123,8 @@ export function readRequestOptions(input: Record<string, string | undefined>): E
     documentType: parseDocumentType(input.document_type),
     workspaceContext,
     paymentMethod: parsePaymentMethod(input.payment_method, defaultPaymentMethod),
-    skipProcessing: parseBoolean(input.skip_processing, workspaceContext === 'vault'),
+    // Vault files use the same OCR pipeline as costs and sales unless a caller
+    // explicitly requests storage without extraction.
+    skipProcessing: parseBoolean(input.skip_processing, false),
   };
 }
