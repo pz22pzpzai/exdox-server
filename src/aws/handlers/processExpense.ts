@@ -108,7 +108,12 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: { id: 
     document: vatAdjustedDocument,
     paymentMethod: options.paymentMethod,
   });
-  const document = supplierRuleOutcome.document;
+  // OCR may supply complete fields, but a cost or sales document still requires
+  // a reviewer to approve it before it can move to Ready.
+  const document =
+    options.workspaceContext === 'vault'
+      ? supplierRuleOutcome.document
+      : { ...supplierRuleOutcome.document, needsReview: true };
   const duplicateReceipt = await findDuplicateReceiptForOrganisation({
     organisationId: user.organisationId,
     workspaceContext: options.workspaceContext,
@@ -224,7 +229,12 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: { id: numbe
     document: vatAdjustedDocument,
     paymentMethod: options.paymentMethod,
   });
-  const document = supplierRuleOutcome.document;
+  // Keep JSON/direct-to-storage uploads on the same review-first workflow as
+  // multipart web and mobile uploads.
+  const document =
+    options.workspaceContext === 'vault'
+      ? supplierRuleOutcome.document
+      : { ...supplierRuleOutcome.document, needsReview: true };
   const duplicateReceipt = await findDuplicateReceiptForOrganisation({
     organisationId: user.organisationId,
     workspaceContext: options.workspaceContext,
@@ -276,7 +286,7 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: { id: numbe
 
 function determineInitialReceiptStatus(
   options: ExpenseRequestOptions,
-  document: { needsReview: boolean },
+  _document: { needsReview: boolean },
 ): 'Processing' | 'Review' | 'Ready' {
   if (options.workspaceContext === 'vault' && options.skipProcessing) {
     return 'Ready';
@@ -284,7 +294,7 @@ function determineInitialReceiptStatus(
   if (options.skipProcessing) {
     return 'Processing';
   }
-  return document.needsReview ? 'Review' : 'Ready';
+  return options.workspaceContext === 'vault' ? 'Ready' : 'Review';
 }
 
 function buildStorageKey(
