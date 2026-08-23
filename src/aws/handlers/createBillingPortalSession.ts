@@ -4,7 +4,7 @@ import Stripe from 'stripe';
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
 import { isStripeConfigured } from '../shared/billing.js';
 import { awsEnv } from '../shared/env.js';
-import { getOrganisationBillingSummary } from '../shared/db.js';
+import { getOrganisationBillingSummary, isOrganisationOwner } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { reconcileStripeSubscription } from '../shared/stripeSubscription.js';
 
@@ -12,6 +12,9 @@ export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    if (!(await isOrganisationOwner(user))) {
+      return jsonResponse(403, { success: false, error: 'owner_access_required', message: 'Only the business owner can manage billing.' });
+    }
 
     if (!isStripeConfigured() || !awsEnv.stripeSecretKey) {
       return jsonResponse(503, {

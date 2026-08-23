@@ -2,7 +2,7 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
 import { canInviteUser, getPlanLimitMessage, isBillingActive } from '../shared/billing.js';
-import { createInvite, getOrganisationBillingSummary } from '../shared/db.js';
+import { createInvite, getOrganisationBillingSummary, isOrganisationOwner, listDepartments } from '../shared/db.js';
 import { sanitizeText } from '../shared/helpers.js';
 import { jsonResponse } from '../shared/http.js';
 import { sendInviteEmail } from '../shared/inviteMail.js';
@@ -32,6 +32,10 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
     const email = sanitizeText(body.email).toLowerCase();
     const fullName = sanitizeText(body.fullName) || null;
+    const role = body.role === 'Business_Admin' ? 'Business_Admin' : 'Standard_Employee';
+    const departmentId = body.departmentId === null || body.departmentId === undefined || body.departmentId === ''
+      ? null
+      : Number(body.departmentId);
 
     if (!email) {
       return jsonResponse(400, {
@@ -49,12 +53,31 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
+    if (role === 'Business_Admin' && !(await isOrganisationOwner(user))) {
+      return jsonResponse(403, {
+        success: false,
+        error: 'owner_required',
+        message: 'Only the workspace owner can invite another business admin.',
+      });
+    }
+
+    if (departmentId !== null && (!Number.isInteger(departmentId) || departmentId <= 0)) {
+      return jsonResponse(400, { success: false, error: 'invalid_department', message: 'Choose a valid department.' });
+    }
+    if (departmentId !== null) {
+      const departments = await listDepartments(user);
+      if (!departments.some((department) => department.id === departmentId)) {
+        return jsonResponse(400, { success: false, error: 'invalid_department', message: 'Choose a department in this workspace.' });
+      }
+    }
+
     const invite = await createInvite({
       organisationId: user.organisationId,
       invitedByUserId: user.id,
       email,
       fullName,
-      role: 'Standard_Employee',
+      role,
+      departmentId,
     });
 
     let delivery: { delivered: boolean; method: string } = {

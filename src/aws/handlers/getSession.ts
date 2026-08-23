@@ -2,7 +2,7 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAuthenticatedUser, signUserToken } from '../shared/auth.js';
 import { buildEntitlements, isStripeConfigured, resolveAllowedWebRoutes } from '../shared/billing.js';
-import { findUserByEmail, getOrganisationBillingSummary, getOrganisationSettings } from '../shared/db.js';
+import { findUserByEmail, getOrganisationBillingSummary, getOrganisationSettings, isOrganisationOwner } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { hydrateBillingSummaryFromStripe } from '../shared/stripeBilling.js';
 
@@ -38,12 +38,17 @@ export async function handler(event: APIGatewayProxyEventV2) {
       await getOrganisationBillingSummary(user.organisationId),
       user.organisationId,
     );
-    const allowedWebRoutes = resolveAllowedWebRoutes(billing, user.role);
+    const isOwner = await isOrganisationOwner(user);
+    const allowedWebRoutes = resolveAllowedWebRoutes(billing, user.role)
+      .filter((route) => isOwner || route !== '/billing');
 
     return jsonResponse(200, {
       success: true,
       token: refreshedToken,
-      user,
+      user: {
+        ...user,
+        isOwner,
+      },
       organisations: [
         {
           id: organisation.organisationId,

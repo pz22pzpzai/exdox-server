@@ -526,6 +526,33 @@ Resources:
             Path: /invite
             Method: POST
 
+  TeamFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/team.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        TeamGetRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /team
+            Method: GET
+        TeamCreateDepartmentRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /team
+            Method: POST
+        TeamAssignDepartmentRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /team
+            Method: PUT
+
   GetSessionFunction:
     Type: AWS::Serverless::Function
     Properties:

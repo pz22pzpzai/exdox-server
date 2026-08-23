@@ -2,7 +2,7 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
 import { buildEntitlements, isStripeConfigured, listPlanDefinitions } from '../shared/billing.js';
-import { getOrganisationBillingSummary } from '../shared/db.js';
+import { getOrganisationBillingSummary, isOrganisationOwner } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { hydrateBillingSummaryFromStripe } from '../shared/stripeBilling.js';
 
@@ -10,6 +10,9 @@ export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    if (!(await isOrganisationOwner(user))) {
+      return jsonResponse(403, { success: false, error: 'owner_access_required', message: 'Only the business owner can view billing.' });
+    }
     const billing = await hydrateBillingSummaryFromStripe(
       await getOrganisationBillingSummary(user.organisationId),
       user.organisationId,

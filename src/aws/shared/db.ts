@@ -20,6 +20,7 @@ import {
   type BillingCycle,
   type BillingPlanId,
   type BillingStatus,
+  type DepartmentRow,
   type ExpenseClaimRow,
   type NormalizedExpenseDocument,
   type OrganisationBillingSummary,
@@ -29,6 +30,7 @@ import {
   type ReceiptRow,
   type ReceiptSource,
   type SupplierRuleRow,
+  type TeamMemberRow,
   type UserRecord,
   type UserRole,
   type WorkspaceContext,
@@ -158,9 +160,36 @@ type StoredUser = {
   status: 'pending_invite' | 'pending_confirmation' | 'active';
   inviteToken: string | null;
   invitedByUserId: number | null;
+  departmentId?: number | null;
   createdAt: string;
   emailConfirmationGraceStartedAt?: string | null;
 };
+
+let teamSchemaReady: Promise<void> | null = null;
+
+async function ensureTeamSchema() {
+  if (!pool) {
+    return;
+  }
+  teamSchemaReady ??= (async () => {
+    await pool.execute(
+      `CREATE TABLE IF NOT EXISTS departments (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        organisation_id BIGINT UNSIGNED NOT NULL,
+        name VARCHAR(120) NOT NULL,
+        manager_user_id BIGINT UNSIGNED NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_departments_org_name (organisation_id, name),
+        KEY idx_departments_org (organisation_id)
+      )`,
+    );
+    await pool.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS department_id BIGINT UNSIGNED NULL AFTER invited_by_user_id');
+    await pool.execute('ALTER TABLE users ADD INDEX IF NOT EXISTS idx_users_org_department (organisation_id, department_id)');
+  })();
+  await teamSchemaReady;
+}
 
 type StoredClaim = ExpenseClaimRow;
 
@@ -368,6 +397,7 @@ export async function listReceipts(
       });
   }
 
+  await ensureTeamSchema();
   const params: Array<string | number | null> = [user.organisationId, user.role, user.id];
   const where = ['r.organisation_id = ?', "(? = 'Business_Admin' OR r.uploaded_by_user_id = ?)"];
 
@@ -390,10 +420,14 @@ export async function listReceipts(
     `SELECT
       r.*,
       uploader.full_name AS uploaded_by_name,
-      uploader.email AS uploaded_by_email
+      uploader.email AS uploaded_by_email,
+      uploader.department_id AS uploaded_by_department_id,
+      department.name AS uploaded_by_department_name
     FROM receipts r
     LEFT JOIN users uploader
       ON uploader.id = r.uploaded_by_user_id AND uploader.organisation_id = r.organisation_id
+    LEFT JOIN departments department
+      ON department.id = uploader.department_id AND department.organisation_id = r.organisation_id
     WHERE ${where.join(' AND ')}
     ORDER BY r.created_at DESC
     LIMIT ?`,
@@ -933,10 +967,12 @@ export async function createInvite(input: {
   email: string;
   fullName?: string | null;
   role?: UserRole;
+  departmentId?: number | null;
 }): Promise<{ invitedUser: UserRecord; organisationName: string; inviteLink: string }> {
   const email = normalizeEmail(input.email);
   const fullName = normalizeName(input.fullName);
   const role = input.role === 'Business_Admin' ? 'Business_Admin' : 'Standard_Employee';
+  const departmentId = input.departmentId ?? null;
   const inviteToken = crypto.randomBytes(24).toString('hex');
 
   if (!pool) {
@@ -956,6 +992,7 @@ export async function createInvite(input: {
       status: 'pending_invite',
       inviteToken,
       invitedByUserId: input.invitedByUserId,
+      departmentId,
     });
     await putReceiptJsonObject(buildUserKey(email), user);
     return {
@@ -965,6 +1002,7 @@ export async function createInvite(input: {
     };
   }
 
+  await ensureTeamSchema();
   const [existingRows] = await pool.query<mysql.RowDataPacket[]>(`SELECT id FROM users WHERE email = ? LIMIT 1`, [email]);
   if (existingRows[0]) {
     throw duplicateUserError('An account or invite with this email already exists.');
@@ -986,11 +1024,12 @@ export async function createInvite(input: {
       full_name,
       user_role,
       status,
-      invite_token,
-      invited_by_user_id,
-      invite_sent_at
-    ) VALUES (?, ?, NULL, ?, ?, 'pending_invite', ?, ?, CURRENT_TIMESTAMP)`,
-    [input.organisationId, email, fullName, role, inviteToken, input.invitedByUserId],
+       invite_token,
+       invited_by_user_id,
+       department_id,
+       invite_sent_at
+    ) VALUES (?, ?, NULL, ?, ?, 'pending_invite', ?, ?, ?, CURRENT_TIMESTAMP)`,
+    [input.organisationId, email, fullName, role, inviteToken, input.invitedByUserId, departmentId],
   );
 
   return {
@@ -1004,10 +1043,107 @@ export async function createInvite(input: {
       passwordHash: null,
       inviteToken,
       invitedByUserId: input.invitedByUserId,
+      departmentId,
     },
     organisationName: String(organisation.name),
     inviteLink: buildInviteLink(inviteToken, email),
   };
+}
+
+export async function listDepartments(user: AuthenticatedUser): Promise<DepartmentRow[]> {
+  if (!pool) {
+    return [];
+  }
+  await ensureTeamSchema();
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT d.id, d.organisation_id, d.name, d.manager_user_id, manager.full_name AS manager_name
+     FROM departments d
+     LEFT JOIN users manager ON manager.id = d.manager_user_id AND manager.organisation_id = d.organisation_id
+     WHERE d.organisation_id = ?
+     ORDER BY d.name ASC`,
+    [user.organisationId],
+  );
+  return rows.map((row) => ({
+    id: Number(row.id),
+    organisationId: Number(row.organisation_id),
+    name: String(row.name),
+    managerUserId: row.manager_user_id === null ? null : Number(row.manager_user_id),
+    managerName: row.manager_name ? String(row.manager_name) : null,
+  }));
+}
+
+export async function createDepartment(user: AuthenticatedUser, name: string): Promise<DepartmentRow> {
+  const normalizedName = sanitizeText(name);
+  if (!normalizedName) {
+    throw validationError('Enter a department name.');
+  }
+  if (!pool) {
+    throw validationError('Department management requires the configured workspace database.');
+  }
+  await ensureTeamSchema();
+  const [result] = await pool.execute<mysql.ResultSetHeader>(
+    'INSERT INTO departments (organisation_id, name) VALUES (?, ?)',
+    [user.organisationId, normalizedName],
+  );
+  return { id: result.insertId, organisationId: user.organisationId, name: normalizedName, managerUserId: null, managerName: null };
+}
+
+export async function listTeamMembers(user: AuthenticatedUser): Promise<TeamMemberRow[]> {
+  if (!pool) {
+    return [];
+  }
+  await ensureTeamSchema();
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT u.id, u.organisation_id, u.email, u.full_name, u.user_role, u.status, u.department_id, u.invited_by_user_id,
+            d.name AS department_name
+     FROM users u
+     LEFT JOIN departments d ON d.id = u.department_id AND d.organisation_id = u.organisation_id
+     WHERE u.organisation_id = ?
+     ORDER BY u.full_name IS NULL, u.full_name ASC, u.email ASC`,
+    [user.organisationId],
+  );
+  return rows.map((row) => ({
+    id: Number(row.id),
+    organisationId: Number(row.organisation_id),
+    email: String(row.email),
+    fullName: row.full_name ? String(row.full_name) : null,
+    role: normalizeUserRole(row.user_role),
+    status: String(row.status) as TeamMemberRow['status'],
+    departmentId: row.department_id === null ? null : Number(row.department_id),
+    departmentName: row.department_name ? String(row.department_name) : null,
+    invitedByUserId: row.invited_by_user_id === null ? null : Number(row.invited_by_user_id),
+  }));
+}
+
+export async function updateTeamMemberDepartment(user: AuthenticatedUser, userId: number, departmentId: number | null) {
+  if (!pool) {
+    throw validationError('Department management requires the configured workspace database.');
+  }
+  await ensureTeamSchema();
+  if (departmentId !== null) {
+    const [departmentRows] = await pool.query<mysql.RowDataPacket[]>(
+      'SELECT id FROM departments WHERE id = ? AND organisation_id = ? LIMIT 1',
+      [departmentId, user.organisationId],
+    );
+    if (!departmentRows[0]) {
+      throw validationError('Choose a department in this workspace.');
+    }
+  }
+  const [result] = await pool.execute<mysql.ResultSetHeader>(
+    'UPDATE users SET department_id = ? WHERE id = ? AND organisation_id = ?',
+    [departmentId, userId, user.organisationId],
+  );
+  if (!result.affectedRows) {
+    throw notFoundError('Team member not found.');
+  }
+}
+
+export async function isOrganisationOwner(user: AuthenticatedUser) {
+  if (user.role !== 'Business_Admin') {
+    return false;
+  }
+  const stored = await findUserById(user.organisationId, user.id);
+  return Boolean(stored && stored.role === 'Business_Admin' && stored.invitedByUserId === null);
 }
 
 export async function activateInvitedUser(input: {
@@ -2289,6 +2425,10 @@ function mapReceiptRow(row: mysql.RowDataPacket): ReceiptRow {
     uploadedByUserId: Number(row.uploaded_by_user_id),
     uploadedByName: row.uploaded_by_name ? String(row.uploaded_by_name) : null,
     uploadedByEmail: row.uploaded_by_email ? String(row.uploaded_by_email) : null,
+    uploadedByDepartmentId: row.uploaded_by_department_id === null || row.uploaded_by_department_id === undefined
+      ? null
+      : Number(row.uploaded_by_department_id),
+    uploadedByDepartmentName: row.uploaded_by_department_name ? String(row.uploaded_by_department_name) : null,
     workspaceContext: String(row.workspace_context) as WorkspaceContext,
     paymentMethod: String(row.payment_method) as PaymentMethod,
     claimId: row.claim_id === null ? null : Number(row.claim_id),
@@ -2636,6 +2776,7 @@ function toUserRecord(user: StoredUser): UserRecord {
     passwordHash: user.passwordHash,
     inviteToken: user.inviteToken,
     invitedByUserId: user.invitedByUserId,
+    departmentId: user.departmentId ?? null,
     createdAt: user.createdAt,
     emailConfirmationGraceStartedAt: user.emailConfirmationGraceStartedAt ?? null,
   };

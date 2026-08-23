@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS users (
   status ENUM('pending_invite', 'active') NOT NULL DEFAULT 'active',
   invite_token VARCHAR(255) NULL,
   invited_by_user_id BIGINT UNSIGNED NULL,
+  department_id BIGINT UNSIGNED NULL,
   invite_sent_at TIMESTAMP NULL DEFAULT NULL,
   invitation_accepted_at TIMESTAMP NULL DEFAULT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -55,6 +56,25 @@ CREATE TABLE IF NOT EXISTS users (
   CONSTRAINT fk_users_invited_by
     FOREIGN KEY (invited_by_user_id) REFERENCES users(id)
     ON DELETE SET NULL
+);
+
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS department_id BIGINT UNSIGNED NULL AFTER invited_by_user_id,
+  ADD INDEX IF NOT EXISTS idx_users_org_department (organisation_id, department_id);
+
+CREATE TABLE IF NOT EXISTS departments (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  organisation_id BIGINT UNSIGNED NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  manager_user_id BIGINT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_departments_org_name (organisation_id, name),
+  KEY idx_departments_org (organisation_id),
+  CONSTRAINT fk_departments_organisation
+    FOREIGN KEY (organisation_id) REFERENCES organisations(id)
+    ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS expense_claims (

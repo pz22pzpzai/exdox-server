@@ -58,6 +58,8 @@ export type ReceiptRow = {
   uploadedByUserId: number;
   uploadedByName?: string | null;
   uploadedByEmail?: string | null;
+  uploadedByDepartmentId?: number | null;
+  uploadedByDepartmentName?: string | null;
   workspaceContext: WorkspaceContext;
   paymentMethod: PaymentMethod;
   claimId: number | null;
@@ -95,6 +97,26 @@ export type ReceiptRow = {
   rawTextSummary: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type DepartmentRow = {
+  id: number;
+  organisationId: number;
+  name: string;
+  managerUserId: number | null;
+  managerName?: string | null;
+};
+
+export type TeamMemberRow = {
+  id: number;
+  organisationId: number;
+  email: string;
+  fullName: string | null;
+  role: UserRole;
+  status: UserStatus;
+  departmentId: number | null;
+  departmentName: string | null;
+  invitedByUserId: number | null;
 };
 
 export type ExpenseClaimRow = {
@@ -193,6 +215,7 @@ export type UserRecord = AuthenticatedUser & {
   passwordHash: string | null;
   inviteToken: string | null;
   invitedByUserId: number | null;
+  departmentId?: number | null;
   createdAt?: string | null;
   emailConfirmationGraceStartedAt?: string | null;
 };

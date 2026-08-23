@@ -9,6 +9,7 @@ import {
   findUserByEmail,
   getOrganisationBillingSummary,
   getOrganisationName,
+  isOrganisationOwner,
 } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
@@ -166,11 +167,15 @@ export async function handler(event: APIGatewayProxyEventV2) {
       role: user.role,
       status: user.status,
     };
+    const isOwner = await isOrganisationOwner(authUser);
 
     return jsonResponse(200, {
       success: true,
       token: signUserToken(authUser),
-      user: authUser,
+      user: {
+        ...authUser,
+        isOwner,
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Login failed.';

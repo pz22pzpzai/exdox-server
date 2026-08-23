@@ -2,12 +2,16 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
 import { createSelfServeCheckoutSession } from '../shared/billingCheckout.js';
+import { isOrganisationOwner } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    if (!(await isOrganisationOwner(user))) {
+      return jsonResponse(403, { success: false, error: 'owner_access_required', message: 'Only the business owner can manage billing.' });
+    }
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
     const checkout = await createSelfServeCheckoutSession({
       user,
