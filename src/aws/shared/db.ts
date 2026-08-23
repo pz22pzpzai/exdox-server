@@ -486,8 +486,14 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
       .slice(0, limit);
 
     const allReceipts = await listReceipts(user, { limit: 500 });
-    return relevantClaims
-      .map((claim) => hydrateClaimTotals(claim, allReceipts));
+    return Promise.all(relevantClaims.map(async (claim) => {
+      const claimant = await findUserById(user.organisationId, claim.createdByUserId);
+      return {
+        ...hydrateClaimTotals(claim, allReceipts),
+        claimantName: claimant?.fullName ?? null,
+        claimantEmail: claimant?.email ?? null,
+      };
+    }));
   }
 
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
@@ -501,13 +507,16 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
       c.status,
       c.created_at,
       c.updated_at,
+      u.full_name AS claimant_name,
+      u.email AS claimant_email,
       COUNT(r.id) AS document_count,
       COALESCE(SUM(r.total_amount), 0) AS total_amount
     FROM expense_claims c
+    LEFT JOIN users u ON u.id = c.created_by_user_id AND u.organisation_id = c.organisation_id
     LEFT JOIN receipts r ON r.claim_id = c.id
     WHERE c.organisation_id = ?
       AND (? = 'Business_Admin' OR c.created_by_user_id = ?)
-    GROUP BY c.id
+    GROUP BY c.id, u.full_name, u.email
     ORDER BY c.created_at DESC
     LIMIT ?`,
     [user.organisationId, user.role, user.id, limit],
@@ -523,6 +532,8 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
     status: String(row.status) as ExpenseClaimRow['status'],
     totalAmount: Number(row.total_amount ?? 0),
     documentCount: Number(row.document_count ?? 0),
+    claimantName: row.claimant_name ? String(row.claimant_name) : null,
+    claimantEmail: row.claimant_email ? String(row.claimant_email) : null,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   }));

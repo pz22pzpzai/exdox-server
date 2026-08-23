@@ -105,6 +105,8 @@ export type ExpenseClaimRow = {
   status: 'pending' | 'approved' | 'paid' | 'rejected';
   totalAmount: number;
   documentCount: number;
+  claimantName?: string | null;
+  claimantEmail?: string | null;
   createdAt: string;
   updatedAt: string;
 };

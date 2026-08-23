@@ -313,6 +313,27 @@ Resources:
             Path: /claims/attach
             Method: POST
 
+  ExportMasterExpensesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/exportMasterExpenses.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: '*'
+      Events:
+        ExportMasterExpensesRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /claims/master-export
+            Method: POST
+
   LoginFunction:
     Type: AWS::Serverless::Function
     Properties:
