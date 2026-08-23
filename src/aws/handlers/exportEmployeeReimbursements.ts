@@ -1,7 +1,7 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
-import { findUserById, getOrganisationName, listReceipts } from '../shared/db.js';
+import { findUserById, getOrganisationName, listReceipts, updateReimbursementPaymentStatus } from '../shared/db.js';
 import { sendEmployeeReimbursementReadyEmail } from '../shared/expenseExportMail.js';
 import { jsonResponse } from '../shared/http.js';
 
@@ -19,7 +19,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
 
-    const receipts = (await listReceipts(user, { workspaceContext: 'cost', limit: 1000 }))
+    const receipts = (await listReceipts(user, { workspaceContext: 'cost', limit: 50000 }))
       .filter((receipt) => receipt.paymentMethod === 'cash_personal')
       .filter((receipt) => receipt.status === 'Ready' && !receipt.needsReview);
     const employeeIds = [...new Set(receipts.map((receipt) => receipt.uploadedByUserId))];
@@ -64,6 +64,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       organisationName,
       exportedAt,
     })));
+    const paymentProcessingCount = await updateReimbursementPaymentStatus(user, 'Ready', 'Payment processing');
 
     return jsonResponse(200, {
       success: true,
@@ -74,6 +75,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
         sent: deliveries.filter((result) => result.status === 'fulfilled').length,
         failed: deliveries.filter((result) => result.status === 'rejected').length,
       },
+      paymentProcessingCount,
     });
   } catch (error) {
     const status = typeof error === 'object' && error !== null && 'statusCode' in error

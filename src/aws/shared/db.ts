@@ -1525,7 +1525,7 @@ export async function updateReceiptById(
   >,
 ) {
   const normalizedNeedsReview =
-    updates.status === 'Ready' || updates.status === 'Published'
+    updates.status === 'Ready' || updates.status === 'Published' || updates.status === 'Payment processing' || updates.status === 'Paid'
       ? false
       : updates.status === 'Review' || updates.status === 'Processing'
         ? true
@@ -1601,6 +1601,46 @@ export async function updateReceiptById(
   );
 
   return getReceiptById(user, receiptId);
+}
+
+export async function updateReimbursementPaymentStatus(
+  user: AuthenticatedUser,
+  fromStatus: 'Ready' | 'Payment processing',
+  toStatus: 'Payment processing' | 'Paid',
+) {
+  const receipts = (await listReceipts(user, { workspaceContext: 'cost', limit: 50000 }))
+    .filter((receipt) => receipt.paymentMethod === 'cash_personal')
+    .filter((receipt) => receipt.status === fromStatus && !receipt.needsReview);
+
+  if (!receipts.length) {
+    return 0;
+  }
+
+  if (!pool) {
+    await Promise.all(receipts.map((receipt) => putReceiptJsonObject(
+      buildReceiptMetadataKey(receipt),
+      {
+        ...receipt,
+        status: toStatus,
+        needsReview: false,
+        updatedAt: new Date().toISOString(),
+      },
+    )));
+    return receipts.length;
+  }
+
+  const placeholders = receipts.map(() => '?').join(', ');
+  await pool.execute(
+    `UPDATE receipts
+     SET status = ?, needs_review = 0, updated_at = CURRENT_TIMESTAMP
+     WHERE organisation_id = ?
+       AND workspace_context = 'cost'
+       AND payment_method = 'cash_personal'
+       AND status = ?
+       AND id IN (${placeholders})`,
+    [toStatus, user.organisationId, fromStatus, ...receipts.map((receipt) => receipt.id)],
+  );
+  return receipts.length;
 }
 
 export async function deleteReceiptById(user: AuthenticatedUser, receiptId: number) {
@@ -2447,7 +2487,7 @@ function normalizeReceiptDate(invoiceDate: string | null | undefined, createdAt:
 
 function normalizeReceiptStatus(status: unknown): ReceiptRow['status'] {
   const trimmed = typeof status === 'string' ? status.trim() : '';
-  if (trimmed === 'Processing' || trimmed === 'Ready' || trimmed === 'Review' || trimmed === 'Published') {
+  if (trimmed === 'Processing' || trimmed === 'Ready' || trimmed === 'Review' || trimmed === 'Published' || trimmed === 'Payment processing' || trimmed === 'Paid') {
     return trimmed;
   }
   return 'Review';

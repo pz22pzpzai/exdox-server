@@ -355,6 +355,21 @@ Resources:
             Path: /costs/reimbursement-export
             Method: POST
 
+  MarkEmployeeReimbursementsPaidFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/markEmployeeReimbursementsPaid.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        MarkEmployeeReimbursementsPaidRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /costs/reimbursement-mark-paid
+            Method: POST
+
   LoginFunction:
     Type: AWS::Serverless::Function
     Properties:

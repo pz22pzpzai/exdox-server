@@ -1,7 +1,7 @@
 export type DocumentType = 'receipt' | 'invoice' | 'unknown';
 export type WorkspaceContext = 'cost' | 'sales' | 'vault';
 export type PaymentMethod = 'business_card' | 'cash_personal' | 'bank_transfer' | 'not_applicable';
-export type InboxStatus = 'Processing' | 'Ready' | 'Review' | 'Published';
+export type InboxStatus = 'Processing' | 'Ready' | 'Review' | 'Published' | 'Payment processing' | 'Paid';
 export type ReceiptSource = 'mobile' | 'email' | 'web_upload' | 'bank_import';
 
 export type UserRole = 'Business_Admin' | 'Standard_Employee';
