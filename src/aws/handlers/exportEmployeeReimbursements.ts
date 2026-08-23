@@ -27,7 +27,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const activeEmployees = new Map(
       employees
         .filter((employee): employee is NonNullable<typeof employee> => Boolean(employee))
-        .filter((employee) => employee.role === 'Standard_Employee' && employee.status === 'active')
+        .filter((employee) => employee.status === 'active')
         .map((employee) => [employee.id, employee]),
     );
     const summaries = new Map<number, EmployeeReimbursementSummary>();
