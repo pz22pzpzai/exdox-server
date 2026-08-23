@@ -50,3 +50,40 @@ export async function sendExpenseExportSummaryEmail(input: {
     }),
   );
 }
+
+export async function sendEmployeeReimbursementReadyEmail(input: {
+  toEmail: string;
+  fullName: string | null;
+  organisationName: string;
+  exportedAt: string;
+}) {
+  const recipientName = input.fullName || input.toEmail;
+
+  await ses.send(
+    new SendEmailCommand({
+      FromEmailAddress: awsEnv.inviteEmailFrom,
+      Destination: { ToAddresses: [input.toEmail] },
+      Content: {
+        Simple: {
+          Subject: { Data: `Your expense reimbursement is being processed | ${input.organisationName}` },
+          Body: {
+            Text: {
+              Data: [
+                `Hi ${recipientName},`,
+                '',
+                `Your approved expenses were included in the reimbursement payment summary prepared by ${input.organisationName} on ${input.exportedAt}.`,
+                '',
+                'Your reimbursement is now with the finance team for payment processing.',
+                '',
+                'Sign in to Exdox to view your expense claims and their current payment status.',
+                '',
+                'Thanks,',
+                'The Exdox team',
+              ].join('\n'),
+            },
+          },
+        },
+      },
+    }),
+  );
+}
