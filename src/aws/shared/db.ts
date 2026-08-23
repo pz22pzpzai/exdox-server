@@ -343,6 +343,8 @@ export async function listReceipts(
     const prefix = buildReceiptListPrefix(user, workspaceContext);
     const keys = await listReceiptJsonKeys(prefix, Math.max(limit * 4, 50));
     const receipts = await Promise.all(keys.map((key) => getReceiptJsonObject<ReceiptRow>(key)));
+    const users = await listS3UsersForOrganisation(user.organisationId);
+    const usersById = new Map(users.map((candidate) => [candidate.id, candidate]));
     return receipts
       .filter((receipt) => filterReceiptForUser(receipt, user))
       .filter((receipt) => (workspaceContext ? receipt.workspaceContext === workspaceContext : true))
@@ -355,72 +357,45 @@ export async function listReceipts(
       )
       .filter((receipt) => (claimId !== null ? receipt.claimId === claimId : true))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-      .slice(0, limit);
+      .slice(0, limit)
+      .map((receipt) => {
+        const uploader = usersById.get(receipt.uploadedByUserId);
+        return {
+          ...receipt,
+          uploadedByName: uploader?.fullName ?? null,
+          uploadedByEmail: uploader?.email ?? null,
+        };
+      });
   }
 
   const params: Array<string | number | null> = [user.organisationId, user.role, user.id];
-  const where = ['organisation_id = ?', "(? = 'Business_Admin' OR uploaded_by_user_id = ?)"];
+  const where = ['r.organisation_id = ?', "(? = 'Business_Admin' OR r.uploaded_by_user_id = ?)"];
 
   if (workspaceContext) {
-    where.push('workspace_context = ?');
+    where.push('r.workspace_context = ?');
     params.push(workspaceContext);
   }
   if (onlyClaimable) {
-    where.push("workspace_context = 'cost'");
-    where.push("payment_method = 'cash_personal'");
-    where.push('claim_id IS NULL');
+    where.push("r.workspace_context = 'cost'");
+    where.push("r.payment_method = 'cash_personal'");
+    where.push('r.claim_id IS NULL');
   }
   if (claimId !== null) {
-    where.push('claim_id = ?');
+    where.push('r.claim_id = ?');
     params.push(claimId);
   }
   params.push(limit);
 
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
     `SELECT
-      id,
-      organisation_id,
-      uploaded_by_user_id,
-      workspace_context,
-      payment_method,
-      claim_id,
-      status,
-      category,
-      description,
-      customer_name,
-      receipt_source,
-      source_filename,
-      source_mime_type,
-      content_sha256,
-      s3_bucket,
-      s3_key,
-      locale,
-      document_type,
-      vendor_name,
-      invoice_date,
-      due_date,
-      invoice_number,
-      currency,
-      total_amount,
-      net_amount,
-      vat_amount,
-      tax_rate_applied,
-      subtotal_amount,
-      total_tax_amount,
-      confidence_score,
-      confidence_source,
-      needs_review,
-      extraction_provider,
-      extraction_model,
-      line_items,
-      tax_breakdown,
-      notes,
-      raw_text_summary,
-      created_at,
-      updated_at
-    FROM receipts
+      r.*,
+      uploader.full_name AS uploaded_by_name,
+      uploader.email AS uploaded_by_email
+    FROM receipts r
+    LEFT JOIN users uploader
+      ON uploader.id = r.uploaded_by_user_id AND uploader.organisation_id = r.organisation_id
     WHERE ${where.join(' AND ')}
-    ORDER BY created_at DESC
+    ORDER BY r.created_at DESC
     LIMIT ?`,
     params,
   );
@@ -2272,6 +2247,8 @@ function mapReceiptRow(row: mysql.RowDataPacket): ReceiptRow {
     id: Number(row.id),
     organisationId: Number(row.organisation_id),
     uploadedByUserId: Number(row.uploaded_by_user_id),
+    uploadedByName: row.uploaded_by_name ? String(row.uploaded_by_name) : null,
+    uploadedByEmail: row.uploaded_by_email ? String(row.uploaded_by_email) : null,
     workspaceContext: String(row.workspace_context) as WorkspaceContext,
     paymentMethod: String(row.payment_method) as PaymentMethod,
     claimId: row.claim_id === null ? null : Number(row.claim_id),

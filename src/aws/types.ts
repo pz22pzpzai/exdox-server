@@ -56,6 +56,8 @@ export type ReceiptRow = {
   id: number;
   organisationId: number;
   uploadedByUserId: number;
+  uploadedByName?: string | null;
+  uploadedByEmail?: string | null;
   workspaceContext: WorkspaceContext;
   paymentMethod: PaymentMethod;
   claimId: number | null;
