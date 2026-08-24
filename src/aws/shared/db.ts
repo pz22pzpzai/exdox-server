@@ -1450,6 +1450,7 @@ export async function getOrganisationSettings(organisationId: number): Promise<O
     return {
       organisationId: organisation.id,
       organisationName: organisation.name,
+      baseCurrency: organisation.baseCurrency?.trim().toUpperCase() || 'GBP',
       isVatRegistered: (organisation as StoredOrganisation & { isVatRegistered?: boolean }).isVatRegistered !== false,
       defaultTaxRate:
         (organisation as StoredOrganisation & { defaultTaxRateCosts?: string }).defaultTaxRateCosts || '20% Standard',
@@ -1457,7 +1458,7 @@ export async function getOrganisationSettings(organisationId: number): Promise<O
   }
 
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
-    `SELECT id, name, is_vat_registered, default_tax_rate_costs
+    `SELECT id, name, base_currency, is_vat_registered, default_tax_rate_costs
      FROM organisations
      WHERE id = ?
      LIMIT 1`,
@@ -1471,6 +1472,7 @@ export async function getOrganisationSettings(organisationId: number): Promise<O
   return {
     organisationId: Number(row.id),
     organisationName: String(row.name),
+    baseCurrency: row.base_currency ? String(row.base_currency).trim().toUpperCase() : 'GBP',
     isVatRegistered: row.is_vat_registered == null ? true : Boolean(row.is_vat_registered),
     defaultTaxRate: row.default_tax_rate_costs ? String(row.default_tax_rate_costs) : '20% Standard',
   };
@@ -1550,6 +1552,7 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
 
 export async function updateOrganisationSettings(input: {
   organisationId: number;
+  baseCurrency?: string;
   isVatRegistered: boolean;
   defaultTaxRate: string;
 }) {
@@ -1557,6 +1560,7 @@ export async function updateOrganisationSettings(input: {
     const organisation = await getS3Organisation(input.organisationId);
     const next = {
       ...organisation,
+      baseCurrency: normalizeCurrencyCode(input.baseCurrency ?? organisation.baseCurrency ?? 'GBP'),
       isVatRegistered: input.isVatRegistered,
       defaultTaxRateCosts: sanitizeText(input.defaultTaxRate) || '20% Standard',
     };
@@ -1566,9 +1570,9 @@ export async function updateOrganisationSettings(input: {
 
   await pool.execute(
     `UPDATE organisations
-     SET is_vat_registered = ?, default_tax_rate_costs = ?, updated_at = CURRENT_TIMESTAMP
+     SET base_currency = ?, is_vat_registered = ?, default_tax_rate_costs = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
-    [input.isVatRegistered ? 1 : 0, sanitizeText(input.defaultTaxRate) || '20% Standard', input.organisationId],
+    [normalizeCurrencyCode(input.baseCurrency ?? 'GBP'), input.isVatRegistered ? 1 : 0, sanitizeText(input.defaultTaxRate) || '20% Standard', input.organisationId],
   );
 
   return getOrganisationSettings(input.organisationId);
@@ -1670,9 +1674,10 @@ export async function updateReceiptById(
   user: AuthenticatedUser,
   receiptId: number,
   updates: Partial<
-    Pick<ReceiptRow, 'vendorName' | 'invoiceDate' | 'dueDate' | 'invoiceNumber' | 'category' | 'description' | 'customer' | 'netAmount' | 'vatAmount' | 'totalAmount' | 'taxRateApplied' | 'status'>
+    Pick<ReceiptRow, 'vendorName' | 'invoiceDate' | 'dueDate' | 'invoiceNumber' | 'category' | 'description' | 'customer' | 'currency' | 'netAmount' | 'vatAmount' | 'totalAmount' | 'taxRateApplied' | 'status' | 'baseCurrency' | 'exchangeRate' | 'exchangeRateDate' | 'exchangeRateProvider' | 'baseTotalAmount' | 'exchangeRateOverride' | 'exchangeRateNote'>
   >,
 ) {
+  const existing = await getReceiptById(user, receiptId);
   const normalizedNeedsReview =
     updates.status === 'Ready' || updates.status === 'Published' || updates.status === 'Payment processing' || updates.status === 'Paid'
       ? false
@@ -1681,7 +1686,6 @@ export async function updateReceiptById(
         : undefined;
 
   if (!pool) {
-    const existing = await getReceiptById(user, receiptId);
     const taxProfile = await getOrganisationTaxProfile(user.organisationId);
     const next = {
       ...existing,
@@ -1695,6 +1699,13 @@ export async function updateReceiptById(
         },
         taxProfile,
       ),
+      baseCurrency: updates.baseCurrency ?? existing.baseCurrency,
+      exchangeRate: updates.exchangeRate ?? existing.exchangeRate,
+      exchangeRateDate: updates.exchangeRateDate ?? existing.exchangeRateDate,
+      exchangeRateProvider: updates.exchangeRateProvider ?? existing.exchangeRateProvider,
+      baseTotalAmount: updates.baseTotalAmount ?? existing.baseTotalAmount,
+      exchangeRateOverride: updates.exchangeRateOverride ?? existing.exchangeRateOverride,
+      exchangeRateNote: updates.exchangeRateNote ?? existing.exchangeRateNote,
       needsReview: normalizedNeedsReview ?? existing.needsReview,
       updatedAt: new Date().toISOString(),
     };
@@ -1726,6 +1737,14 @@ export async function updateReceiptById(
          vat_amount = ?,
          total_amount = ?,
          tax_rate_applied = ?,
+         currency = ?,
+         base_currency = ?,
+         exchange_rate = ?,
+         exchange_rate_date = ?,
+         exchange_rate_provider = ?,
+         base_total_amount = ?,
+         exchange_rate_override = ?,
+         exchange_rate_note = ?,
          status = ?,
          needs_review = ?,
          updated_at = CURRENT_TIMESTAMP
@@ -1742,6 +1761,14 @@ export async function updateReceiptById(
       normalizedVatValues.vatAmount ?? null,
       normalizedVatValues.totalAmount ?? null,
       normalizedVatValues.taxRateApplied ?? null,
+      updates.currency ?? existing.currency,
+      updates.baseCurrency ?? existing.baseCurrency,
+      updates.exchangeRate ?? existing.exchangeRate,
+      updates.exchangeRateDate ?? existing.exchangeRateDate,
+      updates.exchangeRateProvider ?? existing.exchangeRateProvider,
+      updates.baseTotalAmount ?? existing.baseTotalAmount,
+      (updates.exchangeRateOverride ?? existing.exchangeRateOverride) ? 1 : 0,
+      updates.exchangeRateNote ?? existing.exchangeRateNote,
       updates.status ?? 'Review',
       normalizedNeedsReview ?? true,
       receiptId,
@@ -1750,6 +1777,11 @@ export async function updateReceiptById(
   );
 
   return getReceiptById(user, receiptId);
+}
+
+function normalizeCurrencyCode(value: string) {
+  const currency = sanitizeText(value).toUpperCase();
+  return /^[A-Z]{3}$/.test(currency) ? currency : 'GBP';
 }
 
 export async function saveReceiptExchangeRate(input: {
@@ -2382,7 +2414,7 @@ function hydrateClaimTotals(claim: StoredClaim, receipts: ReceiptRow[]): Expense
   const attached = receipts.filter((receipt) => receipt.claimId === claim.id);
   return {
     ...claim,
-    totalAmount: attached.reduce((sum, receipt) => sum + (receipt.totalAmount ?? 0), 0),
+    totalAmount: attached.reduce((sum, receipt) => sum + (receipt.baseTotalAmount ?? receipt.totalAmount ?? 0), 0),
     documentCount: attached.length,
   };
 }

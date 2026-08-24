@@ -43,10 +43,10 @@ export async function handler(event: APIGatewayProxyEventV2) {
         employeeEmail: employee.email,
         approvedExpenseCount: 0,
         totalReimbursement: 0,
-        currency: receipt.currency || 'GBP',
+        currency: receipt.baseCurrency || 'GBP',
       };
       current.approvedExpenseCount += 1;
-      current.totalReimbursement += receipt.totalAmount ?? receipt.netAmount ?? 0;
+      current.totalReimbursement += receipt.baseTotalAmount ?? receipt.totalAmount ?? receipt.netAmount ?? 0;
       summaries.set(employee.id, current);
     }
 

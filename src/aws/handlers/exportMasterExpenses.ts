@@ -1,7 +1,7 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
-import { findUserById, getOrganisationName, listExpenseClaims } from '../shared/db.js';
+import { findUserById, getOrganisationBaseCurrency, getOrganisationName, listExpenseClaims, listReceipts } from '../shared/db.js';
 import { sendExpenseExportSummaryEmail } from '../shared/expenseExportMail.js';
 import { jsonResponse } from '../shared/http.js';
 
@@ -26,6 +26,10 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const approvedClaims = (await listExpenseClaims(user, 500))
       .filter((claim) => claim.status === 'approved' || claim.status === 'paid')
       .filter((claim) => !selectedEmployeeIds || selectedEmployeeIds.has(claim.createdByUserId));
+    const [baseCurrency, costReceipts] = await Promise.all([
+      getOrganisationBaseCurrency(user.organisationId),
+      listReceipts(user, { workspaceContext: 'cost', limit: 50000 }),
+    ]);
     const summaries = new Map<number, EmployeeSummary>();
 
     for (const claim of approvedClaims) {
@@ -40,11 +44,15 @@ export async function handler(event: APIGatewayProxyEventV2) {
         approvedClaimCount: 0,
         approvedDocumentCount: 0,
         totalAmount: 0,
-        currency: claim.currency || 'GBP',
+        currency: baseCurrency,
       };
+      const attachedReceipts = costReceipts.filter((receipt) => receipt.claimId === claim.id);
       current.approvedClaimCount += 1;
-      current.approvedDocumentCount += claim.documentCount;
-      current.totalAmount += claim.totalAmount;
+      current.approvedDocumentCount += attachedReceipts.length;
+      current.totalAmount += attachedReceipts.reduce(
+        (total, receipt) => total + (receipt.baseTotalAmount ?? receipt.totalAmount ?? 0),
+        0,
+      );
       summaries.set(claimant.id, current);
     }
 

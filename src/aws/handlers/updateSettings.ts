@@ -12,6 +12,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
     const settings = await updateOrganisationSettings({
       organisationId: user.organisationId,
+      baseCurrency: sanitizeText(body.baseCurrency) || 'GBP',
       isVatRegistered: parseBoolean(String(body.isVatRegistered ?? 'false'), false),
       defaultTaxRate: sanitizeText(body.defaultTaxRate) || 'No VAT',
     });

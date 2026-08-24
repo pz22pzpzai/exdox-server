@@ -197,6 +197,7 @@ export type ReconciliationCandidate = Pick<
 export type OrganisationSettings = {
   organisationId: number;
   organisationName: string;
+  baseCurrency: string;
   isVatRegistered: boolean;
   defaultTaxRate: string;
 };

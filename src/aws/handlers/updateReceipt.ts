@@ -1,6 +1,6 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
-import { requireAuthenticatedUser } from '../shared/auth.js';
+import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
 import { assertWorkspaceAccess } from '../shared/billing.js';
 import { getOrganisationBillingSummary, getReceiptById, updateReceiptById } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
@@ -24,6 +24,33 @@ export async function handler(event: APIGatewayProxyEventV2) {
       getReceiptById(user, receiptId),
     ]);
     assertWorkspaceAccess(billing, existingReceipt.workspaceContext);
+    const requestedRate = toNumber(body.exchangeRate);
+    const sourceCurrency = sanitizeText(body.currency || existingReceipt.currency || 'GBP').toUpperCase();
+    const baseCurrency = sanitizeText(body.baseCurrency || existingReceipt.baseCurrency || 'GBP').toUpperCase();
+    if (requestedRate !== null && requestedRate <= 0) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'invalid_exchange_rate',
+        message: 'The exchange rate must be greater than zero.',
+      });
+    }
+    const useManualSettlementRate =
+      (body.exchangeRateOverride === true || body.exchangeRateProvider === 'manual_settlement') &&
+      requestedRate !== null &&
+      sourceCurrency !== baseCurrency;
+    if (useManualSettlementRate) {
+      requireAdminUser(user);
+    }
+    const grossTotal = toNumber(body.totalAmount) ?? existingReceipt.totalAmount;
+    const effectiveRate = useManualSettlementRate ? requestedRate : existingReceipt.exchangeRate;
+    const baseTotalAmount =
+      grossTotal === null
+        ? null
+        : sourceCurrency === baseCurrency
+          ? grossTotal
+          : effectiveRate === null
+            ? existingReceipt.baseTotalAmount
+            : Number((grossTotal * effectiveRate).toFixed(2));
     const receipt = await updateReceiptById(user, receiptId, {
       vendorName: sanitizeText(body.vendorName) || null,
       invoiceDate: sanitizeText(body.invoiceDate) || null,
@@ -32,11 +59,23 @@ export async function handler(event: APIGatewayProxyEventV2) {
       category: sanitizeText(body.category) || null,
       description: sanitizeText(body.description) || null,
       customer: sanitizeText(body.customer) || null,
+      currency: sourceCurrency,
       netAmount: toNumber(body.netAmount),
       vatAmount: toNumber(body.vatAmount),
       totalAmount: toNumber(body.totalAmount),
       taxRateApplied: sanitizeText(body.taxRateApplied) || null,
       status: sanitizeText(body.status) as never,
+      baseCurrency,
+      exchangeRate: useManualSettlementRate ? requestedRate : existingReceipt.exchangeRate,
+      exchangeRateDate: useManualSettlementRate
+        ? sanitizeText(body.exchangeRateDate) || existingReceipt.invoiceDate || new Date().toISOString().slice(0, 10)
+        : existingReceipt.exchangeRateDate,
+      exchangeRateProvider: useManualSettlementRate ? 'manual_settlement' : existingReceipt.exchangeRateProvider,
+      baseTotalAmount,
+      exchangeRateOverride: useManualSettlementRate,
+      exchangeRateNote: useManualSettlementRate
+        ? sanitizeText(body.exchangeRateNote) || 'Manual settlement rate supplied by a business admin.'
+        : existingReceipt.exchangeRateNote,
     });
 
     return jsonResponse(200, {
