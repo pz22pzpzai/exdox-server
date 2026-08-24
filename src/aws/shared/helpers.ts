@@ -73,6 +73,15 @@ export function normalizeDateString(value: unknown) {
 
 export function normalizeCurrencyCode(value: unknown) {
   const text = sanitizeText(value).toUpperCase();
+  if (text === '£' || text === 'GBP' || text === 'POUND' || text === 'POUNDS' || text === 'POUND STERLING') {
+    return 'GBP';
+  }
+  if (text === '€' || text === 'EUR' || text === 'EURO' || text === 'EUROS') {
+    return 'EUR';
+  }
+  if (text === '$' || text === 'US$' || text === 'USD' || text === 'US DOLLAR' || text === 'US DOLLARS') {
+    return 'USD';
+  }
   return /^[A-Z]{3}$/.test(text) ? text : null;
 }
 

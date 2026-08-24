@@ -192,7 +192,7 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     'Never set suggested_uk_tax_rate from merchant type, merchant brand, item category, or general business knowledge alone.',
     'If subtotal is not clearly visible, return subtotal_amount as the same value as net_amount when net_amount is known, otherwise null.',
     'If tax is not clearly visible, return total_tax_amount as the same value as vat_amount when vat_amount is known, otherwise null.',
-    'Use the printed currency symbol or currency code on the document when visible. Convert symbols to ISO code, for example £ to GBP, $ to USD, and € to EUR.',
+    'Currency detection is mandatory whenever a monetary amount is visible. Use the printed symbol or currency code and return the ISO code: £ = GBP, $ or US$ = USD, and € = EUR. Never assume GBP merely because the workspace is in the UK.',
     'The vendor name must come from the document itself, usually the top header or merchant branding. Never invent a workspace name or a filename-based name.',
     'The invoice number must be a literal printed reference number from the document, not a filename or timestamp.',
     'When total_amount is not null, total_evidence_text must contain the exact visible total label and amount snippet from the document.',
@@ -421,7 +421,14 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
     typeof source.document_type === 'string' ? source.document_type : requestedDocumentType,
   );
   const vendorName = normalizeVendorName(source.vendor_name);
-  const currency = normalizeCurrencyValue(source.currency, source.raw_text_summary);
+  const currency = normalizeCurrencyValue(
+    source.currency,
+    source.raw_text_summary,
+    source.total_evidence_text,
+    source.vat_evidence_text,
+    source.vat_rate_evidence_text,
+    source.notes,
+  );
   const extractedTotalAmount = toNumber(source.total_amount);
   const explicitVatAmount = toNumber(source.vat_amount);
   const explicitNetAmount = toNumber(source.net_amount);
@@ -1007,21 +1014,25 @@ function normalizeInvoiceNumber(value: unknown) {
   return text;
 }
 
-function normalizeCurrencyValue(currency: unknown, summary: unknown) {
+function normalizeCurrencyValue(currency: unknown, ...evidence: unknown[]) {
   const normalized = normalizeCurrencyCode(currency);
   if (normalized) {
     return normalized;
   }
 
-  const summaryText = normalizeFreeText(summary);
-  if (summaryText.includes('£')) {
-    return 'GBP';
+  const evidenceText = evidence
+    .flatMap((value) => Array.isArray(value) ? value : [value])
+    .map((value) => normalizeFreeText(value) || '')
+    .join(' ')
+    .toUpperCase();
+  if (/(?:US\s?\$|\$|USD|US DOLLARS?)/.test(evidenceText)) {
+    return 'USD';
   }
-  if (summaryText.includes('€')) {
+  if (/(?:€|EUR|EUROS?)/.test(evidenceText)) {
     return 'EUR';
   }
-  if (summaryText.includes('$')) {
-    return 'USD';
+  if (/(?:£|GBP|POUNDS?(?:\s+STERLING)?)/.test(evidenceText)) {
+    return 'GBP';
   }
 
   return null;
