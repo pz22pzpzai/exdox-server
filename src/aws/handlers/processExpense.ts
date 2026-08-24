@@ -13,10 +13,13 @@ import {
   duplicateReceiptError,
   findDuplicateReceiptForOrganisation,
   getOrganisationBillingSummary,
+  getOrganisationBaseCurrency,
   getOrganisationTaxProfile,
   insertReceiptRecord,
+  saveReceiptExchangeRate,
 } from '../shared/db.js';
-import { type DocumentType, type ExpenseRequestOptions, type NormalizedExpenseDocument } from '../types.js';
+import { getHistoricalExchangeRate } from '../shared/exchangeRates.js';
+import { type AuthenticatedUser, type DocumentType, type ExpenseRequestOptions, type NormalizedExpenseDocument } from '../types.js';
 import { calculateContentSha256 } from '../shared/contentHash.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
@@ -42,7 +45,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
   }
 }
 
-async function processMultipartEvent(event: APIGatewayProxyEventV2, user: { id: number; organisationId: number }) {
+async function processMultipartEvent(event: APIGatewayProxyEventV2, user: AuthenticatedUser) {
   const parsed = await multipart.parse(event as never);
   const file = parsed.files?.[0];
 
@@ -146,6 +149,23 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: { id: 
     document,
   });
 
+  const baseCurrency = await getOrganisationBaseCurrency(user.organisationId);
+  const sourceCurrency = document.currency?.trim().toUpperCase() || baseCurrency;
+  const exchangeRate = sourceCurrency === baseCurrency
+    ? { rate: 1, rateDate: document.invoiceDate ?? new Date().toISOString().slice(0, 10), provider: 'same_currency' as const }
+    : await getHistoricalExchangeRate({ fromCurrency: sourceCurrency, toCurrency: baseCurrency, documentDate: document.invoiceDate });
+  if (exchangeRate) {
+    await saveReceiptExchangeRate({
+      user,
+      receiptId,
+      baseCurrency,
+      exchangeRate: exchangeRate.rate,
+      exchangeRateDate: exchangeRate.rateDate,
+      exchangeRateProvider: exchangeRate.provider,
+      baseTotalAmount: document.totalAmount === null ? null : Number((document.totalAmount * exchangeRate.rate).toFixed(2)),
+    });
+  }
+
   return jsonResponse(200, {
     success: true,
     receiptId,
@@ -163,7 +183,7 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: { id: 
   });
 }
 
-async function processJsonEvent(event: APIGatewayProxyEventV2, user: { id: number; organisationId: number }) {
+async function processJsonEvent(event: APIGatewayProxyEventV2, user: AuthenticatedUser) {
   const payload = event.body ? (JSON.parse(event.body) as Record<string, string | undefined>) : {};
   const s3Key = sanitizeText(payload.s3Key);
 

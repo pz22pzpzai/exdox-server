@@ -136,6 +136,7 @@ async function buildIamAuthToken() {
 type StoredOrganisation = {
   id: number;
   name: string;
+  baseCurrency?: string;
   isVatRegistered?: boolean;
   defaultTaxRateCosts?: string;
   billingPlan?: BillingPlanId;
@@ -1431,6 +1432,18 @@ export async function getOrganisationTaxProfile(organisationId: number) {
   };
 }
 
+export async function getOrganisationBaseCurrency(organisationId: number) {
+  if (!pool) {
+    const organisation = await getS3Organisation(organisationId);
+    return organisation.baseCurrency?.trim().toUpperCase() || 'GBP';
+  }
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    'SELECT base_currency FROM organisations WHERE id = ? LIMIT 1',
+    [organisationId],
+  );
+  return rows[0]?.base_currency ? String(rows[0].base_currency).trim().toUpperCase() : 'GBP';
+}
+
 export async function getOrganisationSettings(organisationId: number): Promise<OrganisationSettings> {
   if (!pool) {
     const organisation = await getS3Organisation(organisationId);
@@ -1737,6 +1750,41 @@ export async function updateReceiptById(
   );
 
   return getReceiptById(user, receiptId);
+}
+
+export async function saveReceiptExchangeRate(input: {
+  user: AuthenticatedUser;
+  receiptId: number;
+  baseCurrency: string;
+  exchangeRate: number;
+  exchangeRateDate: string;
+  exchangeRateProvider: string;
+  baseTotalAmount: number | null;
+}) {
+  if (!pool) {
+    const receipt = await getReceiptById(input.user, input.receiptId);
+    const next = {
+      ...receipt,
+      baseCurrency: input.baseCurrency,
+      exchangeRate: input.exchangeRate,
+      exchangeRateDate: input.exchangeRateDate,
+      exchangeRateProvider: input.exchangeRateProvider,
+      baseTotalAmount: input.baseTotalAmount,
+      exchangeRateOverride: false,
+      updatedAt: new Date().toISOString(),
+    };
+    await putReceiptJsonObject(buildReceiptMetadataKey(next), next);
+    return next;
+  }
+
+  await pool.execute(
+    `UPDATE receipts
+     SET base_currency = ?, exchange_rate = ?, exchange_rate_date = ?, exchange_rate_provider = ?,
+         base_total_amount = ?, exchange_rate_override = 0, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND organisation_id = ?`,
+    [input.baseCurrency, input.exchangeRate, input.exchangeRateDate, input.exchangeRateProvider, input.baseTotalAmount, input.receiptId, input.user.organisationId],
+  );
+  return getReceiptById(input.user, input.receiptId);
 }
 
 export async function updateReimbursementPaymentStatus(
@@ -2449,6 +2497,13 @@ function mapReceiptRow(row: mysql.RowDataPacket): ReceiptRow {
     dueDate: row.due_date ? new Date(row.due_date).toISOString().slice(0, 10) : null,
     invoiceNumber: row.invoice_number,
     currency: row.currency,
+    baseCurrency: row.base_currency ? String(row.base_currency) : 'GBP',
+    exchangeRate: toDbNumber(row.exchange_rate),
+    exchangeRateDate: row.exchange_rate_date ? new Date(row.exchange_rate_date).toISOString().slice(0, 10) : null,
+    exchangeRateProvider: row.exchange_rate_provider ? String(row.exchange_rate_provider) : null,
+    baseTotalAmount: toDbNumber(row.base_total_amount),
+    exchangeRateOverride: Boolean(row.exchange_rate_override),
+    exchangeRateNote: row.exchange_rate_note ? String(row.exchange_rate_note) : null,
     totalAmount: toDbNumber(row.total_amount),
     netAmount: toDbNumber(row.net_amount) ?? toDbNumber(row.subtotal_amount),
     vatAmount: toDbNumber(row.vat_amount) ?? toDbNumber(row.total_tax_amount),
@@ -2601,6 +2656,13 @@ function buildS3BackedReceiptRow(input: {
     dueDate: input.document.dueDate,
     invoiceNumber: input.document.invoiceNumber,
     currency: input.document.currency,
+    baseCurrency: 'GBP',
+    exchangeRate: null,
+    exchangeRateDate: null,
+    exchangeRateProvider: null,
+    baseTotalAmount: null,
+    exchangeRateOverride: false,
+    exchangeRateNote: null,
     totalAmount: input.document.totalAmount,
     netAmount: input.document.netAmount,
     vatAmount: input.document.vatAmount,

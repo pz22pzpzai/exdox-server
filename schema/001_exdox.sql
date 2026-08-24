@@ -4,6 +4,7 @@ USE receiptflow;
 CREATE TABLE IF NOT EXISTS organisations (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   name VARCHAR(255) NOT NULL,
+  base_currency CHAR(3) NOT NULL DEFAULT 'GBP',
   is_vat_registered TINYINT(1) NOT NULL DEFAULT 0,
   default_tax_rate_costs VARCHAR(64) NOT NULL DEFAULT 'No VAT',
   billing_plan VARCHAR(32) NOT NULL DEFAULT 'legacy',
@@ -20,6 +21,7 @@ CREATE TABLE IF NOT EXISTS organisations (
 );
 
 ALTER TABLE organisations
+  ADD COLUMN IF NOT EXISTS base_currency CHAR(3) NOT NULL DEFAULT 'GBP' AFTER name,
   ADD COLUMN IF NOT EXISTS is_vat_registered TINYINT(1) NOT NULL DEFAULT 0 AFTER name,
   ADD COLUMN IF NOT EXISTS default_tax_rate_costs VARCHAR(64) NOT NULL DEFAULT 'No VAT' AFTER is_vat_registered,
   ADD COLUMN IF NOT EXISTS billing_plan VARCHAR(32) NOT NULL DEFAULT 'legacy' AFTER default_tax_rate_costs,
@@ -122,6 +124,13 @@ CREATE TABLE IF NOT EXISTS receipts (
   due_date DATE NULL,
   invoice_number VARCHAR(120) NULL,
   currency CHAR(3) NULL,
+  base_currency CHAR(3) NOT NULL DEFAULT 'GBP',
+  exchange_rate DECIMAL(18, 8) NULL,
+  exchange_rate_date DATE NULL,
+  exchange_rate_provider VARCHAR(64) NULL,
+  base_total_amount DECIMAL(12, 2) NULL,
+  exchange_rate_override TINYINT(1) NOT NULL DEFAULT 0,
+  exchange_rate_note VARCHAR(500) NULL,
   total_amount DECIMAL(12, 2) NULL,
   net_amount DECIMAL(12, 2) NULL,
   vat_amount DECIMAL(12, 2) NULL,
@@ -166,6 +175,13 @@ ALTER TABLE receipts
   ADD COLUMN IF NOT EXISTS customer_name VARCHAR(255) NULL AFTER description,
   ADD COLUMN IF NOT EXISTS receipt_source VARCHAR(32) NOT NULL DEFAULT 'web_upload' AFTER customer_name,
   ADD COLUMN IF NOT EXISTS content_sha256 CHAR(64) NULL AFTER source_mime_type,
+  ADD COLUMN IF NOT EXISTS base_currency CHAR(3) NOT NULL DEFAULT 'GBP' AFTER currency,
+  ADD COLUMN IF NOT EXISTS exchange_rate DECIMAL(18, 8) NULL AFTER base_currency,
+  ADD COLUMN IF NOT EXISTS exchange_rate_date DATE NULL AFTER exchange_rate,
+  ADD COLUMN IF NOT EXISTS exchange_rate_provider VARCHAR(64) NULL AFTER exchange_rate_date,
+  ADD COLUMN IF NOT EXISTS base_total_amount DECIMAL(12, 2) NULL AFTER total_amount,
+  ADD COLUMN IF NOT EXISTS exchange_rate_override TINYINT(1) NOT NULL DEFAULT 0 AFTER base_total_amount,
+  ADD COLUMN IF NOT EXISTS exchange_rate_note VARCHAR(500) NULL AFTER exchange_rate_override,
   ADD COLUMN IF NOT EXISTS net_amount DECIMAL(12, 2) NULL AFTER total_amount,
   ADD COLUMN IF NOT EXISTS vat_amount DECIMAL(12, 2) NULL AFTER net_amount,
   ADD COLUMN IF NOT EXISTS tax_rate_applied VARCHAR(64) NULL AFTER vat_amount;
