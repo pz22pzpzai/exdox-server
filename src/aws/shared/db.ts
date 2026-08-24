@@ -1556,11 +1556,13 @@ export async function updateOrganisationSettings(input: {
   isVatRegistered: boolean;
   defaultTaxRate: string;
 }) {
+  const existingSettings = await getOrganisationSettings(input.organisationId);
+  const baseCurrency = normalizeCurrencyCode(input.baseCurrency ?? existingSettings.baseCurrency);
   if (!pool) {
     const organisation = await getS3Organisation(input.organisationId);
     const next = {
       ...organisation,
-      baseCurrency: normalizeCurrencyCode(input.baseCurrency ?? organisation.baseCurrency ?? 'GBP'),
+      baseCurrency,
       isVatRegistered: input.isVatRegistered,
       defaultTaxRateCosts: sanitizeText(input.defaultTaxRate) || '20% Standard',
     };
@@ -1572,7 +1574,7 @@ export async function updateOrganisationSettings(input: {
     `UPDATE organisations
      SET base_currency = ?, is_vat_registered = ?, default_tax_rate_costs = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
-    [normalizeCurrencyCode(input.baseCurrency ?? 'GBP'), input.isVatRegistered ? 1 : 0, sanitizeText(input.defaultTaxRate) || '20% Standard', input.organisationId],
+    [baseCurrency, input.isVatRegistered ? 1 : 0, sanitizeText(input.defaultTaxRate) || '20% Standard', input.organisationId],
   );
 
   return getOrganisationSettings(input.organisationId);
