@@ -149,22 +149,7 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
     document,
   });
 
-  const baseCurrency = await getOrganisationBaseCurrency(user.organisationId);
-  const sourceCurrency = document.currency?.trim().toUpperCase() || baseCurrency;
-  const exchangeRate = sourceCurrency === baseCurrency
-    ? { rate: 1, rateDate: document.invoiceDate ?? new Date().toISOString().slice(0, 10), provider: 'same_currency' as const }
-    : await getHistoricalExchangeRate({ fromCurrency: sourceCurrency, toCurrency: baseCurrency, documentDate: document.invoiceDate });
-  if (exchangeRate) {
-    await saveReceiptExchangeRate({
-      user,
-      receiptId,
-      baseCurrency,
-      exchangeRate: exchangeRate.rate,
-      exchangeRateDate: exchangeRate.rateDate,
-      exchangeRateProvider: exchangeRate.provider,
-      baseTotalAmount: document.totalAmount === null ? null : Number((document.totalAmount * exchangeRate.rate).toFixed(2)),
-    });
-  }
+  const convertedDocument = await applyReceiptCurrencyConversion(user, receiptId, document);
 
   return jsonResponse(200, {
     success: true,
@@ -179,7 +164,7 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
       model: awsEnv.openAiModel,
     },
     options,
-    document,
+    document: convertedDocument,
   });
 }
 
@@ -286,6 +271,7 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
     rawExtractionJson: extractedDocument,
     document,
   });
+  const convertedDocument = await applyReceiptCurrencyConversion(user, receiptId, document);
 
   return jsonResponse(200, {
     success: true,
@@ -300,8 +286,46 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
       model: awsEnv.openAiModel,
     },
     options,
-    document,
+    document: convertedDocument,
   });
+}
+
+async function applyReceiptCurrencyConversion(
+  user: AuthenticatedUser,
+  receiptId: number,
+  document: NormalizedExpenseDocument,
+) {
+  const baseCurrency = await getOrganisationBaseCurrency(user.organisationId);
+  const sourceCurrency = document.currency?.trim().toUpperCase() || baseCurrency;
+  const exchangeRate = sourceCurrency === baseCurrency
+    ? { rate: 1, rateDate: document.invoiceDate ?? new Date().toISOString().slice(0, 10), provider: 'same_currency' as const }
+    : await getHistoricalExchangeRate({ fromCurrency: sourceCurrency, toCurrency: baseCurrency, documentDate: document.invoiceDate });
+  const baseTotalAmount =
+    exchangeRate && document.totalAmount !== null ? Number((document.totalAmount * exchangeRate.rate).toFixed(2)) : null;
+
+  if (exchangeRate) {
+    await saveReceiptExchangeRate({
+      user,
+      receiptId,
+      baseCurrency,
+      exchangeRate: exchangeRate.rate,
+      exchangeRateDate: exchangeRate.rateDate,
+      exchangeRateProvider: exchangeRate.provider,
+      baseTotalAmount,
+    });
+  }
+
+  return {
+    ...document,
+    currency: sourceCurrency,
+    baseCurrency,
+    exchangeRate: exchangeRate?.rate ?? null,
+    exchangeRateDate: exchangeRate?.rateDate ?? null,
+    exchangeRateProvider: exchangeRate?.provider ?? null,
+    baseTotalAmount,
+    exchangeRateOverride: false,
+    exchangeRateNote: null,
+  };
 }
 
 function determineInitialReceiptStatus(
