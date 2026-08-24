@@ -5,6 +5,7 @@ import { assertWorkspaceAccess } from '../shared/billing.js';
 import { getOrganisationBillingSummary, getReceiptById, updateReceiptById } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText, toNumber } from '../shared/helpers.js';
+import { getHistoricalExchangeRate } from '../shared/exchangeRates.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
@@ -41,8 +42,28 @@ export async function handler(event: APIGatewayProxyEventV2) {
     if (useManualSettlementRate) {
       requireAdminUser(user);
     }
+    const currencyChanged = sourceCurrency !== (existingReceipt.currency ?? existingReceipt.baseCurrency ?? 'GBP').toUpperCase();
+    const automaticExchangeRate =
+      !useManualSettlementRate && sourceCurrency === baseCurrency && currencyChanged
+        ? { rate: 1, rateDate: sanitizeText(body.invoiceDate) || existingReceipt.invoiceDate || new Date().toISOString().slice(0, 10), provider: 'same_currency' as const }
+        : !useManualSettlementRate && sourceCurrency !== baseCurrency && (currencyChanged || existingReceipt.exchangeRate === null)
+          ? await getHistoricalExchangeRate({
+              fromCurrency: sourceCurrency,
+              toCurrency: baseCurrency,
+              documentDate: sanitizeText(body.invoiceDate) || existingReceipt.invoiceDate,
+            })
+          : null;
+    if (currencyChanged && sourceCurrency !== baseCurrency && !automaticExchangeRate && !useManualSettlementRate) {
+      return jsonResponse(502, {
+        success: false,
+        error: 'exchange_rate_unavailable',
+        message: 'Could not retrieve the historical exchange rate. Please try saving again.',
+      });
+    }
     const grossTotal = toNumber(body.totalAmount) ?? existingReceipt.totalAmount;
-    const effectiveRate = useManualSettlementRate ? requestedRate : existingReceipt.exchangeRate;
+    const effectiveRate = useManualSettlementRate
+      ? requestedRate
+      : automaticExchangeRate?.rate ?? existingReceipt.exchangeRate;
     const baseTotalAmount =
       grossTotal === null
         ? null
@@ -66,11 +87,13 @@ export async function handler(event: APIGatewayProxyEventV2) {
       taxRateApplied: sanitizeText(body.taxRateApplied) || null,
       status: sanitizeText(body.status) as never,
       baseCurrency,
-      exchangeRate: useManualSettlementRate ? requestedRate : existingReceipt.exchangeRate,
+      exchangeRate: useManualSettlementRate ? requestedRate : automaticExchangeRate?.rate ?? existingReceipt.exchangeRate,
       exchangeRateDate: useManualSettlementRate
         ? sanitizeText(body.exchangeRateDate) || existingReceipt.invoiceDate || new Date().toISOString().slice(0, 10)
-        : existingReceipt.exchangeRateDate,
-      exchangeRateProvider: useManualSettlementRate ? 'manual_settlement' : existingReceipt.exchangeRateProvider,
+        : automaticExchangeRate?.rateDate ?? existingReceipt.exchangeRateDate,
+      exchangeRateProvider: useManualSettlementRate
+        ? 'manual_settlement'
+        : automaticExchangeRate?.provider ?? existingReceipt.exchangeRateProvider,
       baseTotalAmount,
       exchangeRateOverride: useManualSettlementRate,
       exchangeRateNote: useManualSettlementRate
