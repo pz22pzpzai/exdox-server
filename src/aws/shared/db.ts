@@ -167,6 +167,7 @@ type StoredUser = {
 };
 
 let teamSchemaReady: Promise<void> | null = null;
+let receiptTaxTreatmentSchemaReady: Promise<void> | null = null;
 
 async function ensureTeamSchema() {
   if (!pool) {
@@ -190,6 +191,18 @@ async function ensureTeamSchema() {
     await pool.execute('ALTER TABLE users ADD INDEX IF NOT EXISTS idx_users_org_department (organisation_id, department_id)');
   })();
   await teamSchemaReady;
+}
+
+async function ensureReceiptTaxTreatmentSchema() {
+  if (!pool) {
+    return;
+  }
+  receiptTaxTreatmentSchemaReady ??= (async () => {
+    await pool.execute('ALTER TABLE receipts ADD COLUMN IF NOT EXISTS foreign_tax_amount DECIMAL(12, 2) NULL AFTER total_tax_amount');
+    await pool.execute('ALTER TABLE receipts ADD COLUMN IF NOT EXISTS foreign_tax_label VARCHAR(120) NULL AFTER foreign_tax_amount');
+    await pool.execute("ALTER TABLE receipts ADD COLUMN IF NOT EXISTS uk_vat_treatment VARCHAR(64) NOT NULL DEFAULT 'not_applicable' AFTER foreign_tax_label");
+  })();
+  await receiptTaxTreatmentSchemaReady;
 }
 
 type StoredClaim = ExpenseClaimRow;
@@ -222,6 +235,8 @@ export async function insertReceiptRecord(input: {
     await putReceiptJsonObject(metadataKey, record);
     return record.id;
   }
+
+  await ensureReceiptTaxTreatmentSchema();
 
   const createdAt = new Date().toISOString();
   const fallbackInvoiceDate = normalizeReceiptDate(input.document.invoiceDate, createdAt);
@@ -256,6 +271,9 @@ export async function insertReceiptRecord(input: {
       tax_rate_applied,
       subtotal_amount,
       total_tax_amount,
+      foreign_tax_amount,
+      foreign_tax_label,
+      uk_vat_treatment,
       confidence_score,
       confidence_source,
       needs_review,
@@ -266,7 +284,7 @@ export async function insertReceiptRecord(input: {
       notes,
       raw_text_summary,
       raw_extraction_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
     [
       input.organisationId,
       input.uploadedByUserId,
@@ -296,6 +314,9 @@ export async function insertReceiptRecord(input: {
       input.document.taxRateApplied,
       input.document.subtotalAmount,
       input.document.totalTaxAmount,
+      input.document.foreignTaxAmount ?? null,
+      input.document.foreignTaxLabel ?? null,
+      input.document.ukVatTreatment ?? 'not_applicable',
       input.document.confidenceScore,
       input.document.confidenceSource,
       input.document.needsReview ? 1 : 0,
@@ -1676,7 +1697,7 @@ export async function updateReceiptById(
   user: AuthenticatedUser,
   receiptId: number,
   updates: Partial<
-    Pick<ReceiptRow, 'vendorName' | 'invoiceDate' | 'dueDate' | 'invoiceNumber' | 'category' | 'description' | 'customer' | 'currency' | 'netAmount' | 'vatAmount' | 'totalAmount' | 'taxRateApplied' | 'status' | 'baseCurrency' | 'exchangeRate' | 'exchangeRateDate' | 'exchangeRateProvider' | 'baseTotalAmount' | 'exchangeRateOverride' | 'exchangeRateNote'>
+    Pick<ReceiptRow, 'vendorName' | 'invoiceDate' | 'dueDate' | 'invoiceNumber' | 'category' | 'description' | 'customer' | 'currency' | 'netAmount' | 'vatAmount' | 'totalAmount' | 'taxRateApplied' | 'status' | 'baseCurrency' | 'exchangeRate' | 'exchangeRateDate' | 'exchangeRateProvider' | 'baseTotalAmount' | 'exchangeRateOverride' | 'exchangeRateNote' | 'foreignTaxAmount' | 'foreignTaxLabel' | 'ukVatTreatment'>
   >,
 ) {
   const existing = await getReceiptById(user, receiptId);
@@ -1716,6 +1737,7 @@ export async function updateReceiptById(
   }
 
   const taxProfile = await getOrganisationTaxProfile(user.organisationId);
+  await ensureReceiptTaxTreatmentSchema();
   const normalizedVatValues = applyVatTrackingPreferenceToReceiptValues(
     {
       totalAmount: updates.totalAmount ?? null,
@@ -1747,6 +1769,9 @@ export async function updateReceiptById(
          base_total_amount = ?,
          exchange_rate_override = ?,
          exchange_rate_note = ?,
+         foreign_tax_amount = ?,
+         foreign_tax_label = ?,
+         uk_vat_treatment = ?,
          status = ?,
          needs_review = ?,
          updated_at = CURRENT_TIMESTAMP
@@ -1771,6 +1796,9 @@ export async function updateReceiptById(
       updates.baseTotalAmount ?? existing.baseTotalAmount,
       (updates.exchangeRateOverride ?? existing.exchangeRateOverride) ? 1 : 0,
       updates.exchangeRateNote ?? existing.exchangeRateNote,
+      updates.foreignTaxAmount ?? existing.foreignTaxAmount,
+      updates.foreignTaxLabel ?? existing.foreignTaxLabel,
+      updates.ukVatTreatment ?? existing.ukVatTreatment,
       updates.status ?? 'Review',
       normalizedNeedsReview ?? true,
       receiptId,
@@ -2544,6 +2572,9 @@ function mapReceiptRow(row: mysql.RowDataPacket): ReceiptRow {
     taxRateApplied: row.tax_rate_applied ? String(row.tax_rate_applied) : null,
     subtotalAmount: toDbNumber(row.subtotal_amount),
     totalTaxAmount: toDbNumber(row.total_tax_amount),
+    foreignTaxAmount: toDbNumber(row.foreign_tax_amount),
+    foreignTaxLabel: row.foreign_tax_label ? String(row.foreign_tax_label) : null,
+    ukVatTreatment: normalizeUkVatTreatment(row.uk_vat_treatment, row.currency),
     confidenceScore: toDbNumber(row.confidence_score),
     confidenceSource: row.confidence_source,
     needsReview: Boolean(row.needs_review),
@@ -2703,6 +2734,9 @@ function buildS3BackedReceiptRow(input: {
     taxRateApplied: input.document.taxRateApplied,
     subtotalAmount: input.document.subtotalAmount,
     totalTaxAmount: input.document.totalTaxAmount,
+    foreignTaxAmount: input.document.foreignTaxAmount ?? null,
+    foreignTaxLabel: input.document.foreignTaxLabel ?? null,
+    ukVatTreatment: input.document.ukVatTreatment ?? 'not_applicable',
     confidenceScore: input.document.confidenceScore,
     confidenceSource: input.document.confidenceSource,
     needsReview: input.document.needsReview,
@@ -2727,6 +2761,21 @@ function normalizeReceiptStatus(status: unknown): ReceiptRow['status'] {
     return trimmed;
   }
   return 'Review';
+}
+
+function normalizeUkVatTreatment(value: unknown, sourceCurrency: unknown): ReceiptRow['ukVatTreatment'] {
+  const treatment = typeof value === 'string' ? value.trim() : '';
+  if (
+    treatment === 'not_applicable' ||
+    treatment === 'no_uk_vat_to_reclaim' ||
+    treatment === 'uk_vat_included' ||
+    treatment === 'reverse_charge_required' ||
+    treatment === 'import_vat' ||
+    treatment === 'accountant_review'
+  ) {
+    return treatment;
+  }
+  return String(sourceCurrency ?? 'GBP').toUpperCase() === 'GBP' ? 'not_applicable' : 'no_uk_vat_to_reclaim';
 }
 
 function buildReceiptMetadataKey(record: ReceiptRow) {

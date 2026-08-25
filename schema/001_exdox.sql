@@ -137,6 +137,9 @@ CREATE TABLE IF NOT EXISTS receipts (
   tax_rate_applied VARCHAR(64) NULL,
   subtotal_amount DECIMAL(12, 2) NULL,
   total_tax_amount DECIMAL(12, 2) NULL,
+  foreign_tax_amount DECIMAL(12, 2) NULL,
+  foreign_tax_label VARCHAR(120) NULL,
+  uk_vat_treatment VARCHAR(64) NOT NULL DEFAULT 'not_applicable',
   confidence_score DECIMAL(6, 4) NULL,
   confidence_source ENUM('model_self_assessment', 'unavailable') NOT NULL DEFAULT 'unavailable',
   needs_review TINYINT(1) NOT NULL DEFAULT 1,
@@ -184,7 +187,10 @@ ALTER TABLE receipts
   ADD COLUMN IF NOT EXISTS exchange_rate_note VARCHAR(500) NULL AFTER exchange_rate_override,
   ADD COLUMN IF NOT EXISTS net_amount DECIMAL(12, 2) NULL AFTER total_amount,
   ADD COLUMN IF NOT EXISTS vat_amount DECIMAL(12, 2) NULL AFTER net_amount,
-  ADD COLUMN IF NOT EXISTS tax_rate_applied VARCHAR(64) NULL AFTER vat_amount;
+  ADD COLUMN IF NOT EXISTS tax_rate_applied VARCHAR(64) NULL AFTER vat_amount,
+  ADD COLUMN IF NOT EXISTS foreign_tax_amount DECIMAL(12, 2) NULL AFTER total_tax_amount,
+  ADD COLUMN IF NOT EXISTS foreign_tax_label VARCHAR(120) NULL AFTER foreign_tax_amount,
+  ADD COLUMN IF NOT EXISTS uk_vat_treatment VARCHAR(64) NOT NULL DEFAULT 'not_applicable' AFTER foreign_tax_label;
 
 CREATE TABLE IF NOT EXISTS supplier_rules (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

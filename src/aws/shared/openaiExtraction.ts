@@ -622,6 +622,24 @@ export function applyVatRegistrationRules(
   document: NormalizedExpenseDocument,
   taxProfile: { isVatRegistered: boolean; defaultTaxRateCosts?: string | null },
 ): NormalizedExpenseDocument {
+  const sourceCurrency = sanitizeText(document.currency).toUpperCase();
+  if (sourceCurrency && sourceCurrency !== 'GBP') {
+    const foreignTaxAmount = document.foreignTaxAmount ?? document.totalTaxAmount ?? document.vatAmount;
+    return {
+      ...document,
+      // A foreign sales tax amount is retained for audit, but it is not UK input VAT.
+      netAmount: document.totalAmount,
+      vatAmount: 0,
+      taxRateApplied: 'No VAT',
+      subtotalAmount: document.totalAmount,
+      totalTaxAmount: 0,
+      foreignTaxAmount,
+      foreignTaxLabel: document.foreignTaxLabel ?? (foreignTaxAmount === null ? null : 'Foreign tax'),
+      ukVatTreatment: document.ukVatTreatment ?? 'no_uk_vat_to_reclaim',
+      notes: [...document.notes, 'Foreign tax retained separately. Confirm the UK VAT treatment during review.'],
+    };
+  }
+
   if (!taxProfile.isVatRegistered) {
     return {
       ...document,
@@ -630,6 +648,9 @@ export function applyVatRegistrationRules(
       taxRateApplied: 'No VAT',
       subtotalAmount: document.totalAmount,
       totalTaxAmount: 0,
+      foreignTaxAmount: null,
+      foreignTaxLabel: null,
+      ukVatTreatment: 'not_applicable',
       taxBreakdown: [],
       notes: [...document.notes, 'VAT set to No VAT because the organisation is not VAT registered.'],
     };
@@ -647,6 +668,9 @@ export function applyVatRegistrationRules(
     taxRateApplied: document.taxRateApplied ?? normalizeUkTaxRate(taxProfile.defaultTaxRateCosts),
     subtotalAmount: document.subtotalAmount ?? netAmount,
     totalTaxAmount: document.totalTaxAmount ?? vatAmount,
+    foreignTaxAmount: null,
+    foreignTaxLabel: null,
+    ukVatTreatment: document.ukVatTreatment ?? (vatAmount && vatAmount > 0 ? 'uk_vat_included' : 'not_applicable'),
   };
 }
 

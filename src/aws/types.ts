@@ -7,6 +7,13 @@ export type ReceiptSource = 'mobile' | 'email' | 'web_upload' | 'bank_import';
 export type UserRole = 'Business_Admin' | 'Standard_Employee';
 export type UserStatus = 'pending_invite' | 'pending_confirmation' | 'active';
 export type UkTaxRate = '20% Standard' | '5% Reduced' | '0% Zero' | 'Exempt' | 'No VAT';
+export type UkVatTreatment =
+  | 'not_applicable'
+  | 'no_uk_vat_to_reclaim'
+  | 'uk_vat_included'
+  | 'reverse_charge_required'
+  | 'import_vat'
+  | 'accountant_review';
 export type BillingPlanId = 'capture' | 'control' | 'operations' | 'enterprise' | 'legacy';
 export type BillingStatus = 'trialing' | 'active' | 'past_due' | 'canceled' | 'inactive' | 'legacy';
 export type BillingCycle = 'monthly' | 'annual' | 'custom';
@@ -39,6 +46,9 @@ export type NormalizedExpenseDocument = {
   taxRateApplied: UkTaxRate | string | null;
   subtotalAmount: number | null;
   totalTaxAmount: number | null;
+  foreignTaxAmount?: number | null;
+  foreignTaxLabel?: string | null;
+  ukVatTreatment?: UkVatTreatment;
   documentType: DocumentType;
   confidenceScore: number | null;
   confidenceSource: 'model_self_assessment' | 'unavailable';
@@ -100,6 +110,9 @@ export type ReceiptRow = {
   taxRateApplied: UkTaxRate | string | null;
   subtotalAmount: number | null;
   totalTaxAmount: number | null;
+  foreignTaxAmount: number | null;
+  foreignTaxLabel: string | null;
+  ukVatTreatment: UkVatTreatment;
   confidenceScore: number | null;
   confidenceSource: 'model_self_assessment' | 'unavailable';
   needsReview: boolean;

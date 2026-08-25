@@ -7,6 +7,15 @@ import { jsonResponse } from '../shared/http.js';
 import { sanitizeText, toNumber } from '../shared/helpers.js';
 import { getHistoricalExchangeRate } from '../shared/exchangeRates.js';
 
+const ukVatTreatments = new Set([
+  'not_applicable',
+  'no_uk_vat_to_reclaim',
+  'uk_vat_included',
+  'reverse_charge_required',
+  'import_vat',
+  'accountant_review',
+]);
+
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
@@ -25,6 +34,18 @@ export async function handler(event: APIGatewayProxyEventV2) {
       getReceiptById(user, receiptId),
     ]);
     assertWorkspaceAccess(billing, existingReceipt.workspaceContext);
+    const hasTaxTreatmentUpdate = ['foreignTaxAmount', 'foreignTaxLabel', 'ukVatTreatment'].some((key) => Object.prototype.hasOwnProperty.call(body, key));
+    if (hasTaxTreatmentUpdate) {
+      requireAdminUser(user);
+    }
+    const requestedUkVatTreatment = sanitizeText(body.ukVatTreatment);
+    if (requestedUkVatTreatment && !ukVatTreatments.has(requestedUkVatTreatment)) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'invalid_uk_vat_treatment',
+        message: 'Select a valid UK VAT treatment.',
+      });
+    }
     const requestedRate = toNumber(body.exchangeRate);
     const sourceCurrency = sanitizeText(body.currency || existingReceipt.currency || 'GBP').toUpperCase();
     const baseCurrency = sanitizeText(body.baseCurrency || existingReceipt.baseCurrency || 'GBP').toUpperCase();
@@ -99,6 +120,13 @@ export async function handler(event: APIGatewayProxyEventV2) {
       exchangeRateNote: useManualSettlementRate
         ? sanitizeText(body.exchangeRateNote) || 'Manual settlement rate supplied by a business admin.'
         : existingReceipt.exchangeRateNote,
+      foreignTaxAmount: Object.prototype.hasOwnProperty.call(body, 'foreignTaxAmount')
+        ? toNumber(body.foreignTaxAmount)
+        : existingReceipt.foreignTaxAmount,
+      foreignTaxLabel: Object.prototype.hasOwnProperty.call(body, 'foreignTaxLabel')
+        ? sanitizeText(body.foreignTaxLabel) || null
+        : existingReceipt.foreignTaxLabel,
+      ukVatTreatment: requestedUkVatTreatment as typeof existingReceipt.ukVatTreatment || existingReceipt.ukVatTreatment,
     });
 
     return jsonResponse(200, {
