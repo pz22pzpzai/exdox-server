@@ -140,6 +140,8 @@ CREATE TABLE IF NOT EXISTS receipts (
   foreign_tax_amount DECIMAL(12, 2) NULL,
   foreign_tax_label VARCHAR(120) NULL,
   uk_vat_treatment VARCHAR(64) NOT NULL DEFAULT 'not_applicable',
+  reimbursement_batch_id CHAR(36) NULL,
+  reimbursement_batch_created_at DATETIME NULL,
   confidence_score DECIMAL(6, 4) NULL,
   confidence_source ENUM('model_self_assessment', 'unavailable') NOT NULL DEFAULT 'unavailable',
   needs_review TINYINT(1) NOT NULL DEFAULT 1,
@@ -190,7 +192,9 @@ ALTER TABLE receipts
   ADD COLUMN IF NOT EXISTS tax_rate_applied VARCHAR(64) NULL AFTER vat_amount,
   ADD COLUMN IF NOT EXISTS foreign_tax_amount DECIMAL(12, 2) NULL AFTER total_tax_amount,
   ADD COLUMN IF NOT EXISTS foreign_tax_label VARCHAR(120) NULL AFTER foreign_tax_amount,
-  ADD COLUMN IF NOT EXISTS uk_vat_treatment VARCHAR(64) NOT NULL DEFAULT 'not_applicable' AFTER foreign_tax_label;
+  ADD COLUMN IF NOT EXISTS uk_vat_treatment VARCHAR(64) NOT NULL DEFAULT 'not_applicable' AFTER foreign_tax_label,
+  ADD COLUMN IF NOT EXISTS reimbursement_batch_id CHAR(36) NULL AFTER uk_vat_treatment,
+  ADD COLUMN IF NOT EXISTS reimbursement_batch_created_at DATETIME NULL AFTER reimbursement_batch_id;
 
 CREATE TABLE IF NOT EXISTS supplier_rules (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

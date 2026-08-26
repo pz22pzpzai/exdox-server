@@ -113,6 +113,8 @@ export type ReceiptRow = {
   foreignTaxAmount: number | null;
   foreignTaxLabel: string | null;
   ukVatTreatment: UkVatTreatment;
+  reimbursementBatchId: string | null;
+  reimbursementBatchCreatedAt: string | null;
   confidenceScore: number | null;
   confidenceSource: 'model_self_assessment' | 'unavailable';
   needsReview: boolean;

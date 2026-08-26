@@ -1,4 +1,5 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
+import { randomUUID } from 'node:crypto';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
 import { findUserById, getOrganisationName, listReceipts, updateReimbursementPaymentStatus } from '../shared/db.js';
@@ -64,7 +65,10 @@ export async function handler(event: APIGatewayProxyEventV2) {
       organisationName,
       exportedAt,
     })));
-    const paymentProcessingCount = await updateReimbursementPaymentStatus(user, 'Ready', 'Payment processing');
+    const paymentProcessingCount = await updateReimbursementPaymentStatus(user, 'Ready', 'Payment processing', {
+      id: randomUUID(),
+      createdAt: new Date().toISOString(),
+    });
 
     return jsonResponse(200, {
       success: true,

@@ -201,6 +201,8 @@ async function ensureReceiptTaxTreatmentSchema() {
     await pool.execute('ALTER TABLE receipts ADD COLUMN IF NOT EXISTS foreign_tax_amount DECIMAL(12, 2) NULL AFTER total_tax_amount');
     await pool.execute('ALTER TABLE receipts ADD COLUMN IF NOT EXISTS foreign_tax_label VARCHAR(120) NULL AFTER foreign_tax_amount');
     await pool.execute("ALTER TABLE receipts ADD COLUMN IF NOT EXISTS uk_vat_treatment VARCHAR(64) NOT NULL DEFAULT 'not_applicable' AFTER foreign_tax_label");
+    await pool.execute('ALTER TABLE receipts ADD COLUMN IF NOT EXISTS reimbursement_batch_id CHAR(36) NULL AFTER uk_vat_treatment');
+    await pool.execute('ALTER TABLE receipts ADD COLUMN IF NOT EXISTS reimbursement_batch_created_at DATETIME NULL AFTER reimbursement_batch_id');
   })();
   await receiptTaxTreatmentSchemaReady;
 }
@@ -1853,6 +1855,10 @@ export async function updateReimbursementPaymentStatus(
   user: AuthenticatedUser,
   fromStatus: 'Ready' | 'Payment processing',
   toStatus: 'Payment processing' | 'Paid',
+  reimbursementBatch?: {
+    id: string;
+    createdAt: string;
+  },
 ) {
   const receipts = (await listReceipts(user, { workspaceContext: 'cost', limit: 50000 }))
     .filter((receipt) => receipt.paymentMethod === 'cash_personal')
@@ -1862,6 +1868,8 @@ export async function updateReimbursementPaymentStatus(
     return 0;
   }
 
+  const updatedAt = new Date().toISOString();
+
   if (!pool) {
     await Promise.all(receipts.map((receipt) => putReceiptJsonObject(
       buildReceiptMetadataKey(receipt),
@@ -1869,22 +1877,36 @@ export async function updateReimbursementPaymentStatus(
         ...receipt,
         status: toStatus,
         needsReview: false,
-        updatedAt: new Date().toISOString(),
+        reimbursementBatchId: reimbursementBatch?.id ?? receipt.reimbursementBatchId ?? null,
+        reimbursementBatchCreatedAt: reimbursementBatch?.createdAt ?? receipt.reimbursementBatchCreatedAt ?? null,
+        updatedAt,
       },
     )));
     return receipts.length;
   }
 
+  await ensureReceiptTaxTreatmentSchema();
   const placeholders = receipts.map(() => '?').join(', ');
   await pool.execute(
     `UPDATE receipts
-     SET status = ?, needs_review = 0, updated_at = CURRENT_TIMESTAMP
+     SET status = ?,
+         needs_review = 0,
+         reimbursement_batch_id = COALESCE(?, reimbursement_batch_id),
+         reimbursement_batch_created_at = COALESCE(?, reimbursement_batch_created_at),
+         updated_at = CURRENT_TIMESTAMP
      WHERE organisation_id = ?
        AND workspace_context = 'cost'
        AND payment_method = 'cash_personal'
        AND status = ?
        AND id IN (${placeholders})`,
-    [toStatus, user.organisationId, fromStatus, ...receipts.map((receipt) => receipt.id)],
+    [
+      toStatus,
+      reimbursementBatch?.id ?? null,
+      reimbursementBatch?.createdAt ?? null,
+      user.organisationId,
+      fromStatus,
+      ...receipts.map((receipt) => receipt.id),
+    ],
   );
   return receipts.length;
 }
@@ -2575,6 +2597,10 @@ function mapReceiptRow(row: mysql.RowDataPacket): ReceiptRow {
     foreignTaxAmount: toDbNumber(row.foreign_tax_amount),
     foreignTaxLabel: row.foreign_tax_label ? String(row.foreign_tax_label) : null,
     ukVatTreatment: normalizeUkVatTreatment(row.uk_vat_treatment, row.currency),
+    reimbursementBatchId: row.reimbursement_batch_id ? String(row.reimbursement_batch_id) : null,
+    reimbursementBatchCreatedAt: row.reimbursement_batch_created_at
+      ? new Date(row.reimbursement_batch_created_at).toISOString()
+      : null,
     confidenceScore: toDbNumber(row.confidence_score),
     confidenceSource: row.confidence_source,
     needsReview: Boolean(row.needs_review),
@@ -2737,6 +2763,8 @@ function buildS3BackedReceiptRow(input: {
     foreignTaxAmount: input.document.foreignTaxAmount ?? null,
     foreignTaxLabel: input.document.foreignTaxLabel ?? null,
     ukVatTreatment: input.document.ukVatTreatment ?? 'not_applicable',
+    reimbursementBatchId: null,
+    reimbursementBatchCreatedAt: null,
     confidenceScore: input.document.confidenceScore,
     confidenceSource: input.document.confidenceSource,
     needsReview: input.document.needsReview,
