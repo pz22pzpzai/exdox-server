@@ -32,28 +32,49 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const rawBody = Buffer.from(event.body, event.isBase64Encoded ? 'base64' : 'utf8');
     const stripeEvent = stripe.webhooks.constructEvent(rawBody, stripeSignature, awsEnv.stripeWebhookSecret);
 
-    switch (stripeEvent.type) {
-      case 'checkout.session.completed': {
-        const session = stripeEvent.data.object as Stripe.Checkout.Session;
-        const subscriptionId = typeof session.subscription === 'string' ? session.subscription : session.subscription?.id;
-        if (subscriptionId) {
-          const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-          await syncStripeSubscription(subscription);
+    try {
+      switch (stripeEvent.type) {
+        case 'checkout.session.completed': {
+          const session = stripeEvent.data.object as Stripe.Checkout.Session;
+          const subscriptionId = typeof session.subscription === 'string' ? session.subscription : session.subscription?.id;
+          if (subscriptionId) {
+            const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+            await syncStripeSubscription(subscription);
+          }
+          break;
         }
-        break;
+        case 'customer.subscription.created':
+        case 'customer.subscription.updated':
+        case 'customer.subscription.deleted': {
+          const subscription = stripeEvent.data.object as Stripe.Subscription;
+          await syncStripeSubscription(subscription);
+          break;
+        }
+        default:
+          break;
       }
-      case 'customer.subscription.created':
-      case 'customer.subscription.updated':
-      case 'customer.subscription.deleted': {
-        const subscription = stripeEvent.data.object as Stripe.Subscription;
-        await syncStripeSubscription(subscription);
-        break;
-      }
-      default:
-        break;
-    }
 
-    return jsonResponse(200, { success: true, received: true });
+      return jsonResponse(200, { success: true, received: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not synchronise the Stripe event.';
+
+      // Stripe has already authenticated this event. Do not turn an internal
+      // database or follow-up API failure into an endless Stripe retry loop.
+      // Billing reads reconcile directly with Stripe, so the next billing or
+      // login request repairs any state that was not saved here.
+      console.error('Stripe webhook sync deferred', {
+        requestId: event.requestContext.requestId,
+        eventId: stripeEvent.id,
+        eventType: stripeEvent.type,
+        message,
+      });
+
+      return jsonResponse(200, {
+        success: true,
+        received: true,
+        deferred: true,
+      });
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not process Stripe webhook.';
     const isSignatureFailure = error instanceof Stripe.errors.StripeSignatureVerificationError;

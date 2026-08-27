@@ -120,17 +120,32 @@ export async function reconcileStripeSubscription(
     return billing;
   }
 
-  if (
-    billing.stripeSubscriptionId
-    && billing.status !== 'inactive'
-    && billing.status !== 'canceled'
-  ) {
-    return billing;
-  }
-
   const stripe = stripeClient ?? new Stripe(awsEnv.stripeSecretKey, {
     apiVersion: '2026-06-24.dahlia',
   });
+
+  // Webhooks are deliberately best-effort: they never make Stripe retry a
+  // valid payment event because of a temporary Exdox database fault. Re-read
+  // the known subscription here so normal login and billing access always
+  // repairs an event that could not be saved during webhook delivery.
+  if (billing.stripeSubscriptionId) {
+    let currentSubscription: Stripe.Subscription;
+    try {
+      currentSubscription = await stripe.subscriptions.retrieve(billing.stripeSubscriptionId);
+    } catch (error) {
+      if (isStripeResourceMissing(error)) {
+        console.info('Clearing Stripe references that do not exist in the configured Stripe account.', {
+          organisationId,
+        });
+        return clearMissingStripeBillingReferences(organisationId);
+      }
+      throw error;
+    }
+
+    await syncStripeSubscription(currentSubscription);
+    return getOrganisationBillingSummary(organisationId);
+  }
+
   let subscriptions: Stripe.ApiList<Stripe.Subscription>;
   try {
     subscriptions = await stripe.subscriptions.list({
