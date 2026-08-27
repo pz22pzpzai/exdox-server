@@ -42,6 +42,7 @@ const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
       'cost_review',
       'employee_dropbox',
       'expense_claims',
+      'queue_exports',
       'tax_editing',
       'data_health',
     ],
