@@ -1,13 +1,20 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
-import { updateReimbursementPaymentStatus } from '../shared/db.js';
+import { assertFeatureAccess } from '../shared/billing.js';
+import { getOrganisationBillingSummary, updateReimbursementPaymentStatus } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    const billing = await getOrganisationBillingSummary(user.organisationId);
+    assertFeatureAccess(
+      billing,
+      'queue_exports',
+      'Your current plan does not include reimbursement payment management. Upgrade to Control or Operations to continue.',
+    );
     const paidCount = await updateReimbursementPaymentStatus(user, 'Payment processing', 'Paid');
     return jsonResponse(200, { success: true, paidCount });
   } catch (error) {

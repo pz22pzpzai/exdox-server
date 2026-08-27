@@ -1,7 +1,7 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
-import { assertWorkspaceAccess } from '../shared/billing.js';
+import { assertFeatureAccess, assertWorkspaceAccess } from '../shared/billing.js';
 import { getOrganisationBillingSummary, getReceiptById, updateReceiptById } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText, toNumber } from '../shared/helpers.js';
@@ -34,6 +34,18 @@ export async function handler(event: APIGatewayProxyEventV2) {
       getReceiptById(user, receiptId),
     ]);
     assertWorkspaceAccess(billing, existingReceipt.workspaceContext);
+    const requestedStatus = sanitizeText(body.status);
+    if (
+      requestedStatus !== existingReceipt.status
+      && ['Ready', 'Published'].includes(requestedStatus)
+      && existingReceipt.workspaceContext !== 'vault'
+    ) {
+      assertFeatureAccess(
+        billing,
+        'approval_workflows',
+        'Your current plan does not include approval workflows. Upgrade to Control or Operations to approve documents.',
+      );
+    }
     const hasTaxTreatmentUpdate = ['foreignTaxAmount', 'foreignTaxLabel', 'ukVatTreatment'].some((key) => Object.prototype.hasOwnProperty.call(body, key));
     if (hasTaxTreatmentUpdate) {
       requireAdminUser(user);

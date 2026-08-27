@@ -1,7 +1,8 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
-import { findUserById, getOrganisationBaseCurrency, getOrganisationName, listExpenseClaims, listReceipts } from '../shared/db.js';
+import { assertFeatureAccess } from '../shared/billing.js';
+import { findUserById, getOrganisationBaseCurrency, getOrganisationBillingSummary, getOrganisationName, listExpenseClaims, listReceipts } from '../shared/db.js';
 import { sendExpenseExportSummaryEmail } from '../shared/expenseExportMail.js';
 import { jsonResponse } from '../shared/http.js';
 
@@ -19,6 +20,12 @@ export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    const billing = await getOrganisationBillingSummary(user.organisationId);
+    assertFeatureAccess(
+      billing,
+      'queue_exports',
+      'Your current plan does not include master expense exports. Upgrade to Control or Operations to create accountant summaries.',
+    );
     const body = event.body ? (JSON.parse(event.body) as { employeeIds?: unknown }) : {};
     const selectedEmployeeIds = Array.isArray(body.employeeIds)
       ? new Set(body.employeeIds.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0))

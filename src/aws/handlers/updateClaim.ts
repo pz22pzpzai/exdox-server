@@ -2,6 +2,8 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { findUserById, updateClaimStatus } from '../shared/db.js';
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
+import { assertFeatureAccess } from '../shared/billing.js';
+import { getOrganisationBillingSummary } from '../shared/db.js';
 import { sendClaimStatusEmail } from '../shared/claimMail.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
@@ -27,6 +29,14 @@ export async function handler(event: APIGatewayProxyEventV2) {
         error: 'invalid_claim_status',
         message: 'Use pending, approved, paid, or rejected as the claim status.',
       });
+    }
+    if (status !== 'pending') {
+      const billing = await getOrganisationBillingSummary(user.organisationId);
+      assertFeatureAccess(
+        billing,
+        'approval_workflows',
+        'Your current plan does not include approval workflows. Upgrade to Control or Operations to approve claims.',
+      );
     }
     const claim = await updateClaimStatus(user, claimId, status as 'pending' | 'approved' | 'paid' | 'rejected');
     let notificationDelivered = false;

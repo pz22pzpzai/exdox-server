@@ -2,7 +2,8 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { randomUUID } from 'node:crypto';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
-import { findUserById, getOrganisationName, listReceipts, updateReimbursementPaymentStatus } from '../shared/db.js';
+import { assertFeatureAccess } from '../shared/billing.js';
+import { findUserById, getOrganisationBillingSummary, getOrganisationName, listReceipts, updateReimbursementPaymentStatus } from '../shared/db.js';
 import { sendEmployeeReimbursementReadyEmail } from '../shared/expenseExportMail.js';
 import { jsonResponse } from '../shared/http.js';
 
@@ -19,6 +20,12 @@ export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    const billing = await getOrganisationBillingSummary(user.organisationId);
+    assertFeatureAccess(
+      billing,
+      'queue_exports',
+      'Your current plan does not include reimbursement exports. Upgrade to Control or Operations to create payment summaries.',
+    );
 
     const receipts = (await listReceipts(user, { workspaceContext: 'cost', limit: 50000 }))
       .filter((receipt) => receipt.paymentMethod === 'cash_personal')

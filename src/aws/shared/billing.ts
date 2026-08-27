@@ -212,10 +212,6 @@ export function resolveAllowedWebRoutes(summary: OrganisationBillingSummary, rol
     return ['/billing', '/settings'];
   }
 
-  if (summary.status === 'trialing') {
-    return getAllPlanRoutes();
-  }
-
   return definition.routes;
 }
 
@@ -224,8 +220,7 @@ export function isBillingActive(summary: OrganisationBillingSummary) {
 }
 
 export function hasFeature(summary: OrganisationBillingSummary, feature: string) {
-  return isBillingActive(summary)
-    && (summary.status === 'trialing' || getPlanDefinition(summary.planId).features.includes(feature));
+  return isBillingActive(summary) && getPlanDefinition(summary.planId).features.includes(feature);
 }
 
 export function canInviteUser(summary: OrganisationBillingSummary) {
@@ -247,7 +242,7 @@ export function getPlanLimitMessage(summary: OrganisationBillingSummary, kind: '
 export function buildEntitlements(summary: OrganisationBillingSummary) {
   const definition = getPlanDefinition(summary.planId);
   return {
-    features: summary.status === 'trialing' ? getAllPlanFeatures() : definition.features,
+    features: definition.features,
     lockedRoutes: getAllPlanRoutes().filter((route) => !resolveAllowedWebRoutes(summary, 'Business_Admin').includes(route)),
   };
 }
@@ -295,10 +290,6 @@ export function listPlanDefinitions() {
 
 function getAllPlanRoutes() {
   return Array.from(new Set(Object.values(PLAN_DEFINITIONS).flatMap((plan) => plan.routes)));
-}
-
-function getAllPlanFeatures() {
-  return Array.from(new Set(Object.values(PLAN_DEFINITIONS).flatMap((plan) => plan.features)));
 }
 
 export function isStripeConfigured() {
