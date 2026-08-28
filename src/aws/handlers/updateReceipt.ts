@@ -43,7 +43,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       assertFeatureAccess(
         billing,
         'approval_workflows',
-        'Your current plan does not include approval workflows. Upgrade to Control or Operations to approve documents.',
+        'Your current plan does not include approval workflows.',
       );
     }
     const hasTaxTreatmentUpdate = ['foreignTaxAmount', 'foreignTaxLabel', 'ukVatTreatment'].some((key) => Object.prototype.hasOwnProperty.call(body, key));
