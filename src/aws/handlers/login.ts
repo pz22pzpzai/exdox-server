@@ -2,6 +2,7 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { emailConfirmationDueAt, signUserToken, verifyPassword } from '../shared/auth.js';
 import { buildSignupCheckoutReturnUrl, createSelfServeCheckoutSession } from '../shared/billingCheckout.js';
+import { isBillingActive } from '../shared/billing.js';
 import { sendRegistrationConfirmationEmailWithRetry } from '../shared/confirmationMail.js';
 import {
   buildConfirmationEmailLink,
@@ -75,7 +76,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
         status: user.status,
       };
       let checkoutUrl: string | null = null;
-      const cardSetupComplete = billing.status === 'trialing' || billing.status === 'active' || billing.status === 'past_due';
+      const cardSetupComplete = isBillingActive(billing);
 
       if (cardSetupComplete) {
         const firstGraceLogin = !user.emailConfirmationGraceStartedAt;
@@ -167,6 +168,13 @@ export async function handler(event: APIGatewayProxyEventV2) {
       role: user.role,
       status: user.status,
     };
+    if (!isBillingActive(billing)) {
+      return jsonResponse(402, {
+        success: false,
+        error: 'billing_inactive',
+        message: 'This workspace subscription is no longer active. The business owner can restart or update billing to restore access.',
+      });
+    }
     const isOwner = await isOrganisationOwner(authUser);
 
     return jsonResponse(200, {

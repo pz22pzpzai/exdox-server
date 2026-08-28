@@ -28,6 +28,18 @@ function toIsoDate(timestamp: number | null | undefined) {
   return typeof timestamp === 'number' && timestamp > 0 ? new Date(timestamp * 1000).toISOString() : null;
 }
 
+function getSubscriptionBillingPeriod(subscription: Stripe.Subscription) {
+  // Stripe's current API exposes the billing period on the subscription item.
+  const item = subscription.items.data[0] as Stripe.SubscriptionItem & {
+    current_period_start?: number;
+    current_period_end?: number;
+  } | undefined;
+  return {
+    startedAt: toIsoDate(item?.current_period_start),
+    endsAt: toIsoDate(item?.current_period_end),
+  };
+}
+
 export function isStripeResourceMissing(error: unknown) {
   if (!error || typeof error !== 'object') {
     return false;
@@ -77,6 +89,7 @@ export async function syncStripeSubscription(subscription: Stripe.Subscription) 
     ? normalizeBillingCycle(subscription.metadata.billingCycle)
     : 'monthly';
   const allowanceSelection = resolveSubscriptionAllowance(subscription.metadata, inferredPlanId);
+  const billingPeriod = getSubscriptionBillingPeriod(subscription);
 
   return updateOrganisationBillingProfile({
     organisationId,
@@ -84,6 +97,8 @@ export async function syncStripeSubscription(subscription: Stripe.Subscription) 
     billingStatus: normalizeBillingStatus(toStripeBillingStatus(subscription.status), inferredPlanId),
     billingCycle,
     trialEndsAt: toIsoDate(subscription.trial_end),
+    billingPeriodStartedAt: billingPeriod.startedAt,
+    billingPeriodEndsAt: billingPeriod.endsAt,
     stripeCustomerId: customerId,
     stripeSubscriptionId: subscription.status === 'canceled' ? null : subscription.id,
     ...(allowanceSelection

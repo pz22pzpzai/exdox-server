@@ -222,6 +222,8 @@ export type OrganisationBillingSummary = {
   status: BillingStatus;
   billingCycle: BillingCycle;
   trialEndsAt: string | null;
+  billingPeriodStartedAt: string | null;
+  billingPeriodEndsAt: string | null;
   monthlyDocumentLimit: number | null;
   monthlyDocumentUsage: number;
   includedUsers: number | null;

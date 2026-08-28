@@ -1,7 +1,7 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAuthenticatedUser, signUserToken } from '../shared/auth.js';
-import { buildEntitlements, isStripeConfigured, resolveAllowedWebRoutes } from '../shared/billing.js';
+import { buildEntitlements, isBillingActive, isStripeConfigured, resolveAllowedWebRoutes } from '../shared/billing.js';
 import { findUserByEmail, getOrganisationBillingSummary, getOrganisationSettings, isOrganisationOwner } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { hydrateBillingSummaryFromStripe } from '../shared/stripeBilling.js';
@@ -38,6 +38,13 @@ export async function handler(event: APIGatewayProxyEventV2) {
       await getOrganisationBillingSummary(user.organisationId),
       user.organisationId,
     );
+    if (!isBillingActive(billing)) {
+      return jsonResponse(402, {
+        success: false,
+        error: 'billing_inactive',
+        message: 'This workspace subscription is no longer active. The business owner can restart or update billing to restore access.',
+      });
+    }
     const isOwner = await isOrganisationOwner(user);
     const allowedWebRoutes = resolveAllowedWebRoutes(billing, user.role)
       .filter((route) => isOwner || route !== '/billing');

@@ -143,6 +143,8 @@ type StoredOrganisation = {
   billingStatus?: BillingStatus;
   billingCycle?: BillingCycle;
   trialEndsAt?: string | null;
+  billingPeriodStartedAt?: string | null;
+  billingPeriodEndsAt?: string | null;
   monthlyDocumentLimit?: number | null;
   includedUsers?: number | null;
   stripeCustomerId?: string | null;
@@ -168,6 +170,18 @@ type StoredUser = {
 
 let teamSchemaReady: Promise<void> | null = null;
 let receiptTaxTreatmentSchemaReady: Promise<void> | null = null;
+let billingCycleSchemaReady: Promise<void> | null = null;
+
+async function ensureBillingCycleSchema() {
+  if (!pool) {
+    return;
+  }
+  billingCycleSchemaReady ??= (async () => {
+    await pool.execute('ALTER TABLE organisations ADD COLUMN IF NOT EXISTS billing_period_started_at DATETIME NULL AFTER trial_ends_at');
+    await pool.execute('ALTER TABLE organisations ADD COLUMN IF NOT EXISTS billing_period_ends_at DATETIME NULL AFTER billing_period_started_at');
+  })();
+  await billingCycleSchemaReady;
+}
 
 async function ensureTeamSchema() {
   if (!pool) {
@@ -1506,7 +1520,8 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
     const organisation = await getS3Organisation(organisationId);
     const billingPlan = normalizePlanId(organisation.billingPlan);
     const users = await listS3UsersForOrganisation(organisationId);
-    const monthlyDocumentUsage = await countS3DocumentsForCurrentMonth(organisationId);
+    const billingPeriodStartedAt = organisation.billingPeriodStartedAt ?? defaultUsagePeriodStart();
+    const monthlyDocumentUsage = await countS3DocumentsForBillingPeriod(organisationId, billingPeriodStartedAt);
 
     return {
       planId: billingPlan,
@@ -1515,6 +1530,8 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
       trialEndsAt:
         organisation.trialEndsAt
         ?? (normalizeBillingStatus(organisation.billingStatus, billingPlan) === 'inactive' ? null : defaultTrialEndsAt(billingPlan)),
+      billingPeriodStartedAt,
+      billingPeriodEndsAt: organisation.billingPeriodEndsAt ?? null,
       monthlyDocumentLimit: normalizeNullableNumber(organisation.monthlyDocumentLimit) ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
       monthlyDocumentUsage,
       includedUsers: normalizeNullableNumber(organisation.includedUsers) ?? defaultIncludedUsersForPlan(billingPlan),
@@ -1525,12 +1542,16 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
     };
   }
 
+  await ensureBillingCycleSchema();
+
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
     `SELECT
       o.billing_plan,
       o.billing_status,
       o.billing_cycle,
       o.trial_ends_at,
+      o.billing_period_started_at,
+      o.billing_period_ends_at,
       o.monthly_document_limit,
       o.included_users,
       o.stripe_customer_id,
@@ -1539,7 +1560,7 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
         SELECT COUNT(*)
         FROM receipts r
         WHERE r.organisation_id = o.id
-          AND DATE_FORMAT(r.created_at, '%Y-%m') = DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m')
+          AND r.created_at >= COALESCE(o.billing_period_started_at, DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-01'))
       ) AS monthly_document_usage,
       (
         SELECT COUNT(*)
@@ -1563,6 +1584,8 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
     status,
     billingCycle: normalizeBillingCycle(row.billing_cycle),
     trialEndsAt: row.trial_ends_at ? new Date(row.trial_ends_at).toISOString() : (status === 'inactive' ? null : defaultTrialEndsAt(billingPlan)),
+    billingPeriodStartedAt: row.billing_period_started_at ? new Date(row.billing_period_started_at).toISOString() : defaultUsagePeriodStart(),
+    billingPeriodEndsAt: row.billing_period_ends_at ? new Date(row.billing_period_ends_at).toISOString() : null,
     monthlyDocumentLimit: normalizeNullableNumber(row.monthly_document_limit) ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
     monthlyDocumentUsage: Number(row.monthly_document_usage ?? 0),
     includedUsers: normalizeNullableNumber(row.included_users) ?? defaultIncludedUsersForPlan(billingPlan),
@@ -1609,6 +1632,8 @@ export async function updateOrganisationBillingProfile(input: {
   billingStatus?: BillingStatus;
   billingCycle?: BillingCycle;
   trialEndsAt?: string | null;
+  billingPeriodStartedAt?: string | null;
+  billingPeriodEndsAt?: string | null;
   monthlyDocumentLimit?: number | null;
   includedUsers?: number | null;
   stripeCustomerId?: string | null;
@@ -1623,6 +1648,12 @@ export async function updateOrganisationBillingProfile(input: {
       billingStatus: input.billingStatus ?? organisation.billingStatus ?? 'legacy',
       billingCycle: input.billingCycle ?? organisation.billingCycle ?? 'monthly',
       trialEndsAt: input.trialEndsAt === undefined ? organisation.trialEndsAt ?? null : input.trialEndsAt,
+      billingPeriodStartedAt:
+        input.billingPeriodStartedAt === undefined
+          ? organisation.billingPeriodStartedAt ?? defaultUsagePeriodStart()
+          : input.billingPeriodStartedAt,
+      billingPeriodEndsAt:
+        input.billingPeriodEndsAt === undefined ? organisation.billingPeriodEndsAt ?? null : input.billingPeriodEndsAt,
       monthlyDocumentLimit:
         input.monthlyDocumentLimit === undefined ? organisation.monthlyDocumentLimit ?? null : input.monthlyDocumentLimit,
       includedUsers: input.includedUsers === undefined ? organisation.includedUsers ?? null : input.includedUsers,
@@ -1645,6 +1676,8 @@ export async function updateOrganisationBillingProfile(input: {
   const hasBillingStatus = Object.prototype.hasOwnProperty.call(input, 'billingStatus');
   const hasBillingCycle = Object.prototype.hasOwnProperty.call(input, 'billingCycle');
   const hasTrialEndsAt = Object.prototype.hasOwnProperty.call(input, 'trialEndsAt');
+  const hasBillingPeriodStartedAt = Object.prototype.hasOwnProperty.call(input, 'billingPeriodStartedAt');
+  const hasBillingPeriodEndsAt = Object.prototype.hasOwnProperty.call(input, 'billingPeriodEndsAt');
   const hasMonthlyDocumentLimit = Object.prototype.hasOwnProperty.call(input, 'monthlyDocumentLimit');
   const hasIncludedUsers = Object.prototype.hasOwnProperty.call(input, 'includedUsers');
   const hasStripeCustomerId = Object.prototype.hasOwnProperty.call(input, 'stripeCustomerId');
@@ -1656,6 +1689,8 @@ export async function updateOrganisationBillingProfile(input: {
          billing_status = CASE WHEN ? THEN ? ELSE billing_status END,
          billing_cycle = CASE WHEN ? THEN ? ELSE billing_cycle END,
          trial_ends_at = CASE WHEN ? THEN ? ELSE trial_ends_at END,
+         billing_period_started_at = CASE WHEN ? THEN ? ELSE billing_period_started_at END,
+         billing_period_ends_at = CASE WHEN ? THEN ? ELSE billing_period_ends_at END,
          monthly_document_limit = CASE WHEN ? THEN ? ELSE monthly_document_limit END,
          included_users = CASE WHEN ? THEN ? ELSE included_users END,
          stripe_customer_id = CASE WHEN ? THEN ? ELSE stripe_customer_id END,
@@ -1671,6 +1706,10 @@ export async function updateOrganisationBillingProfile(input: {
       input.billingCycle ?? null,
       hasTrialEndsAt ? 1 : 0,
       input.trialEndsAt ?? null,
+      hasBillingPeriodStartedAt ? 1 : 0,
+      input.billingPeriodStartedAt ?? null,
+      hasBillingPeriodEndsAt ? 1 : 0,
+      input.billingPeriodEndsAt ?? null,
       hasMonthlyDocumentLimit ? 1 : 0,
       input.monthlyDocumentLimit ?? null,
       hasIncludedUsers ? 1 : 0,
@@ -2844,6 +2883,8 @@ async function createS3Organisation(
     billingStatus: initialBillingStatus,
     billingCycle,
     trialEndsAt: initialBillingStatus === 'inactive' ? null : defaultTrialEndsAt(billingPlan),
+    billingPeriodStartedAt: defaultUsagePeriodStart(),
+    billingPeriodEndsAt: null,
     monthlyDocumentLimit: monthlyDocumentLimit ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
     includedUsers: includedUsers ?? defaultIncludedUsersForPlan(billingPlan),
     stripeCustomerId: null,
@@ -2878,11 +2919,17 @@ async function listS3UsersForOrganisation(organisationId: number) {
   return users.filter((user) => user.organisationId === organisationId);
 }
 
-async function countS3DocumentsForCurrentMonth(organisationId: number) {
+async function countS3DocumentsForBillingPeriod(organisationId: number, billingPeriodStartedAt: string) {
   const prefix = `receipt-records/org-${organisationId}/`;
   const keys = await listReceiptJsonKeys(prefix, 2000);
-  const monthPrefix = new Date().toISOString().slice(0, 7);
-  return keys.filter((key) => key.includes(`/${monthPrefix}`)).length;
+  return keys.filter((key) => {
+    const match = key.match(/\/user-\d+\/(\d{4}-\d{2}-\d{2})\//);
+    return match ? Date.parse(`${match[1]}T00:00:00.000Z`) >= Date.parse(billingPeriodStartedAt) : false;
+  }).length;
+}
+
+function defaultUsagePeriodStart() {
+  return `${new Date().toISOString().slice(0, 7)}-01T00:00:00.000Z`;
 }
 
 function defaultMonthlyDocumentLimitForPlan(planId: BillingPlanId) {

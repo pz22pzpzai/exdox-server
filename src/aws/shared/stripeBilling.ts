@@ -2,7 +2,7 @@ import Stripe from 'stripe';
 
 import type { OrganisationBillingSummary } from '../types.js';
 import { normalizeBillingStatus } from './billing.js';
-import { clearMissingStripeBillingReferences, isStripeResourceMissing } from './stripeSubscription.js';
+import { clearMissingStripeBillingReferences, isStripeResourceMissing, syncStripeSubscription } from './stripeSubscription.js';
 import { awsEnv } from './env.js';
 
 function toStripeBillingStatus(status: string) {
@@ -14,6 +14,17 @@ function toStripeBillingStatus(status: string) {
 
 function toIsoDate(timestamp: number | null | undefined) {
   return typeof timestamp === 'number' && timestamp > 0 ? new Date(timestamp * 1000).toISOString() : null;
+}
+
+function getSubscriptionBillingPeriod(subscription: Stripe.Subscription) {
+  const item = subscription.items.data[0] as Stripe.SubscriptionItem & {
+    current_period_start?: number;
+    current_period_end?: number;
+  } | undefined;
+  return {
+    startedAt: toIsoDate(item?.current_period_start),
+    endsAt: toIsoDate(item?.current_period_end),
+  };
 }
 
 function getCancellationScheduledFor(subscription: Stripe.Subscription) {
@@ -41,11 +52,18 @@ export async function hydrateBillingSummaryFromStripe(
       apiVersion: '2026-06-24.dahlia',
     });
     const subscription = await stripe.subscriptions.retrieve(summary.stripeSubscriptionId);
+    const syncedSummary = await syncStripeSubscription(subscription);
+    if (syncedSummary) {
+      return syncedSummary;
+    }
+    const billingPeriod = getSubscriptionBillingPeriod(subscription);
 
     return {
       ...summary,
       status: normalizeBillingStatus(toStripeBillingStatus(subscription.status), summary.planId),
       trialEndsAt: toIsoDate(subscription.trial_end) ?? summary.trialEndsAt,
+      billingPeriodStartedAt: billingPeriod.startedAt ?? summary.billingPeriodStartedAt,
+      billingPeriodEndsAt: billingPeriod.endsAt ?? summary.billingPeriodEndsAt,
       cancellationScheduledFor: getCancellationScheduledFor(subscription),
       stripeCustomerId:
         typeof subscription.customer === 'string'
