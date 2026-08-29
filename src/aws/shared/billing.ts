@@ -35,11 +35,12 @@ const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
     label: 'Capture',
     monthlyDocumentLimit: 250,
     includedUsers: 5,
-    routes: ['/overview', '/costs', '/claims', '/settings', '/billing'],
+    routes: ['/overview', '/costs', '/sales', '/claims', '/settings', '/billing'],
     features: [
       'mobile_capture',
       'web_upload',
       'cost_review',
+      'sales_review',
       'employee_dropbox',
       'expense_claims',
       'approval_workflows',
