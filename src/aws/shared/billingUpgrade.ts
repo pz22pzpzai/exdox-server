@@ -59,12 +59,7 @@ export async function upgradeSubscriptionPlan(input: {
   const productId = typeof subscriptionItem.price.product === 'string'
     ? subscriptionItem.price.product
     : subscriptionItem.price.product?.id;
-  const product = productId
-    ? { id: productId }
-    : await stripe.products.create({
-      name: `Exdox ${selection.label}`,
-      metadata: { organisationId: String(input.user.organisationId) },
-    });
+  const product = await resolveActiveSubscriptionProduct(stripe, productId);
   const price = await stripe.prices.create({
     currency: 'gbp',
     unit_amount: selection.monthlyAmountPence,
@@ -86,14 +81,49 @@ export async function upgradeSubscriptionPlan(input: {
     monthlyAmountPence: String(selection.monthlyAmountPence),
     planChangeSource: 'exdox_billing_upgrade',
   };
+  // Replace the existing item rather than adding another subscription item.
+  // Pending updates keep the current allowance in force if Stripe cannot collect
+  // the prorated adjustment immediately.
   const updatedSubscription = await stripe.subscriptions.update(subscription.id, {
     items: [{ id: subscriptionItem.id, price: price.id, quantity: 1 }],
-    metadata,
-    proration_behavior: 'create_prorations',
+    payment_behavior: 'pending_if_incomplete',
+    proration_behavior: 'always_invoice',
   });
 
-  await syncStripeSubscription(updatedSubscription);
+  if (updatedSubscription.pending_update) {
+    throw billingUpgradeError(
+      402,
+      'upgrade_payment_pending',
+      'Stripe could not complete the prorated plan adjustment. Your current plan and allowance have not changed. Update the payment method in Billing and try again.',
+    );
+  }
+
+  const synchronisedSubscription = await stripe.subscriptions.update(updatedSubscription.id, { metadata });
+
+  await syncStripeSubscription(synchronisedSubscription);
   return getOrganisationBillingSummary(input.user.organisationId);
+}
+
+async function resolveActiveSubscriptionProduct(stripe: Stripe, currentProductId?: string) {
+  if (currentProductId) {
+    const currentProduct = await stripe.products.retrieve(currentProductId);
+    if (!('deleted' in currentProduct) && currentProduct.active) {
+      return currentProduct;
+    }
+  }
+
+  const activeProducts = await stripe.products.list({ active: true, limit: 100 });
+  const existingProduct = activeProducts.data.find(
+    (product) => product.metadata.exdoxProductFamily === 'subscription',
+  );
+  if (existingProduct) {
+    return existingProduct;
+  }
+
+  return stripe.products.create({
+    name: 'Exdox subscriptions',
+    metadata: { exdoxProductFamily: 'subscription' },
+  });
 }
 
 function billingUpgradeError(statusCode: number, code: string, message: string) {
