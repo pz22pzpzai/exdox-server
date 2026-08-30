@@ -8,7 +8,7 @@ import {
 } from './billing.js';
 import { getOrganisationBillingSummary } from './db.js';
 import { awsEnv } from './env.js';
-import { reconcileStripeSubscription, syncStripeSubscription } from './stripeSubscription.js';
+import { syncStripeSubscription } from './stripeSubscription.js';
 
 type BillingUpgradeError = Error & { statusCode?: number; code?: string };
 
@@ -31,11 +31,7 @@ export async function upgradeSubscriptionPlan(input: {
   const stripe = new Stripe(awsEnv.stripeSecretKey, {
     apiVersion: '2026-06-24.dahlia',
   });
-  const billing = await reconcileStripeSubscription(
-    input.user.organisationId,
-    await getOrganisationBillingSummary(input.user.organisationId),
-    stripe,
-  );
+  const billing = await getOrganisationBillingSummary(input.user.organisationId);
 
   if (!billing.stripeSubscriptionId || !['trialing', 'active', 'past_due'].includes(billing.status)) {
     throw billingUpgradeError(409, 'subscription_not_active', 'Set up or reactivate billing before changing the plan.');
@@ -51,6 +47,12 @@ export async function upgradeSubscriptionPlan(input: {
   }
 
   const subscription = await stripe.subscriptions.retrieve(billing.stripeSubscriptionId);
+  if (!['trialing', 'active', 'past_due'].includes(subscription.status)) {
+    throw billingUpgradeError(409, 'subscription_not_active', 'Set up or reactivate billing before changing the plan.');
+  }
+  if (subscription.cancel_at_period_end) {
+    throw billingUpgradeError(409, 'subscription_cancelling', 'Reactivate the subscription before changing the plan.');
+  }
   const subscriptionItem = subscription.items.data[0];
   if (!subscriptionItem) {
     throw billingUpgradeError(409, 'subscription_item_missing', 'This subscription does not contain a billable plan item.');
@@ -86,6 +88,7 @@ export async function upgradeSubscriptionPlan(input: {
   // the prorated adjustment immediately.
   const updatedSubscription = await stripe.subscriptions.update(subscription.id, {
     items: [{ id: subscriptionItem.id, price: price.id, quantity: 1 }],
+    metadata,
     payment_behavior: 'pending_if_incomplete',
     proration_behavior: 'always_invoice',
   });
@@ -98,9 +101,7 @@ export async function upgradeSubscriptionPlan(input: {
     );
   }
 
-  const synchronisedSubscription = await stripe.subscriptions.update(updatedSubscription.id, { metadata });
-
-  await syncStripeSubscription(synchronisedSubscription);
+  await syncStripeSubscription(updatedSubscription);
   return getOrganisationBillingSummary(input.user.organisationId);
 }
 
