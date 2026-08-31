@@ -1904,10 +1904,13 @@ export async function updateReimbursementPaymentStatus(
     id: string;
     createdAt: string;
   },
+  receiptIds?: number[],
 ) {
+  const selectedReceiptIds = receiptIds ? new Set(receiptIds) : null;
   const receipts = (await listReceipts(user, { workspaceContext: 'cost', limit: 50000 }))
     .filter((receipt) => receipt.paymentMethod === 'cash_personal')
-    .filter((receipt) => receipt.status === fromStatus && !receipt.needsReview);
+    .filter((receipt) => receipt.status === fromStatus && !receipt.needsReview)
+    .filter((receipt) => !selectedReceiptIds || selectedReceiptIds.has(receipt.id));
 
   if (!receipts.length) {
     return 0;
