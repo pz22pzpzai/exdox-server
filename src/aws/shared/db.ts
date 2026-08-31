@@ -533,16 +533,21 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
       .slice(0, limit);
 
     const allReceipts = await listReceipts(user, { limit: 500 });
+    const reconciledClaimIds = await reconcilePaidExpenseClaimStatuses(user, allReceipts);
     return Promise.all(relevantClaims.map(async (claim) => {
       const claimant = await findUserById(user.organisationId, claim.createdByUserId);
+      const reconciledClaim = reconciledClaimIds.has(claim.id)
+        ? { ...claim, status: 'paid' as const }
+        : claim;
       return {
-        ...hydrateClaimTotals(claim, allReceipts),
+        ...hydrateClaimTotals(reconciledClaim, allReceipts),
         claimantName: claimant?.fullName ?? null,
         claimantEmail: claimant?.email ?? null,
       };
     }));
   }
 
+  await reconcilePaidExpenseClaimStatuses(user);
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
     `SELECT
       c.id,
@@ -1921,6 +1926,7 @@ export async function updateReimbursementPaymentStatus(
         updatedAt,
       },
     )));
+    await reconcilePaidExpenseClaimStatuses(user);
     return receipts.length;
   }
 
@@ -1947,6 +1953,7 @@ export async function updateReimbursementPaymentStatus(
       ...receipts.map((receipt) => receipt.id),
     ],
   );
+  await reconcilePaidExpenseClaimStatuses(user);
   return receipts.length;
 }
 
@@ -2508,6 +2515,68 @@ function hydrateClaimTotals(claim: StoredClaim, receipts: ReceiptRow[]): Expense
     totalAmount: attached.reduce((sum, receipt) => sum + (receipt.baseTotalAmount ?? receipt.totalAmount ?? 0), 0),
     documentCount: attached.length,
   };
+}
+
+/**
+ * Keep a parent expense claim in step with its reimbursed receipts. A claim is
+ * only settled after every receipt attached to it has reached Paid.
+ */
+async function reconcilePaidExpenseClaimStatuses(
+  user: AuthenticatedUser,
+  knownReceipts?: ReceiptRow[],
+): Promise<Set<number>> {
+  if (!pool) {
+    const keys = await listReceiptJsonKeys(`expense-claims/org-${user.organisationId}/`, 1000);
+    const claims = await Promise.all(keys.map((key) => getReceiptJsonObject<StoredClaim>(key)));
+    const visibleClaims = claims.filter((claim) =>
+      claim.organisationId === user.organisationId &&
+      (user.role === 'Business_Admin' || claim.createdByUserId === user.id),
+    );
+    const receipts = knownReceipts ?? await listReceipts(user, { workspaceContext: 'cost', limit: 50000 });
+    const paidClaims = visibleClaims.filter((claim) => {
+      if (claim.status === 'paid' || claim.status === 'rejected') {
+        return false;
+      }
+      const attached = receipts.filter((receipt) => receipt.claimId === claim.id);
+      return attached.length > 0 && attached.every((receipt) => receipt.status === 'Paid');
+    });
+
+    await Promise.all(paidClaims.map((claim) => putReceiptJsonObject(buildClaimKey(claim), {
+      ...claim,
+      status: 'paid',
+      updatedAt: new Date().toISOString(),
+    })));
+    return new Set(paidClaims.map((claim) => claim.id));
+  }
+
+  const userScope = user.role === 'Business_Admin' ? '' : 'AND c.created_by_user_id = ?';
+  const params: Array<number> = [user.organisationId];
+  if (user.role !== 'Business_Admin') {
+    params.push(user.id);
+  }
+
+  await pool.execute(
+    `UPDATE expense_claims c
+     SET c.status = 'paid', c.updated_at = CURRENT_TIMESTAMP
+     WHERE c.organisation_id = ?
+       AND c.status IN ('pending', 'approved')
+       ${userScope}
+       AND EXISTS (
+         SELECT 1
+         FROM receipts r
+         WHERE r.organisation_id = c.organisation_id
+           AND r.claim_id = c.id
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM receipts r
+         WHERE r.organisation_id = c.organisation_id
+           AND r.claim_id = c.id
+           AND r.status <> 'Paid'
+       )`,
+    params,
+  );
+  return new Set();
 }
 
 async function deleteEmptyClaimIfOrphaned(organisationId: number, claimId: number) {
