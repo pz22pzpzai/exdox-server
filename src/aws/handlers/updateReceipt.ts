@@ -4,7 +4,7 @@ import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
 import { assertFeatureAccess, assertWorkspaceAccess } from '../shared/billing.js';
 import { getOrganisationBillingSummary, getReceiptById, updateReceiptById } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
-import { sanitizeText, toNumber } from '../shared/helpers.js';
+import { parsePaymentMethod, sanitizeText, toNumber } from '../shared/helpers.js';
 import { getHistoricalExchangeRate } from '../shared/exchangeRates.js';
 
 const ukVatTreatments = new Set([
@@ -113,6 +113,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       category: sanitizeText(body.category) || null,
       description: sanitizeText(body.description) || null,
       customer: sanitizeText(body.customer) || null,
+      paymentMethod: parsePaymentMethod(body.paymentMethod, existingReceipt.paymentMethod),
       currency: sourceCurrency,
       netAmount: toNumber(body.netAmount),
       vatAmount: toNumber(body.vatAmount),

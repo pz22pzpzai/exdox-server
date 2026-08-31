@@ -1744,7 +1744,7 @@ export async function updateReceiptById(
   user: AuthenticatedUser,
   receiptId: number,
   updates: Partial<
-    Pick<ReceiptRow, 'vendorName' | 'invoiceDate' | 'dueDate' | 'invoiceNumber' | 'category' | 'description' | 'customer' | 'currency' | 'netAmount' | 'vatAmount' | 'totalAmount' | 'taxRateApplied' | 'status' | 'baseCurrency' | 'exchangeRate' | 'exchangeRateDate' | 'exchangeRateProvider' | 'baseTotalAmount' | 'exchangeRateOverride' | 'exchangeRateNote' | 'foreignTaxAmount' | 'foreignTaxLabel' | 'ukVatTreatment'>
+    Pick<ReceiptRow, 'vendorName' | 'invoiceDate' | 'dueDate' | 'invoiceNumber' | 'category' | 'description' | 'customer' | 'paymentMethod' | 'currency' | 'netAmount' | 'vatAmount' | 'totalAmount' | 'taxRateApplied' | 'status' | 'baseCurrency' | 'exchangeRate' | 'exchangeRateDate' | 'exchangeRateProvider' | 'baseTotalAmount' | 'exchangeRateOverride' | 'exchangeRateNote' | 'foreignTaxAmount' | 'foreignTaxLabel' | 'ukVatTreatment'>
   >,
 ) {
   const existing = await getReceiptById(user, receiptId);
@@ -1804,6 +1804,7 @@ export async function updateReceiptById(
          category = ?,
          description = ?,
          customer_name = ?,
+         payment_method = ?,
          net_amount = ?,
          vat_amount = ?,
          total_amount = ?,
@@ -1831,6 +1832,7 @@ export async function updateReceiptById(
       updates.category ?? null,
       updates.description ?? null,
       updates.customer ?? null,
+      updates.paymentMethod ?? existing.paymentMethod,
       normalizedVatValues.netAmount ?? null,
       normalizedVatValues.vatAmount ?? null,
       normalizedVatValues.totalAmount ?? null,
