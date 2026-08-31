@@ -533,11 +533,12 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
       .slice(0, limit);
 
     const allReceipts = await listReceipts(user, { limit: 500 });
-    const reconciledClaimIds = await reconcilePaidExpenseClaimStatuses(user, allReceipts);
+    const reconciledClaimStatuses = await reconcileReimbursementClaimStatuses(user, allReceipts);
     return Promise.all(relevantClaims.map(async (claim) => {
       const claimant = await findUserById(user.organisationId, claim.createdByUserId);
-      const reconciledClaim = reconciledClaimIds.has(claim.id)
-        ? { ...claim, status: 'paid' as const }
+      const reconciledStatus = reconciledClaimStatuses.get(claim.id);
+      const reconciledClaim = reconciledStatus
+        ? { ...claim, status: reconciledStatus }
         : claim;
       return {
         ...hydrateClaimTotals(reconciledClaim, allReceipts),
@@ -547,7 +548,7 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
     }));
   }
 
-  await reconcilePaidExpenseClaimStatuses(user);
+  await reconcileReimbursementClaimStatuses(user);
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
     `SELECT
       c.id,
@@ -1926,7 +1927,7 @@ export async function updateReimbursementPaymentStatus(
         updatedAt,
       },
     )));
-    await reconcilePaidExpenseClaimStatuses(user);
+    await reconcileReimbursementClaimStatuses(user);
     return receipts.length;
   }
 
@@ -1953,7 +1954,7 @@ export async function updateReimbursementPaymentStatus(
       ...receipts.map((receipt) => receipt.id),
     ],
   );
-  await reconcilePaidExpenseClaimStatuses(user);
+  await reconcileReimbursementClaimStatuses(user);
   return receipts.length;
 }
 
@@ -2518,13 +2519,13 @@ function hydrateClaimTotals(claim: StoredClaim, receipts: ReceiptRow[]): Expense
 }
 
 /**
- * Keep a parent expense claim in step with its reimbursed receipts. A claim is
- * only settled after every receipt attached to it has reached Paid.
+ * Keep parent claims in step with reimbursement batches. Exporting a batch
+ * clears it from the pending review queue; final payment settles the claim.
  */
-async function reconcilePaidExpenseClaimStatuses(
+async function reconcileReimbursementClaimStatuses(
   user: AuthenticatedUser,
   knownReceipts?: ReceiptRow[],
-): Promise<Set<number>> {
+): Promise<Map<number, 'approved' | 'paid'>> {
   if (!pool) {
     const keys = await listReceiptJsonKeys(`expense-claims/org-${user.organisationId}/`, 1000);
     const claims = await Promise.all(keys.map((key) => getReceiptJsonObject<StoredClaim>(key)));
@@ -2533,20 +2534,30 @@ async function reconcilePaidExpenseClaimStatuses(
       (user.role === 'Business_Admin' || claim.createdByUserId === user.id),
     );
     const receipts = knownReceipts ?? await listReceipts(user, { workspaceContext: 'cost', limit: 50000 });
-    const paidClaims = visibleClaims.filter((claim) => {
+    const reconciledClaims: Array<{ claim: StoredClaim; status: 'approved' | 'paid' }> = [];
+    visibleClaims.forEach((claim) => {
       if (claim.status === 'paid' || claim.status === 'rejected') {
-        return false;
+        return;
       }
       const attached = receipts.filter((receipt) => receipt.claimId === claim.id);
-      return attached.length > 0 && attached.every((receipt) => receipt.status === 'Paid');
+      if (!attached.length) {
+        return;
+      }
+      if (attached.every((receipt) => receipt.status === 'Paid')) {
+        reconciledClaims.push({ claim, status: 'paid' });
+        return;
+      }
+      if (claim.status === 'pending' && attached.every((receipt) => receipt.status === 'Payment processing' || receipt.status === 'Paid')) {
+        reconciledClaims.push({ claim, status: 'approved' });
+      }
     });
 
-    await Promise.all(paidClaims.map((claim) => putReceiptJsonObject(buildClaimKey(claim), {
+    await Promise.all(reconciledClaims.map(({ claim, status }) => putReceiptJsonObject(buildClaimKey(claim), {
       ...claim,
-      status: 'paid',
+      status,
       updatedAt: new Date().toISOString(),
     })));
-    return new Set(paidClaims.map((claim) => claim.id));
+    return new Map(reconciledClaims.map(({ claim, status }) => [claim.id, status]));
   }
 
   const userScope = user.role === 'Business_Admin' ? '' : 'AND c.created_by_user_id = ?';
@@ -2554,6 +2565,28 @@ async function reconcilePaidExpenseClaimStatuses(
   if (user.role !== 'Business_Admin') {
     params.push(user.id);
   }
+
+  await pool.execute(
+    `UPDATE expense_claims c
+     SET c.status = 'approved', c.updated_at = CURRENT_TIMESTAMP
+     WHERE c.organisation_id = ?
+       AND c.status = 'pending'
+       ${userScope}
+       AND EXISTS (
+         SELECT 1
+         FROM receipts r
+         WHERE r.organisation_id = c.organisation_id
+           AND r.claim_id = c.id
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM receipts r
+         WHERE r.organisation_id = c.organisation_id
+           AND r.claim_id = c.id
+           AND r.status NOT IN ('Payment processing', 'Paid')
+       )`,
+    params,
+  );
 
   await pool.execute(
     `UPDATE expense_claims c
@@ -2576,7 +2609,7 @@ async function reconcilePaidExpenseClaimStatuses(
        )`,
     params,
   );
-  return new Set();
+  return new Map();
 }
 
 async function deleteEmptyClaimIfOrphaned(organisationId: number, claimId: number) {
