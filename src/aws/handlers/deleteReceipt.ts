@@ -21,7 +21,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       getOrganisationBillingSummary(user.organisationId),
       getReceiptById(user, receiptId),
     ]);
-    assertWorkspaceAccess(billing, receipt.workspaceContext, user.role);
+    assertWorkspaceAccess(billing, receipt.workspaceContext);
     const result = await deleteReceiptById(user, receiptId);
     return jsonResponse(200, {
       success: true,

@@ -33,7 +33,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       getOrganisationBillingSummary(user.organisationId),
       getReceiptById(user, receiptId),
     ]);
-    assertWorkspaceAccess(billing, existingReceipt.workspaceContext, user.role);
+    assertWorkspaceAccess(billing, existingReceipt.workspaceContext);
     const requestedStatus = sanitizeText(body.status);
     if (
       requestedStatus !== existingReceipt.status

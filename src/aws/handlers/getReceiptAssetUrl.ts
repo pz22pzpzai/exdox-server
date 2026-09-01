@@ -22,7 +22,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       getOrganisationBillingSummary(user.organisationId),
       getReceiptById(user, receiptId),
     ]);
-    assertWorkspaceAccess(billing, receipt.workspaceContext, user.role);
+    assertWorkspaceAccess(billing, receipt.workspaceContext);
     const [preview, download] = await Promise.all([
       createReceiptDownloadUrl({
         key: receipt.s3Key,
