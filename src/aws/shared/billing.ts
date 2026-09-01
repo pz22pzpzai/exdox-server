@@ -214,12 +214,9 @@ export function resolveAllowedWebRoutes(summary: OrganisationBillingSummary, rol
     }
 
     const definition = getPlanDefinition(summary.planId);
-    const routes = ['/dropbox', '/claims', '/employee/reports'];
+    const routes = ['/dropbox', '/claims', '/employee/reports', '/employee/vault'];
     if (definition.routes.includes('/sales')) {
       routes.push('/employee/sales');
-    }
-    if (definition.routes.includes('/vault')) {
-      routes.push('/employee/vault');
     }
     return routes;
   }
@@ -264,7 +261,7 @@ export function buildEntitlements(summary: OrganisationBillingSummary) {
   };
 }
 
-export function canAccessWorkspace(summary: OrganisationBillingSummary, workspace: WorkspaceContext) {
+export function canAccessWorkspace(summary: OrganisationBillingSummary, workspace: WorkspaceContext, role?: UserRole) {
   if (!isBillingActive(summary)) {
     return false;
   }
@@ -274,6 +271,9 @@ export function canAccessWorkspace(summary: OrganisationBillingSummary, workspac
   if (workspace === 'sales') {
     return hasFeature(summary, 'sales_review');
   }
+  if (role === 'Standard_Employee') {
+    return true;
+  }
   return hasFeature(summary, 'vault');
 }
 
@@ -281,8 +281,8 @@ export function getAccessibleWorkspaces(summary: OrganisationBillingSummary) {
   return (['cost', 'sales', 'vault'] as WorkspaceContext[]).filter((workspace) => canAccessWorkspace(summary, workspace));
 }
 
-export function assertWorkspaceAccess(summary: OrganisationBillingSummary, workspace: WorkspaceContext) {
-  if (canAccessWorkspace(summary, workspace)) {
+export function assertWorkspaceAccess(summary: OrganisationBillingSummary, workspace: WorkspaceContext, role?: UserRole) {
+  if (canAccessWorkspace(summary, workspace, role)) {
     return;
   }
   throw billingLockedError(

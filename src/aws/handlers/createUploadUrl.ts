@@ -34,7 +34,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
         message: getPlanLimitMessage(billing, 'documents'),
       });
     }
-    assertWorkspaceAccess(billing, workspaceContext);
+    assertWorkspaceAccess(billing, workspaceContext, user.role);
     const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
     const datePrefix = new Date().toISOString().slice(0, 10);
     const key =

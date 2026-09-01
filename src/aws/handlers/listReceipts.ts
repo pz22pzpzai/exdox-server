@@ -15,7 +15,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const billing = await getOrganisationBillingSummary(user.organisationId);
     const workspaceContext = typeof query.workspace_context === 'string' ? parseWorkspaceContext(query.workspace_context) : undefined;
     if (workspaceContext) {
-      assertWorkspaceAccess(billing, workspaceContext);
+      assertWorkspaceAccess(billing, workspaceContext, user.role);
     }
 
     const receipts = await listReceipts(user, {
@@ -27,7 +27,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
 
     return jsonResponse(200, {
       success: true,
-      receipts: workspaceContext ? receipts : receipts.filter((receipt) => canAccessWorkspace(billing, receipt.workspaceContext)),
+      receipts: workspaceContext ? receipts : receipts.filter((receipt) => canAccessWorkspace(billing, receipt.workspaceContext, user.role)),
     });
   } catch (error) {
     const status = typeof error === 'object' && error !== null && 'statusCode' in error ? Number((error as { statusCode?: number }).statusCode) : 500;

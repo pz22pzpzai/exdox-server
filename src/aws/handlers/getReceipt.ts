@@ -21,7 +21,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       getOrganisationBillingSummary(user.organisationId),
       getReceiptById(user, receiptId),
     ]);
-    assertWorkspaceAccess(billing, receipt.workspaceContext);
+    assertWorkspaceAccess(billing, receipt.workspaceContext, user.role);
     return jsonResponse(200, {
       success: true,
       receipt,
