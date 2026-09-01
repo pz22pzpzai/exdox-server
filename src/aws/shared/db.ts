@@ -1994,8 +1994,12 @@ export async function updateReimbursementPaymentStatus(
 }
 
 export async function deleteReceiptById(user: AuthenticatedUser, receiptId: number) {
+  const existing = await getReceiptById(user, receiptId);
+  if (existing.uploadedByUserId !== user.id) {
+    throw forbiddenError('Only the account that uploaded this receipt can delete it.');
+  }
+
   if (!pool) {
-    const existing = await getReceiptById(user, receiptId);
     await putReceiptJsonObject(`deleted/${existing.id}-${Date.now()}.json`, existing);
     await Promise.all([
       deleteReceiptObject(buildReceiptMetadataKey(existing)),
@@ -2007,13 +2011,11 @@ export async function deleteReceiptById(user: AuthenticatedUser, receiptId: numb
     return { success: true };
   }
 
-  const [rows] = await pool.query<mysql.RowDataPacket[]>(
-    `SELECT claim_id FROM receipts WHERE id = ? AND organisation_id = ? LIMIT 1`,
-    [receiptId, user.organisationId],
+  const claimId = existing.claimId;
+  await pool.execute(
+    `DELETE FROM receipts WHERE id = ? AND organisation_id = ? AND uploaded_by_user_id = ?`,
+    [receiptId, user.organisationId, user.id],
   );
-  const claimId = rows[0]?.claim_id === null || rows[0]?.claim_id === undefined ? null : Number(rows[0].claim_id);
-
-  await pool.execute(`DELETE FROM receipts WHERE id = ? AND organisation_id = ?`, [receiptId, user.organisationId]);
   if (claimId !== null) {
     await deleteEmptyClaimIfOrphaned(user.organisationId, claimId);
   }
