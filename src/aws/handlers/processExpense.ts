@@ -10,6 +10,7 @@ import { inferMimeType, readRequestOptions, sanitizeText } from '../shared/helpe
 import { applyVatRegistrationRules, processExpenseBuffer } from '../shared/openaiExtraction.js';
 import {
   applySupplierRulesToDocument,
+  applyCompanyCardClassification,
   duplicateReceiptError,
   findDuplicateReceiptForOrganisation,
   getOrganisationBillingSummary,
@@ -115,13 +116,22 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
     paymentMethod: options.paymentMethod,
     workspaceContext: options.workspaceContext,
   });
-  const paymentMethod = supplierRuleOutcome.paymentMethod;
+  const companyCardOutcome = await applyCompanyCardClassification({
+    organisationId: user.organisationId,
+    uploadedByUserId: user.id,
+    userRole: user.role,
+    workspaceContext: options.workspaceContext,
+    document: supplierRuleOutcome.document,
+    paymentMethod: supplierRuleOutcome.paymentMethod,
+  });
+  const paymentMethod = companyCardOutcome.paymentMethod;
+  const classifiedDocument = withCompanyCardClassificationNote(supplierRuleOutcome.document, companyCardOutcome);
   // OCR may supply complete fields, but a cost or sales document still requires
   // a reviewer to approve it before it can move to Ready.
   const document =
     options.workspaceContext === 'vault'
-      ? supplierRuleOutcome.document
-      : { ...supplierRuleOutcome.document, needsReview: true };
+      ? classifiedDocument
+      : { ...classifiedDocument, needsReview: true };
   const duplicateReceipt = await findDuplicateReceiptForOrganisation({
     organisationId: user.organisationId,
     workspaceContext: options.workspaceContext,
@@ -139,6 +149,9 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
     uploadedByUserId: user.id,
     workspaceContext: options.workspaceContext,
     paymentMethod,
+    paymentMethodMatchState: companyCardOutcome.paymentMethodMatchState,
+    paymentMethodReviewRequired: companyCardOutcome.paymentMethodReviewRequired,
+    matchedCompanyCardId: companyCardOutcome.matchedCompanyCardId,
     category: supplierRuleOutcome.category,
     receiptSource: 'web_upload',
     status: determineInitialReceiptStatus(options, document),
@@ -243,13 +256,22 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
     paymentMethod: options.paymentMethod,
     workspaceContext: options.workspaceContext,
   });
-  const paymentMethod = supplierRuleOutcome.paymentMethod;
+  const companyCardOutcome = await applyCompanyCardClassification({
+    organisationId: user.organisationId,
+    uploadedByUserId: user.id,
+    userRole: user.role,
+    workspaceContext: options.workspaceContext,
+    document: supplierRuleOutcome.document,
+    paymentMethod: supplierRuleOutcome.paymentMethod,
+  });
+  const paymentMethod = companyCardOutcome.paymentMethod;
+  const classifiedDocument = withCompanyCardClassificationNote(supplierRuleOutcome.document, companyCardOutcome);
   // Keep JSON/direct-to-storage uploads on the same review-first workflow as
   // multipart web and mobile uploads.
   const document =
     options.workspaceContext === 'vault'
-      ? supplierRuleOutcome.document
-      : { ...supplierRuleOutcome.document, needsReview: true };
+      ? classifiedDocument
+      : { ...classifiedDocument, needsReview: true };
   const duplicateReceipt = await findDuplicateReceiptForOrganisation({
     organisationId: user.organisationId,
     workspaceContext: options.workspaceContext,
@@ -267,6 +289,9 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
     uploadedByUserId: user.id,
     workspaceContext: options.workspaceContext,
     paymentMethod,
+    paymentMethodMatchState: companyCardOutcome.paymentMethodMatchState,
+    paymentMethodReviewRequired: companyCardOutcome.paymentMethodReviewRequired,
+    matchedCompanyCardId: companyCardOutcome.matchedCompanyCardId,
     category: supplierRuleOutcome.category,
     receiptSource: 'web_upload',
     status: determineInitialReceiptStatus(options, document),
@@ -338,6 +363,31 @@ async function applyReceiptCurrencyConversion(
   };
 }
 
+function withCompanyCardClassificationNote(
+  document: NormalizedExpenseDocument,
+  match: { paymentMethodMatchState: 'not_detected' | 'personal' | 'company_card' | 'employee_review' | 'employee_exception'; matchedCompanyCardId: number | null },
+): NormalizedExpenseDocument {
+  if (match.paymentMethodMatchState === 'employee_review') {
+    return {
+      ...document,
+      notes: [...document.notes, `Possible company-card match ending ${document.paymentCardLastFour}; administrator review or a personal-card exception is required.`],
+    };
+  }
+  if (match.paymentMethodMatchState === 'company_card') {
+    return {
+      ...document,
+      notes: [...document.notes, `Company card matched ending ${document.paymentCardLastFour}.`],
+    };
+  }
+  if (match.paymentMethodMatchState === 'employee_exception') {
+    return {
+      ...document,
+      notes: [...document.notes, `Personal-card exception applied for matching digits ending ${document.paymentCardLastFour}.`],
+    };
+  }
+  return document;
+}
+
 function determineInitialReceiptStatus(
   options: ExpenseRequestOptions,
   _document: { needsReview: boolean },
@@ -387,6 +437,9 @@ function buildStoredDocumentPlaceholder(
     invoiceDate: null,
     dueDate: null,
     invoiceNumber: null,
+    paymentCardLastFour: null,
+    paymentCardNetwork: null,
+    paymentCardIssuer: null,
     currency: 'GBP',
     totalAmount: 0,
     netAmount: 0,

@@ -20,12 +20,15 @@ import {
   type BillingCycle,
   type BillingPlanId,
   type BillingStatus,
+  type CompanyCardEmployeeExceptionRow,
+  type CompanyCardRow,
   type DepartmentRow,
   type ExpenseClaimRow,
   type NormalizedExpenseDocument,
   type OrganisationBillingSummary,
   type OrganisationSettings,
   type PaymentMethod,
+  type PaymentMethodMatchState,
   type ReconciliationCandidate,
   type ReceiptRow,
   type ReceiptSource,
@@ -170,6 +173,7 @@ type StoredUser = {
 
 let teamSchemaReady: Promise<void> | null = null;
 let receiptTaxTreatmentSchemaReady: Promise<void> | null = null;
+let companyCardSchemaReady: Promise<void> | null = null;
 let billingCycleSchemaReady: Promise<void> | null = null;
 
 async function ensureBillingCycleSchema() {
@@ -221,6 +225,51 @@ async function ensureReceiptTaxTreatmentSchema() {
   await receiptTaxTreatmentSchemaReady;
 }
 
+async function ensureCompanyCardSchema() {
+  if (!pool) {
+    return;
+  }
+  companyCardSchemaReady ??= (async () => {
+    await pool.execute(
+      `CREATE TABLE IF NOT EXISTS company_cards (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        organisation_id BIGINT UNSIGNED NOT NULL,
+        label VARCHAR(120) NOT NULL,
+        card_network VARCHAR(80) NULL,
+        card_issuer VARCHAR(120) NULL,
+        last_four CHAR(4) NOT NULL,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_company_cards_org_last_four (organisation_id, last_four),
+        KEY idx_company_cards_org_active (organisation_id, is_active)
+      )`,
+    );
+    await pool.execute(
+      `CREATE TABLE IF NOT EXISTS company_card_employee_exceptions (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        organisation_id BIGINT UNSIGNED NOT NULL,
+        company_card_id BIGINT UNSIGNED NOT NULL,
+        employee_user_id BIGINT UNSIGNED NOT NULL,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_company_card_employee_exception (organisation_id, company_card_id, employee_user_id),
+        KEY idx_company_card_exceptions_org_employee (organisation_id, employee_user_id)
+      )`,
+    );
+    await pool.execute('ALTER TABLE receipts ADD COLUMN IF NOT EXISTS detected_card_last_four CHAR(4) NULL AFTER invoice_number');
+    await pool.execute('ALTER TABLE receipts ADD COLUMN IF NOT EXISTS detected_card_network VARCHAR(80) NULL AFTER detected_card_last_four');
+    await pool.execute('ALTER TABLE receipts ADD COLUMN IF NOT EXISTS detected_card_issuer VARCHAR(120) NULL AFTER detected_card_network');
+    await pool.execute('ALTER TABLE receipts ADD COLUMN IF NOT EXISTS matched_company_card_id BIGINT UNSIGNED NULL AFTER payment_method');
+    await pool.execute("ALTER TABLE receipts ADD COLUMN IF NOT EXISTS payment_method_match_state VARCHAR(32) NOT NULL DEFAULT 'not_detected' AFTER matched_company_card_id");
+    await pool.execute('ALTER TABLE receipts ADD COLUMN IF NOT EXISTS payment_method_review_required TINYINT(1) NOT NULL DEFAULT 0 AFTER payment_method_match_state');
+  })();
+  await companyCardSchemaReady;
+}
+
 type StoredClaim = ExpenseClaimRow;
 
 export async function insertReceiptRecord(input: {
@@ -228,6 +277,9 @@ export async function insertReceiptRecord(input: {
   uploadedByUserId: number;
   workspaceContext: WorkspaceContext;
   paymentMethod: PaymentMethod;
+  paymentMethodMatchState?: PaymentMethodMatchState;
+  paymentMethodReviewRequired?: boolean;
+  matchedCompanyCardId?: number | null;
   claimId?: number | null;
   status?: ReceiptRow['status'];
   category?: string | null;
@@ -253,6 +305,7 @@ export async function insertReceiptRecord(input: {
   }
 
   await ensureReceiptTaxTreatmentSchema();
+  await ensureCompanyCardSchema();
 
   const createdAt = new Date().toISOString();
   const fallbackInvoiceDate = normalizeReceiptDate(input.document.invoiceDate, createdAt);
@@ -263,6 +316,9 @@ export async function insertReceiptRecord(input: {
       uploaded_by_user_id,
       workspace_context,
       payment_method,
+      matched_company_card_id,
+      payment_method_match_state,
+      payment_method_review_required,
       claim_id,
       status,
       category,
@@ -280,6 +336,9 @@ export async function insertReceiptRecord(input: {
       invoice_date,
       due_date,
       invoice_number,
+      detected_card_last_four,
+      detected_card_network,
+      detected_card_issuer,
       currency,
       total_amount,
       net_amount,
@@ -300,12 +359,15 @@ export async function insertReceiptRecord(input: {
       notes,
       raw_text_summary,
       raw_extraction_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
     [
       input.organisationId,
       input.uploadedByUserId,
       input.workspaceContext,
       input.paymentMethod,
+      input.matchedCompanyCardId ?? null,
+      input.paymentMethodMatchState ?? 'not_detected',
+      input.paymentMethodReviewRequired ? 1 : 0,
       input.claimId ?? null,
       input.status ?? (input.document.needsReview ? 'Review' : 'Ready'),
       input.category ?? 'Uncategorised',
@@ -323,6 +385,9 @@ export async function insertReceiptRecord(input: {
       fallbackInvoiceDate,
       input.document.dueDate,
       input.document.invoiceNumber,
+      input.document.paymentCardLastFour,
+      input.document.paymentCardNetwork,
+      input.document.paymentCardIssuer,
       input.document.currency,
       input.document.totalAmount,
       input.document.netAmount,
@@ -419,6 +484,7 @@ export async function listReceipts(
         onlyClaimable
           ? receipt.workspaceContext === 'cost' &&
             receipt.paymentMethod === 'cash_personal' &&
+            !receipt.paymentMethodReviewRequired &&
             receipt.claimId === null
           : true,
       )
@@ -436,6 +502,7 @@ export async function listReceipts(
   }
 
   await ensureTeamSchema();
+  await ensureCompanyCardSchema();
   const params: Array<string | number | null> = [user.organisationId, user.role, user.id];
   const where = ['r.organisation_id = ?', "(? = 'Business_Admin' OR r.uploaded_by_user_id = ?)"];
 
@@ -446,6 +513,7 @@ export async function listReceipts(
   if (onlyClaimable) {
     where.push("r.workspace_context = 'cost'");
     where.push("r.payment_method = 'cash_personal'");
+    where.push('r.payment_method_review_required = 0');
     where.push('r.claim_id IS NULL');
   }
   if (claimId !== null) {
@@ -2164,35 +2232,6 @@ export async function applySupplierRulesToDocument(input: {
 }) {
   const rules = await listSupplierRules(input.organisationId);
   const vendor = sanitizeText(input.document.vendorName).toLowerCase();
-  // Card references are matched against existing OCR output; this does not change
-  // extraction, it only classifies a receipt after extraction has completed.
-  const receiptText = [
-    input.document.rawTextSummary,
-    input.document.vendorName,
-    input.document.invoiceNumber,
-    ...input.document.notes,
-    ...input.document.lineItems.map((item) => item.description),
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(' ')
-    .toLowerCase();
-  const matchedCompanyCard = input.workspaceContext === 'cost'
-    ? rules.find((rule) => {
-        const reference = rule.supplierMatchText.trim().toLowerCase();
-        return rule.isActive && rule.paymentMethod === 'business_card' && reference.length >= 4 && receiptText.includes(reference);
-      })
-    : undefined;
-  if (matchedCompanyCard) {
-    return {
-      document: {
-        ...input.document,
-        notes: [...input.document.notes, `Company card matched: ending ${matchedCompanyCard.supplierMatchText}`],
-      },
-      paymentMethod: 'business_card' as const,
-      matchedRuleId: matchedCompanyCard.id,
-      category: matchedCompanyCard.category || 'Uncategorised',
-    };
-  }
   const matchedRule = rules.find(
     (rule) => rule.isActive && vendor && vendor.includes(rule.supplierMatchText.trim().toLowerCase()),
   );
@@ -2215,6 +2254,85 @@ export async function applySupplierRulesToDocument(input: {
     paymentMethod: matchedRule.paymentMethod,
     matchedRuleId: matchedRule.id,
     category: matchedRule.category,
+  };
+}
+
+export async function applyCompanyCardClassification(input: {
+  organisationId: number;
+  uploadedByUserId: number;
+  userRole: UserRole;
+  workspaceContext: WorkspaceContext;
+  document: NormalizedExpenseDocument;
+  paymentMethod: PaymentMethod;
+}) {
+  if (input.workspaceContext !== 'cost') {
+    return {
+      paymentMethod: input.paymentMethod,
+      paymentMethodMatchState: 'not_detected' as PaymentMethodMatchState,
+      paymentMethodReviewRequired: false,
+      matchedCompanyCardId: null,
+    };
+  }
+
+  const lastFour = input.document.paymentCardLastFour;
+  if (!lastFour) {
+    return {
+      paymentMethod: 'cash_personal' as const,
+      paymentMethodMatchState: 'not_detected' as PaymentMethodMatchState,
+      paymentMethodReviewRequired: false,
+      matchedCompanyCardId: null,
+    };
+  }
+
+  const cards = await listCompanyCards(input.organisationId);
+  const normalizedNetwork = normalizeCardDescriptor(input.document.paymentCardNetwork);
+  const normalizedIssuer = normalizeCardDescriptor(input.document.paymentCardIssuer);
+  const matches = cards.filter((card) =>
+    card.isActive &&
+    card.lastFour === lastFour &&
+    (!normalizedNetwork || !card.cardNetwork || normalizeCardDescriptor(card.cardNetwork) === normalizedNetwork) &&
+    (!normalizedIssuer || !card.cardIssuer || normalizeCardDescriptor(card.cardIssuer) === normalizedIssuer),
+  );
+
+  if (matches.length !== 1) {
+    return {
+      paymentMethod: 'cash_personal' as const,
+      paymentMethodMatchState: 'personal' as PaymentMethodMatchState,
+      paymentMethodReviewRequired: false,
+      matchedCompanyCardId: null,
+    };
+  }
+
+  const matchedCard = matches[0];
+  if (input.userRole !== 'Standard_Employee') {
+    return {
+      paymentMethod: 'business_card' as const,
+      paymentMethodMatchState: 'company_card' as PaymentMethodMatchState,
+      paymentMethodReviewRequired: false,
+      matchedCompanyCardId: matchedCard.id,
+    };
+  }
+
+  const exceptions = await listCompanyCardEmployeeExceptions(input.organisationId);
+  const hasPersonalException = exceptions.some((exception) =>
+    exception.isActive &&
+    exception.companyCardId === matchedCard.id &&
+    exception.employeeUserId === input.uploadedByUserId,
+  );
+  if (hasPersonalException) {
+    return {
+      paymentMethod: 'cash_personal' as const,
+      paymentMethodMatchState: 'employee_exception' as PaymentMethodMatchState,
+      paymentMethodReviewRequired: false,
+      matchedCompanyCardId: matchedCard.id,
+    };
+  }
+
+  return {
+    paymentMethod: 'cash_personal' as const,
+    paymentMethodMatchState: 'employee_review' as PaymentMethodMatchState,
+    paymentMethodReviewRequired: true,
+    matchedCompanyCardId: matchedCard.id,
   };
 }
 
@@ -2286,6 +2404,143 @@ export async function deleteSupplierRule(organisationId: number, ruleId: number)
     return { success: true };
   }
   await pool.execute(`DELETE FROM supplier_rules WHERE id = ? AND organisation_id = ?`, [ruleId, organisationId]);
+  return { success: true };
+}
+
+export async function listCompanyCards(organisationId: number): Promise<CompanyCardRow[]> {
+  if (!pool) {
+    const keys = await listReceiptJsonKeys(`company-cards/org-${organisationId}/`, 500);
+    const cards = await Promise.all(keys.map((key) => getReceiptJsonObject<CompanyCardRow>(key)));
+    return cards.filter((card): card is CompanyCardRow => Boolean(card)).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+  await ensureCompanyCardSchema();
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT id, organisation_id, label, card_network, card_issuer, last_four, is_active, created_at, updated_at
+     FROM company_cards WHERE organisation_id = ? ORDER BY updated_at DESC`,
+    [organisationId],
+  );
+  return rows.map(mapCompanyCardRow);
+}
+
+export async function upsertCompanyCard(input: Omit<CompanyCardRow, 'id' | 'createdAt' | 'updatedAt'> & { id?: number }) {
+  const lastFour = normalizeCardLastFour(input.lastFour);
+  if (!lastFour) {
+    throw validationError('Enter exactly four card digits.');
+  }
+  if (!sanitizeText(input.label)) {
+    throw validationError('A company card label is required.');
+  }
+  if (!pool) {
+    const cards = await listCompanyCards(input.organisationId);
+    const existing = input.id ? cards.find((card) => card.id === input.id) : null;
+    if (input.id && !existing) {
+      throw notFoundError('Company card not found.');
+    }
+    const createdAt = existing?.createdAt ?? new Date().toISOString();
+    const card: CompanyCardRow = {
+      id: existing?.id ?? Date.now() + Math.floor(Math.random() * 1000),
+      organisationId: input.organisationId,
+      label: sanitizeText(input.label),
+      cardNetwork: normalizeOptionalCardDescriptor(input.cardNetwork),
+      cardIssuer: normalizeOptionalCardDescriptor(input.cardIssuer),
+      lastFour,
+      isActive: input.isActive,
+      createdAt,
+      updatedAt: new Date().toISOString(),
+    };
+    await putReceiptJsonObject(buildCompanyCardKey(card), card);
+    return card;
+  }
+  await ensureCompanyCardSchema();
+  if (input.id) {
+    await pool.execute(
+      `UPDATE company_cards SET label = ?, card_network = ?, card_issuer = ?, last_four = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND organisation_id = ?`,
+      [sanitizeText(input.label), normalizeOptionalCardDescriptor(input.cardNetwork), normalizeOptionalCardDescriptor(input.cardIssuer), lastFour, input.isActive ? 1 : 0, input.id, input.organisationId],
+    );
+  } else {
+    await pool.execute(
+      `INSERT INTO company_cards (organisation_id, label, card_network, card_issuer, last_four, is_active) VALUES (?, ?, ?, ?, ?, ?)`,
+      [input.organisationId, sanitizeText(input.label), normalizeOptionalCardDescriptor(input.cardNetwork), normalizeOptionalCardDescriptor(input.cardIssuer), lastFour, input.isActive ? 1 : 0],
+    );
+  }
+  const cards = await listCompanyCards(input.organisationId);
+  const card = input.id ? cards.find((candidate) => candidate.id === input.id) : cards[0];
+  if (!card) {
+    throw new Error('Company card could not be saved.');
+  }
+  return card;
+}
+
+export async function deleteCompanyCard(organisationId: number, cardId: number) {
+  if (!pool) {
+    const card = (await listCompanyCards(organisationId)).find((candidate) => candidate.id === cardId);
+    if (!card) {
+      throw notFoundError('Company card not found.');
+    }
+    await deleteReceiptObject(buildCompanyCardKey(card));
+    return { success: true };
+  }
+  await ensureCompanyCardSchema();
+  await pool.execute('DELETE FROM company_card_employee_exceptions WHERE organisation_id = ? AND company_card_id = ?', [organisationId, cardId]);
+  await pool.execute('DELETE FROM company_cards WHERE organisation_id = ? AND id = ?', [organisationId, cardId]);
+  return { success: true };
+}
+
+export async function listCompanyCardEmployeeExceptions(organisationId: number): Promise<CompanyCardEmployeeExceptionRow[]> {
+  if (!pool) {
+    const keys = await listReceiptJsonKeys(`company-card-exceptions/org-${organisationId}/`, 500);
+    const exceptions = await Promise.all(keys.map((key) => getReceiptJsonObject<CompanyCardEmployeeExceptionRow>(key)));
+    return exceptions.filter((exception): exception is CompanyCardEmployeeExceptionRow => Boolean(exception));
+  }
+  await ensureCompanyCardSchema();
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT id, organisation_id, company_card_id, employee_user_id, is_active, created_at, updated_at
+     FROM company_card_employee_exceptions WHERE organisation_id = ? ORDER BY updated_at DESC`,
+    [organisationId],
+  );
+  return rows.map((row) => ({
+    id: Number(row.id), organisationId: Number(row.organisation_id), companyCardId: Number(row.company_card_id), employeeUserId: Number(row.employee_user_id), isActive: Boolean(row.is_active), createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(),
+  }));
+}
+
+export async function upsertCompanyCardEmployeeException(input: Omit<CompanyCardEmployeeExceptionRow, 'id' | 'createdAt' | 'updatedAt'> & { id?: number }) {
+  const card = (await listCompanyCards(input.organisationId)).find((candidate) => candidate.id === input.companyCardId);
+  if (!card) {
+    throw validationError('Choose a company card from this organisation.');
+  }
+  if (!pool) {
+    const existing = input.id ? (await listCompanyCardEmployeeExceptions(input.organisationId)).find((item) => item.id === input.id) : null;
+    const createdAt = existing?.createdAt ?? new Date().toISOString();
+    const exception: CompanyCardEmployeeExceptionRow = { id: existing?.id ?? Date.now() + Math.floor(Math.random() * 1000), organisationId: input.organisationId, companyCardId: input.companyCardId, employeeUserId: input.employeeUserId, isActive: input.isActive, createdAt, updatedAt: new Date().toISOString() };
+    await putReceiptJsonObject(buildCompanyCardExceptionKey(exception), exception);
+    return exception;
+  }
+  await ensureCompanyCardSchema();
+  if (input.id) {
+    await pool.execute('UPDATE company_card_employee_exceptions SET company_card_id = ?, employee_user_id = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND organisation_id = ?', [input.companyCardId, input.employeeUserId, input.isActive ? 1 : 0, input.id, input.organisationId]);
+  } else {
+    await pool.execute('INSERT INTO company_card_employee_exceptions (organisation_id, company_card_id, employee_user_id, is_active) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE is_active = VALUES(is_active), updated_at = CURRENT_TIMESTAMP', [input.organisationId, input.companyCardId, input.employeeUserId, input.isActive ? 1 : 0]);
+  }
+  const exceptions = await listCompanyCardEmployeeExceptions(input.organisationId);
+  const exception = input.id ? exceptions.find((item) => item.id === input.id) : exceptions.find((item) => item.companyCardId === input.companyCardId && item.employeeUserId === input.employeeUserId);
+  if (!exception) {
+    throw new Error('Employee exception could not be saved.');
+  }
+  return exception;
+}
+
+export async function deleteCompanyCardEmployeeException(organisationId: number, exceptionId: number) {
+  if (!pool) {
+    const exception = (await listCompanyCardEmployeeExceptions(organisationId)).find((item) => item.id === exceptionId);
+    if (!exception) {
+      throw notFoundError('Employee exception not found.');
+    }
+    await deleteReceiptObject(buildCompanyCardExceptionKey(exception));
+    return { success: true };
+  }
+  await ensureCompanyCardSchema();
+  await pool.execute('DELETE FROM company_card_employee_exceptions WHERE id = ? AND organisation_id = ?', [exceptionId, organisationId]);
   return { success: true };
 }
 
@@ -2737,6 +2992,9 @@ function validateClaimableReceipt(receipt: ReceiptRow, user: AuthenticatedUser) 
   if (receipt.paymentMethod !== 'cash_personal') {
     throw validationError('Only personal or cash spend can be attached to an expense claim.');
   }
+  if (receipt.paymentMethodReviewRequired) {
+    throw validationError('Resolve the possible company-card match before adding this purchase to an expense claim.');
+  }
   if (receipt.claimId !== null) {
     throw validationError('This receipt is already attached to a claim.');
   }
@@ -2771,6 +3029,9 @@ function mapReceiptRow(row: mysql.RowDataPacket): ReceiptRow {
     uploadedByDepartmentName: row.uploaded_by_department_name ? String(row.uploaded_by_department_name) : null,
     workspaceContext: String(row.workspace_context) as WorkspaceContext,
     paymentMethod: String(row.payment_method) as PaymentMethod,
+    paymentMethodMatchState: normalizePaymentMethodMatchState(row.payment_method_match_state),
+    paymentMethodReviewRequired: Boolean(row.payment_method_review_required),
+    matchedCompanyCardId: row.matched_company_card_id === null || row.matched_company_card_id === undefined ? null : Number(row.matched_company_card_id),
     claimId: row.claim_id === null ? null : Number(row.claim_id),
     status: normalizeReceiptStatus(row.status),
     category: row.category ? String(row.category) : null,
@@ -2788,6 +3049,9 @@ function mapReceiptRow(row: mysql.RowDataPacket): ReceiptRow {
     invoiceDate: normalizeReceiptDate(row.invoice_date ? new Date(row.invoice_date).toISOString().slice(0, 10) : null, createdAt),
     dueDate: row.due_date ? new Date(row.due_date).toISOString().slice(0, 10) : null,
     invoiceNumber: row.invoice_number,
+    paymentCardLastFour: normalizeCardLastFour(row.detected_card_last_four),
+    paymentCardNetwork: normalizeOptionalCardDescriptor(row.detected_card_network),
+    paymentCardIssuer: normalizeOptionalCardDescriptor(row.detected_card_issuer),
     currency: row.currency,
     baseCurrency: row.base_currency ? String(row.base_currency) : 'GBP',
     exchangeRate: toDbNumber(row.exchange_rate),
@@ -2821,6 +3085,40 @@ function mapReceiptRow(row: mysql.RowDataPacket): ReceiptRow {
     createdAt,
     updatedAt: new Date(row.updated_at).toISOString(),
   };
+}
+
+function mapCompanyCardRow(row: mysql.RowDataPacket): CompanyCardRow {
+  return {
+    id: Number(row.id),
+    organisationId: Number(row.organisation_id),
+    label: String(row.label),
+    cardNetwork: normalizeOptionalCardDescriptor(row.card_network),
+    cardIssuer: normalizeOptionalCardDescriptor(row.card_issuer),
+    lastFour: String(row.last_four),
+    isActive: Boolean(row.is_active),
+    createdAt: new Date(row.created_at).toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString(),
+  };
+}
+
+function normalizeCardLastFour(value: unknown) {
+  const digits = sanitizeText(value).replace(/\D/g, '');
+  return /^\d{4}$/.test(digits) ? digits : null;
+}
+
+function normalizeOptionalCardDescriptor(value: unknown) {
+  const text = sanitizeText(value);
+  return text && text.length <= 120 ? text : null;
+}
+
+function normalizeCardDescriptor(value: unknown) {
+  return normalizeOptionalCardDescriptor(value)?.toLowerCase().replace(/[^a-z0-9]/g, '') ?? '';
+}
+
+function normalizePaymentMethodMatchState(value: unknown): PaymentMethodMatchState {
+  return value === 'personal' || value === 'company_card' || value === 'employee_review' || value === 'employee_exception'
+    ? value
+    : 'not_detected';
 }
 
 function toDbNumber(value: unknown) {
@@ -2911,6 +3209,9 @@ function buildS3BackedReceiptRow(input: {
   uploadedByUserId: number;
   workspaceContext: WorkspaceContext;
   paymentMethod: PaymentMethod;
+  paymentMethodMatchState?: PaymentMethodMatchState;
+  paymentMethodReviewRequired?: boolean;
+  matchedCompanyCardId?: number | null;
   claimId?: number | null;
   status?: ReceiptRow['status'];
   category?: string | null;
@@ -2937,6 +3238,9 @@ function buildS3BackedReceiptRow(input: {
     uploadedByUserId: input.uploadedByUserId,
     workspaceContext: input.workspaceContext,
     paymentMethod: input.paymentMethod,
+    paymentMethodMatchState: input.paymentMethodMatchState ?? 'not_detected',
+    paymentMethodReviewRequired: input.paymentMethodReviewRequired ?? false,
+    matchedCompanyCardId: input.matchedCompanyCardId ?? null,
     claimId: input.claimId ?? null,
     status: input.status ?? (input.document.needsReview ? 'Review' : 'Ready'),
     category: input.category ?? 'Uncategorised',
@@ -2954,6 +3258,9 @@ function buildS3BackedReceiptRow(input: {
     invoiceDate,
     dueDate: input.document.dueDate,
     invoiceNumber: input.document.invoiceNumber,
+    paymentCardLastFour: input.document.paymentCardLastFour,
+    paymentCardNetwork: input.document.paymentCardNetwork,
+    paymentCardIssuer: input.document.paymentCardIssuer,
     currency: input.document.currency,
     baseCurrency: 'GBP',
     exchangeRate: null,
@@ -3025,6 +3332,14 @@ function buildClaimKey(claim: ExpenseClaimRow) {
 
 function buildSupplierRuleKey(rule: SupplierRuleRow) {
   return `supplier-rules/org-${rule.organisationId}/${rule.createdAt.slice(0, 10)}/${rule.id}.json`;
+}
+
+function buildCompanyCardKey(card: CompanyCardRow) {
+  return `company-cards/org-${card.organisationId}/${card.createdAt.slice(0, 10)}/${card.id}.json`;
+}
+
+function buildCompanyCardExceptionKey(exception: CompanyCardEmployeeExceptionRow) {
+  return `company-card-exceptions/org-${exception.organisationId}/${exception.createdAt.slice(0, 10)}/${exception.id}.json`;
 }
 
 function buildUserKey(email: string) {

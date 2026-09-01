@@ -849,6 +849,81 @@ Resources:
             Path: /rules/{id}
             Method: DELETE
 
+  CompanyCardsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/companyCards.listHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        ListCompanyCardsRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /company-cards
+            Method: GET
+
+  UpsertCompanyCardFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/companyCards.upsertHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        UpsertCompanyCardRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /company-cards
+            Method: POST
+
+  DeleteCompanyCardFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/deleteCompanyCard.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        DeleteCompanyCardRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /company-cards/{id}
+            Method: DELETE
+
+  CompanyCardExceptionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/companyCardExceptions.upsertHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        UpsertCompanyCardExceptionRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /company-card-exceptions
+            Method: POST
+
+  DeleteCompanyCardExceptionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/companyCardExceptions.deleteHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        DeleteCompanyCardExceptionRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /company-card-exceptions/{id}
+            Method: DELETE
+
   ListReconciliationFunction:
     Type: AWS::Serverless::Function
     Properties:

@@ -1,6 +1,7 @@
 export type DocumentType = 'receipt' | 'invoice' | 'unknown';
 export type WorkspaceContext = 'cost' | 'sales' | 'vault';
 export type PaymentMethod = 'business_card' | 'cash_personal' | 'bank_transfer' | 'not_applicable';
+export type PaymentMethodMatchState = 'not_detected' | 'personal' | 'company_card' | 'employee_review' | 'employee_exception';
 export type InboxStatus = 'Processing' | 'Ready' | 'Review' | 'Published' | 'Payment processing' | 'Paid';
 export type ReceiptSource = 'mobile' | 'email' | 'web_upload' | 'bank_import';
 
@@ -32,6 +33,9 @@ export type NormalizedExpenseDocument = {
   invoiceDate: string | null;
   dueDate: string | null;
   invoiceNumber: string | null;
+  paymentCardLastFour: string | null;
+  paymentCardNetwork: string | null;
+  paymentCardIssuer: string | null;
   currency: string | null;
   baseCurrency?: string;
   exchangeRate?: number | null;
@@ -79,6 +83,9 @@ export type ReceiptRow = {
   uploadedByDepartmentName?: string | null;
   workspaceContext: WorkspaceContext;
   paymentMethod: PaymentMethod;
+  paymentMethodMatchState: PaymentMethodMatchState;
+  paymentMethodReviewRequired: boolean;
+  matchedCompanyCardId: number | null;
   claimId: number | null;
   status: InboxStatus;
   category: string | null;
@@ -96,6 +103,9 @@ export type ReceiptRow = {
   invoiceDate: string | null;
   dueDate: string | null;
   invoiceNumber: string | null;
+  paymentCardLastFour: string | null;
+  paymentCardNetwork: string | null;
+  paymentCardIssuer: string | null;
   currency: string | null;
   baseCurrency: string;
   exchangeRate: number | null;
@@ -171,6 +181,28 @@ export type SupplierRuleRow = {
   category: string;
   taxRate: string;
   paymentMethod: PaymentMethod;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CompanyCardRow = {
+  id: number;
+  organisationId: number;
+  label: string;
+  cardNetwork: string | null;
+  cardIssuer: string | null;
+  lastFour: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CompanyCardEmployeeExceptionRow = {
+  id: number;
+  organisationId: number;
+  companyCardId: number;
+  employeeUserId: number;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;

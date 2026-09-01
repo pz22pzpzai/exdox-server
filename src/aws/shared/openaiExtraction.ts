@@ -195,6 +195,8 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     'Currency detection is mandatory whenever a monetary amount is visible. Use the printed symbol or currency code and return the ISO code: £ = GBP, $ or US$ = USD, and € = EUR. Never assume GBP merely because the workspace is in the UK.',
     'The vendor name must come from the document itself, usually the top header or merchant branding. Never invent a workspace name or a filename-based name.',
     'The invoice number must be a literal printed reference number from the document, not a filename or timestamp.',
+    'For payment card details, only return the final four digits when a masked or explicitly labelled card reference is visible. Never return a full card number or more than four card digits.',
+    'Return card network and issuer only when they are visibly printed. Do not infer an issuer such as Monzo from a Visa or Mastercard logo alone.',
     'When total_amount is not null, total_evidence_text must contain the exact visible total label and amount snippet from the document.',
     'When the final total cannot be proven from the document, set total_evidence_text to null.',
     'When vat_amount is not null, vat_evidence_text must contain the exact visible VAT or TAX snippet from the document.',
@@ -211,6 +213,9 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
         invoice_date: 'YYYY-MM-DD | null',
         due_date: 'YYYY-MM-DD | null',
         invoice_number: 'string | null',
+        payment_card_last_four: 'exactly four digits from a visibly masked/printed card reference, or null',
+        payment_card_network: 'Visa | Mastercard | Amex | Maestro | Discover | Diners Club | JCB | UnionPay | other visible network | null',
+        payment_card_issuer: 'visible issuer/brand such as Monzo, Barclays, Revolut, or null',
         currency: 'ISO 4217 code like GBP, USD, EUR | null',
         total_amount: 'number | null',
         total_evidence_text: 'string | null',
@@ -443,6 +448,9 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
   const invoiceDate = normalizeDateString(source.invoice_date);
   const dueDate = normalizeDateString(source.due_date);
   const invoiceNumber = normalizeInvoiceNumber(source.invoice_number);
+  const paymentCardLastFour = normalizeCardLastFour(source.payment_card_last_four);
+  const paymentCardNetwork = normalizePaymentCardText(source.payment_card_network);
+  const paymentCardIssuer = normalizePaymentCardText(source.payment_card_issuer);
   const amountLooksUnreadable =
     notes.some((note) => /could not read receipt|could not read invoice|could not read amount|amount could not be read|unable to read amount|unable to read receipt|unable to read invoice|not clearly visible|blank image|blank file|no receipt visible|no invoice visible/i.test(note)) ||
     (rawTextSummary !== null &&
@@ -543,6 +551,9 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
       invoiceDate,
       dueDate,
       invoiceNumber,
+      paymentCardLastFour,
+      paymentCardNetwork,
+      paymentCardIssuer,
       currency,
       totalAmount: 0,
       netAmount: 0,
@@ -566,6 +577,9 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
     invoiceDate,
     dueDate,
     invoiceNumber,
+    paymentCardLastFour,
+    paymentCardNetwork,
+    paymentCardIssuer,
     currency,
     totalAmount,
     netAmount: resolvedNetAmount,
@@ -1036,6 +1050,16 @@ function normalizeInvoiceNumber(value: unknown) {
   }
 
   return text;
+}
+
+function normalizeCardLastFour(value: unknown) {
+  const digits = sanitizeText(value).replace(/\D/g, '');
+  return /^\d{4}$/.test(digits) ? digits : null;
+}
+
+function normalizePaymentCardText(value: unknown) {
+  const text = normalizeFreeText(value);
+  return text && text.length <= 80 ? text : null;
 }
 
 function normalizeCurrencyValue(currency: unknown, ...evidence: unknown[]) {
