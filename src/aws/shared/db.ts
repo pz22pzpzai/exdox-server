@@ -2294,6 +2294,17 @@ export async function applyCompanyCardClassification(input: {
     (!normalizedIssuer || !card.cardIssuer || normalizeCardDescriptor(card.cardIssuer) === normalizedIssuer),
   );
 
+  // A shared last four digits cannot prove which company card was used. Keep
+  // an employee's receipt out of reimbursement until an administrator resolves it.
+  if (matches.length > 1 && input.userRole === 'Standard_Employee') {
+    return {
+      paymentMethod: 'cash_personal' as const,
+      paymentMethodMatchState: 'employee_review' as PaymentMethodMatchState,
+      paymentMethodReviewRequired: true,
+      matchedCompanyCardId: null,
+    };
+  }
+
   if (matches.length !== 1) {
     return {
       paymentMethod: 'cash_personal' as const,

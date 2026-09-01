@@ -1,9 +1,7 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
-import { assertFeatureAccess } from '../shared/billing.js';
 import {
-  getOrganisationBillingSummary,
   listCompanyCardEmployeeExceptions,
   listCompanyCards,
   upsertCompanyCard,
@@ -15,7 +13,6 @@ export async function listHandler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
-    assertFeatureAccess(await getOrganisationBillingSummary(user.organisationId), 'supplier_rules', 'Your current plan does not include company card controls.');
     const [cards, exceptions] = await Promise.all([
       listCompanyCards(user.organisationId),
       listCompanyCardEmployeeExceptions(user.organisationId),
@@ -30,7 +27,6 @@ export async function upsertHandler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
-    assertFeatureAccess(await getOrganisationBillingSummary(user.organisationId), 'supplier_rules', 'Your current plan does not include company card controls.');
     const body = event.body ? JSON.parse(event.body) as Record<string, unknown> : {};
     const card = await upsertCompanyCard({
       id: Number.isFinite(Number(body.id)) ? Number(body.id) : undefined,

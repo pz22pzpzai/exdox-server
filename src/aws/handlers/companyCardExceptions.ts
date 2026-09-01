@@ -1,8 +1,7 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
-import { assertFeatureAccess } from '../shared/billing.js';
-import { deleteCompanyCardEmployeeException, getOrganisationBillingSummary, listTeamMembers, upsertCompanyCardEmployeeException } from '../shared/db.js';
+import { deleteCompanyCardEmployeeException, listTeamMembers, upsertCompanyCardEmployeeException } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { parseBoolean } from '../shared/helpers.js';
 
@@ -10,7 +9,6 @@ export async function upsertHandler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
-    assertFeatureAccess(await getOrganisationBillingSummary(user.organisationId), 'supplier_rules', 'Your current plan does not include company card controls.');
     const body = event.body ? JSON.parse(event.body) as Record<string, unknown> : {};
     const companyCardId = Number(body.companyCardId);
     const employeeUserId = Number(body.employeeUserId);
@@ -39,7 +37,6 @@ export async function deleteHandler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
-    assertFeatureAccess(await getOrganisationBillingSummary(user.organisationId), 'supplier_rules', 'Your current plan does not include company card controls.');
     const exceptionId = Number(event.pathParameters?.id);
     if (!Number.isFinite(exceptionId)) {
       return jsonResponse(400, { success: false, error: 'invalid_company_card_exception_id', message: 'A numeric employee exception id is required.' });
