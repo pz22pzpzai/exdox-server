@@ -207,7 +207,21 @@ export function defaultTrialEndsAt(planId: BillingPlanId) {
 
 export function resolveAllowedWebRoutes(summary: OrganisationBillingSummary, role: UserRole) {
   if (role !== 'Business_Admin') {
-    return ['/dropbox', '/claims'];
+    if (!isBillingActive(summary)) {
+      // Employees cannot access company records after the organisation's access
+      // ends, but can still reach support from the signed-in workspace shell.
+      return ['/contact'];
+    }
+
+    const definition = getPlanDefinition(summary.planId);
+    const routes = ['/dropbox', '/claims', '/employee/reports'];
+    if (definition.routes.includes('/sales')) {
+      routes.push('/employee/sales');
+    }
+    if (definition.routes.includes('/vault')) {
+      routes.push('/employee/vault');
+    }
+    return routes;
   }
 
   const definition = getPlanDefinition(summary.planId);

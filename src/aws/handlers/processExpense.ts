@@ -57,7 +57,7 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
     });
   }
 
-  const options = readRequestOptions({
+  const requestedOptions = readRequestOptions({
     locale: parsed.locale,
     extract_line_items: parsed.extract_line_items,
     document_type: parsed.document_type,
@@ -65,6 +65,9 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
     payment_method: parsed.payment_method,
     skip_processing: parsed.skip_processing,
   });
+  const options = user.role === 'Standard_Employee' && requestedOptions.workspaceContext === 'cost'
+    ? { ...requestedOptions, paymentMethod: 'cash_personal' as const }
+    : requestedOptions;
   const billing = await getOrganisationBillingSummary(user.organisationId);
 
   if (!isBillingActive(billing)) {
@@ -111,6 +114,9 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
     document: vatAdjustedDocument,
     paymentMethod: options.paymentMethod,
   });
+  const paymentMethod = user.role === 'Standard_Employee' && options.workspaceContext === 'cost'
+    ? 'cash_personal' as const
+    : supplierRuleOutcome.paymentMethod;
   // OCR may supply complete fields, but a cost or sales document still requires
   // a reviewer to approve it before it can move to Ready.
   const document =
@@ -133,7 +139,7 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
     organisationId: user.organisationId,
     uploadedByUserId: user.id,
     workspaceContext: options.workspaceContext,
-    paymentMethod: supplierRuleOutcome.paymentMethod,
+    paymentMethod,
     category: supplierRuleOutcome.category,
     receiptSource: 'web_upload',
     status: determineInitialReceiptStatus(options, document),
@@ -182,7 +188,7 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
 
   const fileName = sanitizeText(payload.fileName) || s3Key.split('/').pop() || `receipt-${Date.now()}.jpg`;
   const mimeType = sanitizeText(payload.mimeType) || inferMimeType(fileName);
-  const options = readRequestOptions({
+  const requestedOptions = readRequestOptions({
     locale: payload.locale,
     extract_line_items: payload.extract_line_items,
     document_type: payload.document_type,
@@ -190,6 +196,9 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
     payment_method: payload.payment_method,
     skip_processing: payload.skip_processing,
   });
+  const options = user.role === 'Standard_Employee' && requestedOptions.workspaceContext === 'cost'
+    ? { ...requestedOptions, paymentMethod: 'cash_personal' as const }
+    : requestedOptions;
   const billing = await getOrganisationBillingSummary(user.organisationId);
 
   if (!isBillingActive(billing)) {
@@ -234,6 +243,9 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
     document: vatAdjustedDocument,
     paymentMethod: options.paymentMethod,
   });
+  const paymentMethod = user.role === 'Standard_Employee' && options.workspaceContext === 'cost'
+    ? 'cash_personal' as const
+    : supplierRuleOutcome.paymentMethod;
   // Keep JSON/direct-to-storage uploads on the same review-first workflow as
   // multipart web and mobile uploads.
   const document =
@@ -256,7 +268,7 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
     organisationId: user.organisationId,
     uploadedByUserId: user.id,
     workspaceContext: options.workspaceContext,
-    paymentMethod: supplierRuleOutcome.paymentMethod,
+    paymentMethod,
     category: supplierRuleOutcome.category,
     receiptSource: 'web_upload',
     status: determineInitialReceiptStatus(options, document),
