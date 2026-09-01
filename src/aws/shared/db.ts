@@ -526,9 +526,21 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
         : `expense-claims/org-${user.organisationId}/user-${user.id}/`;
     const keys = await listReceiptJsonKeys(prefix, Math.max(limit * 3, 50));
     const claims = await Promise.all(keys.map((key) => getReceiptJsonObject<StoredClaim>(key)));
+    const emptyStandardClaims = claims.filter(
+      (claim) =>
+        claim.organisationId === user.organisationId &&
+        claim.status === 'pending' &&
+        claim.name.startsWith('Expense Claim') &&
+        claim.totalAmount === 0 &&
+        claim.documentCount === 0,
+    );
+    await Promise.all(emptyStandardClaims.map((claim) => deleteReceiptObject(buildClaimKey(claim))));
+
+    const emptyClaimIds = new Set(emptyStandardClaims.map((claim) => claim.id));
     const relevantClaims = claims
       .filter((claim) => claim.organisationId === user.organisationId)
       .filter((claim) => (user.role === 'Business_Admin' ? true : claim.createdByUserId === user.id))
+      .filter((claim) => !emptyClaimIds.has(claim.id))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, limit);
 
@@ -547,6 +559,24 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
       };
     }));
   }
+
+  // Standard expense claims must have at least one attached receipt. Older
+  // interrupted app flows could leave empty drafts behind, so remove them as
+  // part of the normal read path instead of exposing £0.00 claims to users.
+  await pool.execute(
+    `DELETE FROM expense_claims
+     WHERE organisation_id = ?
+       AND (? = 'Business_Admin' OR created_by_user_id = ?)
+       AND status = 'pending'
+       AND name LIKE 'Expense Claim%'
+       AND NOT EXISTS (
+         SELECT 1
+         FROM receipts
+         WHERE receipts.organisation_id = expense_claims.organisation_id
+           AND receipts.claim_id = expense_claims.id
+       )`,
+    [user.organisationId, user.role, user.id],
+  );
 
   await reconcileReimbursementClaimStatuses(user);
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
