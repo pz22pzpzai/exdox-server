@@ -113,10 +113,9 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
     organisationId: user.organisationId,
     document: vatAdjustedDocument,
     paymentMethod: options.paymentMethod,
+    workspaceContext: options.workspaceContext,
   });
-  const paymentMethod = user.role === 'Standard_Employee' && options.workspaceContext === 'cost'
-    ? 'cash_personal' as const
-    : supplierRuleOutcome.paymentMethod;
+  const paymentMethod = supplierRuleOutcome.paymentMethod;
   // OCR may supply complete fields, but a cost or sales document still requires
   // a reviewer to approve it before it can move to Ready.
   const document =
@@ -242,10 +241,9 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
     organisationId: user.organisationId,
     document: vatAdjustedDocument,
     paymentMethod: options.paymentMethod,
+    workspaceContext: options.workspaceContext,
   });
-  const paymentMethod = user.role === 'Standard_Employee' && options.workspaceContext === 'cost'
-    ? 'cash_personal' as const
-    : supplierRuleOutcome.paymentMethod;
+  const paymentMethod = supplierRuleOutcome.paymentMethod;
   // Keep JSON/direct-to-storage uploads on the same review-first workflow as
   // multipart web and mobile uploads.
   const document =

@@ -2160,9 +2160,39 @@ export async function applySupplierRulesToDocument(input: {
   organisationId: number;
   document: NormalizedExpenseDocument;
   paymentMethod: PaymentMethod;
+  workspaceContext: WorkspaceContext;
 }) {
   const rules = await listSupplierRules(input.organisationId);
   const vendor = sanitizeText(input.document.vendorName).toLowerCase();
+  // Card references are matched against existing OCR output; this does not change
+  // extraction, it only classifies a receipt after extraction has completed.
+  const receiptText = [
+    input.document.rawTextSummary,
+    input.document.vendorName,
+    input.document.invoiceNumber,
+    ...input.document.notes,
+    ...input.document.lineItems.map((item) => item.description),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(' ')
+    .toLowerCase();
+  const matchedCompanyCard = input.workspaceContext === 'cost'
+    ? rules.find((rule) => {
+        const reference = rule.supplierMatchText.trim().toLowerCase();
+        return rule.isActive && rule.paymentMethod === 'business_card' && reference.length >= 4 && receiptText.includes(reference);
+      })
+    : undefined;
+  if (matchedCompanyCard) {
+    return {
+      document: {
+        ...input.document,
+        notes: [...input.document.notes, `Company card matched: ending ${matchedCompanyCard.supplierMatchText}`],
+      },
+      paymentMethod: 'business_card' as const,
+      matchedRuleId: matchedCompanyCard.id,
+      category: matchedCompanyCard.category || 'Uncategorised',
+    };
+  }
   const matchedRule = rules.find(
     (rule) => rule.isActive && vendor && vendor.includes(rule.supplierMatchText.trim().toLowerCase()),
   );
