@@ -253,6 +253,7 @@ export type OrganisationSettings = {
   baseCurrency: string;
   isVatRegistered: boolean;
   defaultTaxRate: string;
+  mileageRate: number;
 };
 
 export type OrganisationBillingSummary = {

@@ -774,6 +774,21 @@ Resources:
             Path: /claims/{id}
             Method: PUT
 
+  DeleteClaimFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/deleteClaim.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        DeleteClaimRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /claims/{id}
+            Method: DELETE
+
   GetSettingsFunction:
     Type: AWS::Serverless::Function
     Properties:

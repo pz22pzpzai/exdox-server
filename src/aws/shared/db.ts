@@ -142,6 +142,7 @@ type StoredOrganisation = {
   baseCurrency?: string;
   isVatRegistered?: boolean;
   defaultTaxRateCosts?: string;
+  mileageRate?: number;
   billingPlan?: BillingPlanId;
   billingStatus?: BillingStatus;
   billingCycle?: BillingCycle;
@@ -176,6 +177,22 @@ let receiptTaxTreatmentSchemaReady: Promise<void> | null = null;
 let companyCardSchemaReady: Promise<void> | null = null;
 let billingCycleSchemaReady: Promise<void> | null = null;
 let expenseClaimMileageSchemaReady: Promise<void> | null = null;
+let organisationMileageRateSchemaReady: Promise<void> | null = null;
+
+function normalizeMileageRate(value: unknown, fallback = 0.45) {
+  const rate = Number(value);
+  return Number.isFinite(rate) && rate > 0 && rate <= 100 ? Number(rate.toFixed(4)) : fallback;
+}
+
+async function ensureOrganisationMileageRateSchema() {
+  if (!pool) {
+    return;
+  }
+  organisationMileageRateSchemaReady ??= (async () => {
+    await pool.execute('ALTER TABLE organisations ADD COLUMN IF NOT EXISTS mileage_rate DECIMAL(10, 4) NOT NULL DEFAULT 0.4500 AFTER default_tax_rate_costs');
+  })();
+  await organisationMileageRateSchemaReady;
+}
 
 async function ensureExpenseClaimMileageSchema() {
   if (!pool) {
@@ -1701,11 +1718,14 @@ export async function getOrganisationSettings(organisationId: number): Promise<O
       isVatRegistered: (organisation as StoredOrganisation & { isVatRegistered?: boolean }).isVatRegistered !== false,
       defaultTaxRate:
         (organisation as StoredOrganisation & { defaultTaxRateCosts?: string }).defaultTaxRateCosts || '20% Standard',
+      mileageRate: normalizeMileageRate(organisation.mileageRate),
     };
   }
 
+  await ensureOrganisationMileageRateSchema();
+
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
-    `SELECT id, name, base_currency, is_vat_registered, default_tax_rate_costs
+    `SELECT id, name, base_currency, is_vat_registered, default_tax_rate_costs, mileage_rate
      FROM organisations
      WHERE id = ?
      LIMIT 1`,
@@ -1722,6 +1742,7 @@ export async function getOrganisationSettings(organisationId: number): Promise<O
     baseCurrency: row.base_currency ? String(row.base_currency).trim().toUpperCase() : 'GBP',
     isVatRegistered: row.is_vat_registered == null ? true : Boolean(row.is_vat_registered),
     defaultTaxRate: row.default_tax_rate_costs ? String(row.default_tax_rate_costs) : '20% Standard',
+    mileageRate: normalizeMileageRate(row.mileage_rate),
   };
 }
 
@@ -1811,6 +1832,7 @@ export async function updateOrganisationSettings(input: {
   baseCurrency?: string;
   isVatRegistered: boolean;
   defaultTaxRate: string;
+  mileageRate?: number;
 }) {
   const existingSettings = await getOrganisationSettings(input.organisationId);
   const baseCurrency = normalizeCurrencyCode(input.baseCurrency ?? existingSettings.baseCurrency);
@@ -1821,16 +1843,18 @@ export async function updateOrganisationSettings(input: {
       baseCurrency,
       isVatRegistered: input.isVatRegistered,
       defaultTaxRateCosts: sanitizeText(input.defaultTaxRate) || '20% Standard',
+      mileageRate: normalizeMileageRate(input.mileageRate, existingSettings.mileageRate),
     };
     await putReceiptJsonObject(buildOrganisationKey(input.organisationId), next);
     return getOrganisationSettings(input.organisationId);
   }
 
+  await ensureOrganisationMileageRateSchema();
   await pool.execute(
     `UPDATE organisations
-     SET base_currency = ?, is_vat_registered = ?, default_tax_rate_costs = ?, updated_at = CURRENT_TIMESTAMP
+     SET base_currency = ?, is_vat_registered = ?, default_tax_rate_costs = ?, mileage_rate = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
-    [baseCurrency, input.isVatRegistered ? 1 : 0, sanitizeText(input.defaultTaxRate) || '20% Standard', input.organisationId],
+    [baseCurrency, input.isVatRegistered ? 1 : 0, sanitizeText(input.defaultTaxRate) || '20% Standard', normalizeMileageRate(input.mileageRate, existingSettings.mileageRate), input.organisationId],
   );
 
   return getOrganisationSettings(input.organisationId);
@@ -2169,7 +2193,7 @@ export async function updateReimbursementPaymentStatus(
 
 export async function deleteReceiptById(user: AuthenticatedUser, receiptId: number) {
   const existing = await getReceiptById(user, receiptId);
-  if (existing.uploadedByUserId !== user.id) {
+  if (user.role !== 'Business_Admin' && existing.uploadedByUserId !== user.id) {
     throw forbiddenError('Only the account that uploaded this receipt can delete it.');
   }
 
@@ -2186,12 +2210,61 @@ export async function deleteReceiptById(user: AuthenticatedUser, receiptId: numb
   }
 
   const claimId = existing.claimId;
-  await pool.execute(
-    `DELETE FROM receipts WHERE id = ? AND organisation_id = ? AND uploaded_by_user_id = ?`,
-    [receiptId, user.organisationId, user.id],
-  );
+  if (user.role === 'Business_Admin') {
+    await pool.execute(`DELETE FROM receipts WHERE id = ? AND organisation_id = ?`, [receiptId, user.organisationId]);
+  } else {
+    await pool.execute(
+      `DELETE FROM receipts WHERE id = ? AND organisation_id = ? AND uploaded_by_user_id = ?`,
+      [receiptId, user.organisationId, user.id],
+    );
+  }
   if (claimId !== null) {
     await deleteEmptyClaimIfOrphaned(user.organisationId, claimId);
+  }
+  return { success: true };
+}
+
+export async function deleteExpenseClaim(user: AuthenticatedUser, claimId: number) {
+  if (!pool) {
+    const claim = await getS3Claim(user.organisationId, claimId);
+    if (!claim || (user.role !== 'Business_Admin' && claim.createdByUserId !== user.id)) {
+      throw notFoundError('Expense claim not found.');
+    }
+    if (claim.status !== 'pending') {
+      throw validationError('Only a pending expense claim can be deleted.');
+    }
+    const receipts = await listOrganisationWorkspaceReceiptsFromS3(user.organisationId, 'cost', 1000);
+    await Promise.all(receipts.filter((receipt) => receipt.claimId === claimId).map((receipt) =>
+      putReceiptJsonObject(buildReceiptMetadataKey(receipt), { ...receipt, claimId: null, updatedAt: new Date().toISOString() }),
+    ));
+    await deleteReceiptObject(buildClaimKey(claim));
+    return { success: true };
+  }
+
+  await ensureExpenseClaimMileageSchema();
+  const [claims] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT id, status FROM expense_claims
+     WHERE id = ? AND organisation_id = ? AND (? = 'Business_Admin' OR created_by_user_id = ?)
+     LIMIT 1`,
+    [claimId, user.organisationId, user.role, user.id],
+  );
+  if (!claims[0]) {
+    throw notFoundError('Expense claim not found.');
+  }
+  if (String(claims[0].status) !== 'pending') {
+    throw validationError('Only a pending expense claim can be deleted.');
+  }
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute(`UPDATE receipts SET claim_id = NULL WHERE organisation_id = ? AND claim_id = ?`, [user.organisationId, claimId]);
+    await connection.execute(`DELETE FROM expense_claims WHERE id = ? AND organisation_id = ?`, [claimId, user.organisationId]);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
   }
   return { success: true };
 }
@@ -3496,6 +3569,7 @@ async function createS3Organisation(
     name,
     isVatRegistered: true,
     defaultTaxRateCosts: '20% Standard',
+    mileageRate: 0.45,
     billingPlan,
     billingStatus: initialBillingStatus,
     billingCycle,

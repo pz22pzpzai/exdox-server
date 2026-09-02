@@ -1,6 +1,6 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
-import { createExpenseClaim } from '../shared/db.js';
+import { createExpenseClaim, getOrganisationSettings } from '../shared/db.js';
 import { requireAuthenticatedUser } from '../shared/auth.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
@@ -13,6 +13,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const startPostcode = sanitizeText(body.startPostcode);
     const endPostcode = sanitizeText(body.endPostcode);
     const totalMiles = Number(body.totalMiles);
+    const submittedMileageRate = Number(body.mileageRate);
     if (
       claimType === 'mileage' &&
       (!startPostcode || !endPostcode || !Number.isFinite(totalMiles) || totalMiles <= 0)
@@ -23,7 +24,13 @@ export async function handler(event: APIGatewayProxyEventV2) {
         message: 'Provide a start postcode, end postcode, and a positive total miles value.',
       });
     }
-    const mileageTotalAmount = claimType === 'mileage' ? Number((totalMiles * 0.45).toFixed(2)) : null;
+    const organisationSettings = claimType === 'mileage' ? await getOrganisationSettings(user.organisationId) : null;
+    const mileageRate = claimType === 'mileage'
+      ? (Number.isFinite(submittedMileageRate) && submittedMileageRate > 0 && submittedMileageRate <= 100
+        ? Number(submittedMileageRate.toFixed(4))
+        : organisationSettings!.mileageRate)
+      : null;
+    const mileageTotalAmount = claimType === 'mileage' ? Number((totalMiles * mileageRate!).toFixed(2)) : null;
     const claim = await createExpenseClaim({
       organisationId: user.organisationId,
       createdByUserId: user.id,
@@ -34,7 +41,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       mileageStartPostcode: claimType === 'mileage' ? startPostcode : null,
       mileageEndPostcode: claimType === 'mileage' ? endPostcode : null,
       mileageTotalMiles: claimType === 'mileage' ? totalMiles : null,
-      mileageRate: claimType === 'mileage' ? 0.45 : null,
+      mileageRate,
       mileageTotalAmount,
     });
 

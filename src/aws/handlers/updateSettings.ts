@@ -15,6 +15,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       baseCurrency: sanitizeText(body.baseCurrency) || undefined,
       isVatRegistered: parseBoolean(String(body.isVatRegistered ?? 'false'), false),
       defaultTaxRate: sanitizeText(body.defaultTaxRate) || 'No VAT',
+      mileageRate: Number(body.mileageRate),
     });
 
     return jsonResponse(200, {
