@@ -594,13 +594,15 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
         : `expense-claims/org-${user.organisationId}/user-${user.id}/`;
     const keys = await listReceiptJsonKeys(prefix, Math.max(limit * 3, 50));
     const claims = await Promise.all(keys.map((key) => getReceiptJsonObject<StoredClaim>(key)));
+    const emptyClaimCutoff = Date.now() - 10 * 60 * 1000;
     const emptyStandardClaims = claims.filter(
       (claim) =>
         claim.organisationId === user.organisationId &&
         claim.status === 'pending' &&
         claim.name.startsWith('Expense Claim') &&
         claim.totalAmount === 0 &&
-        claim.documentCount === 0,
+        claim.documentCount === 0 &&
+        new Date(claim.createdAt).getTime() < emptyClaimCutoff,
     );
     await Promise.all(emptyStandardClaims.map((claim) => deleteReceiptObject(buildClaimKey(claim))));
 
@@ -637,6 +639,7 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
        AND (? = 'Business_Admin' OR created_by_user_id = ?)
        AND status = 'pending'
        AND name LIKE 'Expense Claim%'
+       AND created_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 10 MINUTE)
        AND NOT EXISTS (
          SELECT 1
          FROM receipts
@@ -695,8 +698,7 @@ export async function attachReceiptToClaim(input: {
   receiptId: number;
   claimId: number;
 }): Promise<ReceiptRow> {
-  const accessibleClaims = await listExpenseClaims(input.user, 200);
-  const targetClaim = accessibleClaims.find((claim) => claim.id === input.claimId);
+  const targetClaim = await findExpenseClaimForAttachment(input.user, input.claimId);
   if (!targetClaim) {
     throw notFoundError('Expense claim not found.');
   }
@@ -784,6 +786,45 @@ export async function attachReceiptToClaim(input: {
     claimId: input.claimId,
     updatedAt: new Date().toISOString(),
   };
+}
+
+async function findExpenseClaimForAttachment(
+  user: AuthenticatedUser,
+  claimId: number,
+): Promise<Pick<ExpenseClaimRow, 'id' | 'status'> | null> {
+  if (!pool) {
+    const prefix =
+      user.role === 'Business_Admin'
+        ? `expense-claims/org-${user.organisationId}/`
+        : `expense-claims/org-${user.organisationId}/user-${user.id}/`;
+    const keys = await listReceiptJsonKeys(prefix, 1000);
+
+    for (const key of keys) {
+      const claim = await getReceiptJsonObject<StoredClaim>(key);
+      if (
+        claim.id === claimId &&
+        claim.organisationId === user.organisationId &&
+        (user.role === 'Business_Admin' || claim.createdByUserId === user.id)
+      ) {
+        return claim;
+      }
+    }
+    return null;
+  }
+
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT id, status
+     FROM expense_claims
+     WHERE id = ?
+       AND organisation_id = ?
+       AND (? = 'Business_Admin' OR created_by_user_id = ?)
+     LIMIT 1`,
+    [claimId, user.organisationId, user.role, user.id],
+  );
+  const claim = rows[0];
+  return claim
+    ? { id: Number(claim.id), status: String(claim.status) as ExpenseClaimRow['status'] }
+    : null;
 }
 
 export async function createUser(input: {
