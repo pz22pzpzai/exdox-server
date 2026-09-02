@@ -175,6 +175,22 @@ let teamSchemaReady: Promise<void> | null = null;
 let receiptTaxTreatmentSchemaReady: Promise<void> | null = null;
 let companyCardSchemaReady: Promise<void> | null = null;
 let billingCycleSchemaReady: Promise<void> | null = null;
+let expenseClaimMileageSchemaReady: Promise<void> | null = null;
+
+async function ensureExpenseClaimMileageSchema() {
+  if (!pool) {
+    return;
+  }
+  expenseClaimMileageSchemaReady ??= (async () => {
+    await pool.execute("ALTER TABLE expense_claims ADD COLUMN IF NOT EXISTS claim_type VARCHAR(24) NOT NULL DEFAULT 'standard' AFTER currency");
+    await pool.execute('ALTER TABLE expense_claims ADD COLUMN IF NOT EXISTS mileage_start_postcode VARCHAR(24) NULL AFTER claim_type');
+    await pool.execute('ALTER TABLE expense_claims ADD COLUMN IF NOT EXISTS mileage_end_postcode VARCHAR(24) NULL AFTER mileage_start_postcode');
+    await pool.execute('ALTER TABLE expense_claims ADD COLUMN IF NOT EXISTS mileage_total_miles DECIMAL(10, 2) NULL AFTER mileage_end_postcode');
+    await pool.execute('ALTER TABLE expense_claims ADD COLUMN IF NOT EXISTS mileage_rate DECIMAL(10, 4) NULL AFTER mileage_total_miles');
+    await pool.execute('ALTER TABLE expense_claims ADD COLUMN IF NOT EXISTS mileage_total_amount DECIMAL(12, 2) NULL AFTER mileage_rate');
+  })();
+  await expenseClaimMileageSchemaReady;
+}
 
 async function ensureBillingCycleSchema() {
   if (!pool) {
@@ -549,6 +565,12 @@ export async function createExpenseClaim(input: {
   name: string;
   description?: string | null;
   currency?: string | null;
+  claimType?: 'standard' | 'mileage';
+  mileageStartPostcode?: string | null;
+  mileageEndPostcode?: string | null;
+  mileageTotalMiles?: number | null;
+  mileageRate?: number | null;
+  mileageTotalAmount?: number | null;
 }): Promise<ExpenseClaimRow> {
   const name = sanitizeText(input.name);
   if (!name) {
@@ -563,8 +585,14 @@ export async function createExpenseClaim(input: {
     description: sanitizeText(input.description) || null,
     currency: sanitizeText(input.currency) || 'GBP',
     status: 'pending',
-    totalAmount: 0,
+    totalAmount: input.claimType === 'mileage' ? Number(input.mileageTotalAmount ?? 0) : 0,
     documentCount: 0,
+    claimType: input.claimType === 'mileage' ? 'mileage' : 'standard',
+    mileageStartPostcode: sanitizeText(input.mileageStartPostcode) || null,
+    mileageEndPostcode: sanitizeText(input.mileageEndPostcode) || null,
+    mileageTotalMiles: input.mileageTotalMiles ?? null,
+    mileageRate: input.mileageRate ?? null,
+    mileageTotalAmount: input.mileageTotalAmount ?? null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -574,10 +602,26 @@ export async function createExpenseClaim(input: {
     return claim;
   }
 
+  await ensureExpenseClaimMileageSchema();
+
   const [result] = await pool.execute<mysql.ResultSetHeader>(
-    `INSERT INTO expense_claims (organisation_id, created_by_user_id, name, description, currency, status)
-     VALUES (?, ?, ?, ?, ?, 'pending')`,
-    [input.organisationId, input.createdByUserId, claim.name, claim.description, claim.currency],
+    `INSERT INTO expense_claims (
+       organisation_id, created_by_user_id, name, description, currency, claim_type,
+       mileage_start_postcode, mileage_end_postcode, mileage_total_miles, mileage_rate, mileage_total_amount, status
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+    [
+      input.organisationId,
+      input.createdByUserId,
+      claim.name,
+      claim.description,
+      claim.currency,
+      claim.claimType,
+      claim.mileageStartPostcode,
+      claim.mileageEndPostcode,
+      claim.mileageTotalMiles,
+      claim.mileageRate,
+      claim.mileageTotalAmount,
+    ],
   );
 
   return {
@@ -602,6 +646,7 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
         claim.name.startsWith('Expense Claim') &&
         claim.totalAmount === 0 &&
         claim.documentCount === 0 &&
+        claim.claimType !== 'mileage' &&
         new Date(claim.createdAt).getTime() < emptyClaimCutoff,
     );
     await Promise.all(emptyStandardClaims.map((claim) => deleteReceiptObject(buildClaimKey(claim))));
@@ -630,6 +675,8 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
     }));
   }
 
+  await ensureExpenseClaimMileageSchema();
+
   // Standard expense claims must have at least one attached receipt. Older
   // interrupted app flows could leave empty drafts behind, so remove them as
   // part of the normal read path instead of exposing £0.00 claims to users.
@@ -639,6 +686,7 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
        AND (? = 'Business_Admin' OR created_by_user_id = ?)
        AND status = 'pending'
        AND name LIKE 'Expense Claim%'
+       AND claim_type <> 'mileage'
        AND created_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 10 MINUTE)
        AND NOT EXISTS (
          SELECT 1
@@ -658,19 +706,30 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
       c.name,
       c.description,
       c.currency,
+      c.claim_type,
+      c.mileage_start_postcode,
+      c.mileage_end_postcode,
+      c.mileage_total_miles,
+      c.mileage_rate,
+      c.mileage_total_amount,
       c.status,
       c.created_at,
       c.updated_at,
       u.full_name AS claimant_name,
       u.email AS claimant_email,
       COUNT(r.id) AS document_count,
-      COALESCE(SUM(r.total_amount), 0) AS total_amount
+      CASE WHEN c.claim_type = 'mileage'
+        THEN COALESCE(c.mileage_total_amount, 0)
+        ELSE COALESCE(SUM(r.total_amount), 0)
+      END AS total_amount
     FROM expense_claims c
     LEFT JOIN users u ON u.id = c.created_by_user_id AND u.organisation_id = c.organisation_id
     LEFT JOIN receipts r ON r.claim_id = c.id
     WHERE c.organisation_id = ?
       AND (? = 'Business_Admin' OR c.created_by_user_id = ?)
-    GROUP BY c.id, u.full_name, u.email
+    GROUP BY c.id, c.currency, c.claim_type, c.mileage_start_postcode, c.mileage_end_postcode,
+             c.mileage_total_miles, c.mileage_rate, c.mileage_total_amount, c.status,
+             c.created_at, c.updated_at, u.full_name, u.email
     ORDER BY c.created_at DESC
     LIMIT ?`,
     [user.organisationId, user.role, user.id, limit],
@@ -686,6 +745,12 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
     status: String(row.status) as ExpenseClaimRow['status'],
     totalAmount: Number(row.total_amount ?? 0),
     documentCount: Number(row.document_count ?? 0),
+    claimType: String(row.claim_type) === 'mileage' ? 'mileage' : 'standard',
+    mileageStartPostcode: row.mileage_start_postcode ? String(row.mileage_start_postcode) : null,
+    mileageEndPostcode: row.mileage_end_postcode ? String(row.mileage_end_postcode) : null,
+    mileageTotalMiles: row.mileage_total_miles === null || row.mileage_total_miles === undefined ? null : Number(row.mileage_total_miles),
+    mileageRate: row.mileage_rate === null || row.mileage_rate === undefined ? null : Number(row.mileage_rate),
+    mileageTotalAmount: row.mileage_total_amount === null || row.mileage_total_amount === undefined ? null : Number(row.mileage_total_amount),
     claimantName: row.claimant_name ? String(row.claimant_name) : null,
     claimantEmail: row.claimant_email ? String(row.claimant_email) : null,
     createdAt: new Date(row.created_at).toISOString(),
@@ -2884,6 +2949,13 @@ function filterReceiptForUser(receipt: ReceiptRow, user: AuthenticatedUser) {
 }
 
 function hydrateClaimTotals(claim: StoredClaim, receipts: ReceiptRow[]): ExpenseClaimRow {
+  if (claim.claimType === 'mileage') {
+    return {
+      ...claim,
+      totalAmount: Number(claim.mileageTotalAmount ?? claim.totalAmount ?? 0),
+      documentCount: 0,
+    };
+  }
   const attached = receipts.filter((receipt) => receipt.claimId === claim.id);
   return {
     ...claim,
@@ -2992,6 +3064,9 @@ async function deleteEmptyClaimIfOrphaned(organisationId: number, claimId: numbe
     if (!claim) {
       return;
     }
+    if (claim.claimType === 'mileage') {
+      return;
+    }
     const receipts = await listOrganisationWorkspaceReceiptsFromS3(organisationId, 'cost', 1000);
     const stillAttached = receipts.some((receipt) => receipt.claimId === claimId);
     if (!stillAttached) {
@@ -3000,12 +3075,18 @@ async function deleteEmptyClaimIfOrphaned(organisationId: number, claimId: numbe
     return;
   }
 
+  await ensureExpenseClaimMileageSchema();
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
-    `SELECT COUNT(*) AS receipt_count
-     FROM receipts
-     WHERE organisation_id = ? AND claim_id = ?`,
+    `SELECT c.claim_type, COUNT(r.id) AS receipt_count
+     FROM expense_claims c
+     LEFT JOIN receipts r ON r.organisation_id = c.organisation_id AND r.claim_id = c.id
+     WHERE c.organisation_id = ? AND c.id = ?
+     GROUP BY c.id, c.claim_type`,
     [organisationId, claimId],
   );
+  if (String(rows[0]?.claim_type) === 'mileage') {
+    return;
+  }
   const receiptCount = Number(rows[0]?.receipt_count ?? 0);
   if (receiptCount === 0) {
     await pool.execute(`DELETE FROM expense_claims WHERE id = ? AND organisation_id = ?`, [claimId, organisationId]);

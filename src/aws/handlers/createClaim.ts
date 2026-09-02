@@ -8,13 +8,34 @@ import { sanitizeText } from '../shared/helpers.js';
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
-    const body = event.body ? (JSON.parse(event.body) as Record<string, string | undefined>) : {};
+    const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
+    const claimType = body.claimType === 'mileage' ? 'mileage' : 'standard';
+    const startPostcode = sanitizeText(body.startPostcode);
+    const endPostcode = sanitizeText(body.endPostcode);
+    const totalMiles = Number(body.totalMiles);
+    if (
+      claimType === 'mileage' &&
+      (!startPostcode || !endPostcode || !Number.isFinite(totalMiles) || totalMiles <= 0)
+    ) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'invalid_mileage_claim',
+        message: 'Provide a start postcode, end postcode, and a positive total miles value.',
+      });
+    }
+    const mileageTotalAmount = claimType === 'mileage' ? Number((totalMiles * 0.45).toFixed(2)) : null;
     const claim = await createExpenseClaim({
       organisationId: user.organisationId,
       createdByUserId: user.id,
-      name: sanitizeText(body.name) || `Expense Claim ${new Date().toISOString().slice(0, 10)}`,
+      name: sanitizeText(body.name) || `${claimType === 'mileage' ? 'Mileage claim' : 'Expense Claim'} ${new Date().toISOString().slice(0, 10)}`,
       description: sanitizeText(body.description) || null,
       currency: sanitizeText(body.currency) || 'GBP',
+      claimType,
+      mileageStartPostcode: claimType === 'mileage' ? startPostcode : null,
+      mileageEndPostcode: claimType === 'mileage' ? endPostcode : null,
+      mileageTotalMiles: claimType === 'mileage' ? totalMiles : null,
+      mileageRate: claimType === 'mileage' ? 0.45 : null,
+      mileageTotalAmount,
     });
 
     return jsonResponse(200, {
