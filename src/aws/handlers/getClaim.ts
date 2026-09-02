@@ -1,6 +1,6 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
-import { listExpenseClaims, listReceiptsByClaim } from '../shared/db.js';
+import { listClaimEvidence, listExpenseClaims, listReceiptsByClaim } from '../shared/db.js';
 import { requireAuthenticatedUser } from '../shared/auth.js';
 import { jsonResponse } from '../shared/http.js';
 
@@ -26,11 +26,12 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
-    const receipts = await listReceiptsByClaim(user, claimId);
+    const [receipts, evidence] = await Promise.all([listReceiptsByClaim(user, claimId), listClaimEvidence(user, claimId)]);
     return jsonResponse(200, {
       success: true,
       claim,
       receipts,
+      evidence,
     });
   } catch (error) {
     const status =

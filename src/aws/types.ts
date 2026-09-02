@@ -180,6 +180,17 @@ export type ExpenseClaimRow = {
   updatedAt: string;
 };
 
+export type ClaimEvidenceRow = {
+  id: string;
+  organisationId: number;
+  claimId: number;
+  uploadedByUserId: number;
+  sourceFilename: string;
+  sourceMimeType: string;
+  s3Key: string;
+  createdAt: string;
+};
+
 export type SupplierRuleRow = {
   id: number;
   organisationId: number;

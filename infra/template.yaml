@@ -759,6 +759,36 @@ Resources:
             Path: /claims/{id}
             Method: GET
 
+  AddClaimEvidenceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/addClaimEvidence.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AddClaimEvidenceRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /claims/{id}/evidence
+            Method: POST
+
+  GetClaimEvidenceAssetUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/getClaimEvidenceAssetUrl.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        GetClaimEvidenceAssetUrlRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /claims/{id}/evidence/{evidenceId}/asset-url
+            Method: GET
+
   UpdateClaimFunction:
     Type: AWS::Serverless::Function
     Properties:

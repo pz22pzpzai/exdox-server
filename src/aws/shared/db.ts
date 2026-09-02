@@ -11,10 +11,12 @@ import {
   getReceiptJsonObject,
   listAllReceiptJsonKeys,
   listReceiptJsonKeys,
+  putReceiptObject,
   putReceiptJsonObject,
 } from './s3.js';
 import {
   type AuthenticatedUser,
+  type ClaimEvidenceRow,
   type BankRequisitionRow,
   type BankTransactionRow,
   type BillingCycle,
@@ -787,6 +789,9 @@ export async function attachReceiptToClaim(input: {
   if (targetClaim.status === 'paid' || targetClaim.status === 'rejected') {
     throw validationError('Receipts cannot be attached to a paid or rejected claim.');
   }
+  if (targetClaim.claimType === 'mileage') {
+    throw validationError('Receipts cannot be attached to a mileage claim. Add journey proof images instead.');
+  }
 
   if (!pool) {
     const receipts = await listReceipts(input.user, { limit: 500 });
@@ -873,7 +878,7 @@ export async function attachReceiptToClaim(input: {
 async function findExpenseClaimForAttachment(
   user: AuthenticatedUser,
   claimId: number,
-): Promise<Pick<ExpenseClaimRow, 'id' | 'status'> | null> {
+): Promise<Pick<ExpenseClaimRow, 'id' | 'status' | 'claimType'> | null> {
   if (!pool) {
     const prefix =
       user.role === 'Business_Admin'
@@ -895,7 +900,7 @@ async function findExpenseClaimForAttachment(
   }
 
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
-    `SELECT id, status
+    `SELECT id, status, claim_type
      FROM expense_claims
      WHERE id = ?
        AND organisation_id = ?
@@ -905,7 +910,7 @@ async function findExpenseClaimForAttachment(
   );
   const claim = rows[0];
   return claim
-    ? { id: Number(claim.id), status: String(claim.status) as ExpenseClaimRow['status'] }
+    ? { id: Number(claim.id), status: String(claim.status) as ExpenseClaimRow['status'], claimType: String(claim.claim_type) === 'mileage' ? 'mileage' : 'standard' }
     : null;
 }
 
@@ -2271,6 +2276,45 @@ export async function deleteExpenseClaim(user: AuthenticatedUser, claimId: numbe
 
 export async function listReceiptsByClaim(user: AuthenticatedUser, claimId: number) {
   return listReceipts(user, { claimId, limit: 200 });
+}
+
+export async function listClaimEvidence(user: AuthenticatedUser, claimId: number): Promise<ClaimEvidenceRow[]> {
+  const claims = await listExpenseClaims(user, 200);
+  if (!claims.some((claim) => claim.id === claimId)) {
+    throw notFoundError('Expense claim not found.');
+  }
+  const keys = await listReceiptJsonKeys(`claim-evidence/org-${user.organisationId}/claim-${claimId}/`, 100);
+  return Promise.all(keys.filter((key) => key.endsWith('.json')).map((key) => getReceiptJsonObject<ClaimEvidenceRow>(key)));
+}
+
+export async function addClaimEvidence(input: {
+  user: AuthenticatedUser;
+  claimId: number;
+  filename: string;
+  mimeType: string;
+  body: Buffer;
+}): Promise<ClaimEvidenceRow> {
+  const claims = await listExpenseClaims(input.user, 200);
+  const claim = claims.find((candidate) => candidate.id === input.claimId);
+  if (!claim) throw notFoundError('Expense claim not found.');
+  if (claim.claimType !== 'mileage') throw validationError('Proof images can only be added to mileage claims.');
+  if (claim.status !== 'pending') throw validationError('Proof images can only be added while a mileage claim is pending.');
+  const id = crypto.randomUUID();
+  const safeName = input.filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'journey-proof.jpg';
+  const prefix = `claim-evidence/org-${input.user.organisationId}/claim-${input.claimId}/${id}`;
+  const evidence: ClaimEvidenceRow = {
+    id,
+    organisationId: input.user.organisationId,
+    claimId: input.claimId,
+    uploadedByUserId: input.user.id,
+    sourceFilename: safeName,
+    sourceMimeType: input.mimeType,
+    s3Key: `${prefix}-${safeName}`,
+    createdAt: new Date().toISOString(),
+  };
+  await putReceiptObject({ key: evidence.s3Key, body: input.body, contentType: evidence.sourceMimeType });
+  await putReceiptJsonObject(`${prefix}.json`, evidence);
+  return evidence;
 }
 
 export async function updateClaimStatus(user: AuthenticatedUser, claimId: number, status: ExpenseClaimRow['status']) {
