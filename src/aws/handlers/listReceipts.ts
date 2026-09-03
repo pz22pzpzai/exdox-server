@@ -22,6 +22,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       limit: Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 200) : 50,
       workspaceContext,
       onlyClaimable: parseBoolean(query.only_claimable, false),
+      includeMileageCosts: parseBoolean(query.include_mileage_costs, false),
       claimId: Number.isFinite(claimId) ? claimId : undefined,
     });
 

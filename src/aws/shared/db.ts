@@ -498,6 +498,7 @@ export async function listReceipts(
     workspaceContext?: WorkspaceContext;
     onlyClaimable?: boolean;
     claimId?: number;
+    includeMileageCosts?: boolean;
     limit?: number;
   },
 ): Promise<ReceiptRow[]> {
@@ -506,13 +507,15 @@ export async function listReceipts(
   const onlyClaimable = options?.onlyClaimable ?? false;
   const claimId = options?.claimId ?? null;
 
+  const includeMileageCosts = options?.includeMileageCosts === true && workspaceContext === 'cost' && !onlyClaimable && claimId === null;
+
   if (!pool) {
     const prefix = buildReceiptListPrefix(user, workspaceContext);
     const keys = await listReceiptJsonKeys(prefix, Math.max(limit * 4, 50));
     const receipts = await Promise.all(keys.map((key) => getReceiptJsonObject<ReceiptRow>(key)));
     const users = await listS3UsersForOrganisation(user.organisationId);
     const usersById = new Map(users.map((candidate) => [candidate.id, candidate]));
-    return receipts
+    const visibleReceipts = receipts
       .filter((receipt) => filterReceiptForUser(receipt, user))
       .filter((receipt) => (workspaceContext ? receipt.workspaceContext === workspaceContext : true))
       .filter((receipt) =>
@@ -534,6 +537,9 @@ export async function listReceipts(
           uploadedByEmail: uploader?.email ?? null,
         };
       });
+    return includeMileageCosts
+      ? mergeMileageCostsIntoCostInbox(user, visibleReceipts, limit)
+      : visibleReceipts;
   }
 
   await ensureTeamSchema();
@@ -575,7 +581,100 @@ export async function listReceipts(
     params,
   );
 
-  return rows.map(mapReceiptRow);
+  const visibleReceipts = rows.map(mapReceiptRow);
+  return includeMileageCosts
+    ? mergeMileageCostsIntoCostInbox(user, visibleReceipts, limit)
+    : visibleReceipts;
+}
+
+async function mergeMileageCostsIntoCostInbox(
+  user: AuthenticatedUser,
+  receipts: ReceiptRow[],
+  limit: number,
+): Promise<ReceiptRow[]> {
+  // Mileage remains a structured claim so the mobile submit and journey-proof
+  // APIs stay intact. This projection is deliberately only for Costs: it does
+  // not create a receipt, invoke OCR, or make proof images part of VAT data.
+  const mileageCosts = (await listExpenseClaims(user, 200))
+    .filter((claim) => claim.claimType === 'mileage')
+    .map(mileageClaimToCostRecord);
+  return [...receipts, ...mileageCosts]
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .slice(0, limit);
+}
+
+function mileageClaimToCostRecord(claim: ExpenseClaimRow): ReceiptRow {
+  const status: ReceiptRow['status'] = claim.status === 'pending'
+    ? 'Review'
+    : claim.status === 'approved'
+      ? 'Ready'
+      : claim.status === 'paid'
+        ? 'Paid'
+        : 'Rejected';
+  const journey = [claim.mileageStartPostcode, claim.mileageEndPostcode].filter(Boolean).join(' to ');
+  const total = Number(claim.mileageTotalAmount ?? claim.totalAmount ?? 0);
+  return {
+    id: -claim.id,
+    mileageClaimId: claim.id,
+    organisationId: claim.organisationId,
+    uploadedByUserId: claim.createdByUserId,
+    uploadedByName: claim.claimantName ?? null,
+    uploadedByEmail: claim.claimantEmail ?? null,
+    workspaceContext: 'cost',
+    paymentMethod: 'cash_personal',
+    paymentMethodMatchState: 'personal',
+    paymentMethodReviewRequired: false,
+    matchedCompanyCardId: null,
+    claimId: null,
+    status,
+    category: 'Mileage',
+    description: journey || claim.description || 'Mileage journey',
+    customer: null,
+    receiptSource: 'mobile',
+    sourceFilename: `Mileage journey ${claim.createdAt.slice(0, 10)}`,
+    sourceMimeType: 'application/x-exdox-mileage',
+    s3Bucket: '',
+    s3Key: '',
+    locale: 'en-GB',
+    documentType: 'unknown',
+    vendorName: 'Mileage',
+    invoiceDate: claim.createdAt.slice(0, 10),
+    dueDate: null,
+    invoiceNumber: `MILEAGE-${claim.id}`,
+    paymentCardLastFour: null,
+    paymentCardNetwork: null,
+    paymentCardIssuer: null,
+    currency: claim.currency,
+    baseCurrency: claim.currency,
+    exchangeRate: 1,
+    exchangeRateDate: claim.createdAt.slice(0, 10),
+    exchangeRateProvider: 'same_currency',
+    baseTotalAmount: total,
+    exchangeRateOverride: false,
+    exchangeRateNote: null,
+    totalAmount: total,
+    netAmount: total,
+    vatAmount: 0,
+    taxRateApplied: 'No VAT',
+    subtotalAmount: total,
+    totalTaxAmount: 0,
+    foreignTaxAmount: null,
+    foreignTaxLabel: null,
+    ukVatTreatment: 'not_applicable',
+    reimbursementBatchId: null,
+    reimbursementBatchCreatedAt: null,
+    confidenceScore: null,
+    confidenceSource: 'unavailable',
+    needsReview: status === 'Review',
+    extractionProvider: 'structured_mileage',
+    extractionModel: 'not_applicable',
+    lineItems: [],
+    taxBreakdown: [],
+    notes: [`${Number(claim.mileageTotalMiles ?? 0).toFixed(1)} miles at ${Number(claim.mileageRate ?? 0).toFixed(4)} per mile.`],
+    rawTextSummary: 'Structured mileage cost. Journey proof is held separately from receipts.',
+    createdAt: claim.createdAt,
+    updatedAt: claim.updatedAt,
+  };
 }
 
 export async function createExpenseClaim(input: {
@@ -3612,7 +3711,7 @@ function normalizeReceiptDate(invoiceDate: string | null | undefined, createdAt:
 
 function normalizeReceiptStatus(status: unknown): ReceiptRow['status'] {
   const trimmed = typeof status === 'string' ? status.trim() : '';
-  if (trimmed === 'Processing' || trimmed === 'Ready' || trimmed === 'Review' || trimmed === 'Published' || trimmed === 'Payment processing' || trimmed === 'Paid') {
+  if (trimmed === 'Processing' || trimmed === 'Ready' || trimmed === 'Review' || trimmed === 'Published' || trimmed === 'Payment processing' || trimmed === 'Paid' || trimmed === 'Rejected') {
     return trimmed;
   }
   return 'Review';

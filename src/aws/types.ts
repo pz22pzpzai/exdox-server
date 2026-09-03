@@ -2,7 +2,7 @@ export type DocumentType = 'receipt' | 'invoice' | 'unknown';
 export type WorkspaceContext = 'cost' | 'sales' | 'vault';
 export type PaymentMethod = 'business_card' | 'cash_personal' | 'bank_transfer' | 'not_applicable';
 export type PaymentMethodMatchState = 'not_detected' | 'personal' | 'company_card' | 'employee_review' | 'employee_exception';
-export type InboxStatus = 'Processing' | 'Ready' | 'Review' | 'Published' | 'Payment processing' | 'Paid';
+export type InboxStatus = 'Processing' | 'Ready' | 'Review' | 'Published' | 'Payment processing' | 'Paid' | 'Rejected';
 export type ReceiptSource = 'mobile' | 'email' | 'web_upload' | 'bank_import';
 
 export type UserRole = 'Business_Admin' | 'Standard_Employee';
@@ -87,6 +87,10 @@ export type ReceiptRow = {
   paymentMethodReviewRequired: boolean;
   matchedCompanyCardId: number | null;
   claimId: number | null;
+  // Mileage is stored as structured journey evidence, not as a receipt. It is
+  // projected into the Costs inbox with this link so it follows the same cost
+  // review queue without entering OCR, VAT, or receipt reimbursement flows.
+  mileageClaimId?: number | null;
   status: InboxStatus;
   category: string | null;
   description: string | null;
