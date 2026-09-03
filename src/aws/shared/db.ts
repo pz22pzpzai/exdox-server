@@ -2398,6 +2398,8 @@ export async function addClaimEvidence(input: {
   if (!claim) throw notFoundError('Expense claim not found.');
   if (claim.claimType !== 'mileage') throw validationError('Proof images can only be added to mileage claims.');
   if (claim.status !== 'pending') throw validationError('Proof images can only be added while a mileage claim is pending.');
+  const existingEvidence = await listClaimEvidence(input.user, input.claimId);
+  if (existingEvidence.length >= 5) throw validationError('A mileage claim can have up to five journey proof images.');
   const id = crypto.randomUUID();
   const safeName = input.filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'journey-proof.jpg';
   const prefix = `claim-evidence/org-${input.user.organisationId}/claim-${input.claimId}/${id}`;
