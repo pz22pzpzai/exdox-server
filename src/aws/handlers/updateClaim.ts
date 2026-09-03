@@ -1,6 +1,6 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
-import { findUserById, updateClaimStatus } from '../shared/db.js';
+import { findUserById, updateClaimDetails, updateClaimStatus } from '../shared/db.js';
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
 import { assertFeatureAccess } from '../shared/billing.js';
 import { getOrganisationBillingSummary } from '../shared/db.js';
@@ -22,7 +22,29 @@ export async function handler(event: APIGatewayProxyEventV2) {
     }
 
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
+    const hasStatus = Object.hasOwn(body, 'status');
     const status = sanitizeText(body.status);
+    const hasDetails = ['name', 'description', 'currency', 'startPostcode', 'endPostcode', 'totalMiles', 'mileageRate']
+      .some((field) => Object.hasOwn(body, field));
+    if (!hasStatus && !hasDetails) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'missing_claim_update',
+        message: 'Provide claim details or a claim status to update.',
+      });
+    }
+    if (!hasStatus) {
+      const claim = await updateClaimDetails(user, claimId, {
+        name: Object.hasOwn(body, 'name') ? sanitizeText(body.name) : undefined,
+        description: Object.hasOwn(body, 'description') ? sanitizeText(body.description) || null : undefined,
+        currency: Object.hasOwn(body, 'currency') ? sanitizeText(body.currency).toUpperCase() : undefined,
+        mileageStartPostcode: Object.hasOwn(body, 'startPostcode') ? sanitizeText(body.startPostcode) : undefined,
+        mileageEndPostcode: Object.hasOwn(body, 'endPostcode') ? sanitizeText(body.endPostcode) : undefined,
+        mileageTotalMiles: Object.hasOwn(body, 'totalMiles') ? Number(body.totalMiles) : undefined,
+        mileageRate: Object.hasOwn(body, 'mileageRate') ? Number(body.mileageRate) : undefined,
+      });
+      return jsonResponse(200, { success: true, claim });
+    }
     if (!['pending', 'approved', 'paid', 'rejected'].includes(status)) {
       return jsonResponse(400, {
         success: false,

@@ -2348,6 +2348,68 @@ export async function updateClaimStatus(user: AuthenticatedUser, claimId: number
   return claim;
 }
 
+export async function updateClaimDetails(
+  user: AuthenticatedUser,
+  claimId: number,
+  input: {
+    name?: string;
+    description?: string | null;
+    currency?: string;
+    mileageStartPostcode?: string;
+    mileageEndPostcode?: string;
+    mileageTotalMiles?: number;
+    mileageRate?: number;
+  },
+) {
+  const claims = await listExpenseClaims(user, 200);
+  const current = claims.find((candidate) => candidate.id === claimId);
+  if (!current) throw notFoundError('Claim not found.');
+  if (current.status !== 'pending') throw validationError('Only pending claims can be changed.');
+
+  const name = input.name === undefined ? current.name : sanitizeText(input.name);
+  const description = input.description === undefined ? current.description : sanitizeText(input.description) || null;
+  const currency = input.currency === undefined ? current.currency : sanitizeText(input.currency).toUpperCase();
+  if (!name) throw validationError('Claim name is required.');
+  if (!/^[A-Z]{3}$/.test(currency)) throw validationError('Use a three-letter currency code.');
+
+  if (current.claimType !== 'mileage') {
+    if (!pool) {
+      const updated = { ...current, name, description, currency, updatedAt: new Date().toISOString() };
+      await putReceiptJsonObject(buildClaimKey(updated), updated);
+      return updated;
+    }
+    await pool.execute(
+      `UPDATE expense_claims SET name = ?, description = ?, currency = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND organisation_id = ?`,
+      [name, description, currency, claimId, user.organisationId],
+    );
+  } else {
+    const mileageStartPostcode = input.mileageStartPostcode === undefined ? current.mileageStartPostcode ?? '' : sanitizeText(input.mileageStartPostcode);
+    const mileageEndPostcode = input.mileageEndPostcode === undefined ? current.mileageEndPostcode ?? '' : sanitizeText(input.mileageEndPostcode);
+    const mileageTotalMiles = input.mileageTotalMiles === undefined ? Number(current.mileageTotalMiles ?? 0) : input.mileageTotalMiles;
+    const mileageRate = input.mileageRate === undefined ? Number(current.mileageRate ?? 0) : input.mileageRate;
+    if (!mileageStartPostcode || !mileageEndPostcode) throw validationError('Both journey postcodes are required.');
+    if (!Number.isFinite(mileageTotalMiles) || mileageTotalMiles <= 0) throw validationError('Mileage total must be greater than zero.');
+    if (!Number.isFinite(mileageRate) || mileageRate < 0) throw validationError('Mileage rate must be zero or greater.');
+    const mileageTotalAmount = Number((mileageTotalMiles * mileageRate).toFixed(2));
+    if (!pool) {
+      const updated: ExpenseClaimRow = { ...current, name, description, currency, mileageStartPostcode, mileageEndPostcode, mileageTotalMiles, mileageRate, mileageTotalAmount, totalAmount: mileageTotalAmount, updatedAt: new Date().toISOString() };
+      await putReceiptJsonObject(buildClaimKey(updated), updated);
+      return updated;
+    }
+    await pool.execute(
+      `UPDATE expense_claims
+       SET name = ?, description = ?, currency = ?, mileage_start_postcode = ?, mileage_end_postcode = ?, mileage_total_miles = ?, mileage_rate = ?, mileage_total_amount = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND organisation_id = ?`,
+      [name, description, currency, mileageStartPostcode, mileageEndPostcode, mileageTotalMiles, mileageRate, mileageTotalAmount, claimId, user.organisationId],
+    );
+  }
+
+  const updatedClaims = await listExpenseClaims(user, 200);
+  const updated = updatedClaims.find((candidate) => candidate.id === claimId);
+  if (!updated) throw notFoundError('Claim not found after update.');
+  return updated;
+}
+
 export async function findUserById(organisationId: number, userId: number): Promise<UserRecord | null> {
   if (!pool) {
     const users = await listS3UsersForOrganisation(organisationId);
