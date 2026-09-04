@@ -700,6 +700,8 @@ function mileageClaimToCostRecord(claim: ExpenseClaimRow): ReceiptRow {
     ? 'Review'
     : claim.status === 'approved'
       ? 'Ready'
+      : claim.status === 'published'
+        ? 'Published'
       : claim.status === 'payment_processing'
         ? 'Payment processing'
       : claim.status === 'paid'
@@ -2356,7 +2358,7 @@ export async function updateReimbursementPaymentStatus(
   const selectedReceiptIds = receiptIds ? new Set(receiptIds) : null;
   const receipts = (await listReceipts(user, { workspaceContext: 'cost', includeMileageCosts: true, limit: 50000 }))
     .filter((receipt) => receipt.paymentMethod === 'cash_personal')
-    .filter((receipt) => receipt.status === fromStatus && !receipt.needsReview)
+    .filter((receipt) => (receipt.status === fromStatus || (fromStatus === 'Ready' && Boolean(receipt.mileageClaimId) && receipt.status === 'Published')) && !receipt.needsReview)
     .filter((receipt) => !selectedReceiptIds || selectedReceiptIds.has(receipt.id));
 
   if (!receipts.length) {
@@ -2418,12 +2420,12 @@ export async function updateReimbursementPaymentStatus(
   if (mileageClaimIds.length) {
     await ensureExpenseClaimMileageSchema();
     const placeholders = mileageClaimIds.map(() => '?').join(', ');
-    const expectedStatus = fromStatus === 'Ready' ? 'approved' : 'payment_processing';
+    const expectedStatuses = fromStatus === 'Ready' ? ['approved', 'published'] : ['payment_processing', 'payment_processing'];
     await pool.execute(
       `UPDATE expense_claims
        SET status = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE organisation_id = ? AND claim_type = 'mileage' AND status = ? AND id IN (${placeholders})`,
-      [nextMileageStatus, user.organisationId, expectedStatus, ...mileageClaimIds],
+       WHERE organisation_id = ? AND claim_type = 'mileage' AND status IN (?, ?) AND id IN (${placeholders})`,
+      [nextMileageStatus, user.organisationId, ...expectedStatuses, ...mileageClaimIds],
     );
   }
   await reconcileReimbursementClaimStatuses(user);

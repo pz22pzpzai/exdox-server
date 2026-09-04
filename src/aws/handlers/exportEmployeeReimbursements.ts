@@ -35,7 +35,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
 
     const receipts = (await listReceipts(user, { workspaceContext: 'cost', includeMileageCosts: true, limit: 50000 }))
       .filter((receipt) => receipt.paymentMethod === 'cash_personal')
-      .filter((receipt) => receipt.status === 'Ready' && !receipt.needsReview);
+      .filter((receipt) => (receipt.status === 'Ready' || (Boolean(receipt.mileageClaimId) && receipt.status === 'Published')) && !receipt.needsReview);
     if (!receipts.length) {
       throw reimbursementExportError(
         'No approved personal-spend expenses are ready for reimbursement. Select Personal spend before approval, then approve the expense before creating a payment summary.',

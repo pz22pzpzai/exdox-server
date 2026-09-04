@@ -8,11 +8,13 @@ export async function sendClaimStatusEmail(input: {
   toEmail: string;
   fullName: string | null;
   claimName: string;
-  status: 'approved' | 'paid' | 'rejected';
+  status: 'approved' | 'published' | 'paid' | 'rejected';
 }) {
   const recipientName = input.fullName || input.toEmail;
   const statusCopy = input.status === 'approved'
     ? 'Your expenses have been reviewed and approved. They are now pending payment.'
+    : input.status === 'published'
+      ? 'Your expense claim has been published and is available in Exdox.'
     : input.status === 'paid'
       ? 'Your approved expenses have been marked as paid.'
       : 'Your expense claim was not approved. Sign in to Exdox or contact your finance team for details.';

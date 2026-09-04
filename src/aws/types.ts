@@ -169,7 +169,7 @@ export type ExpenseClaimRow = {
   name: string;
   description: string | null;
   currency: string;
-  status: 'pending' | 'approved' | 'payment_processing' | 'paid' | 'rejected';
+  status: 'pending' | 'approved' | 'published' | 'payment_processing' | 'paid' | 'rejected';
   totalAmount: number;
   documentCount: number;
   claimType?: 'standard' | 'mileage';

@@ -31,7 +31,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       ? new Set(body.employeeIds.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0))
       : null;
     const approvedClaims = (await listExpenseClaims(user, 500))
-      .filter((claim) => claim.status === 'approved' || claim.status === 'paid')
+      .filter((claim) => claim.status === 'approved' || claim.status === 'published' || claim.status === 'paid')
       .filter((claim) => !selectedEmployeeIds || selectedEmployeeIds.has(claim.createdByUserId));
     const [baseCurrency, costReceipts] = await Promise.all([
       getOrganisationBaseCurrency(user.organisationId),

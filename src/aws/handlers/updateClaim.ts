@@ -45,11 +45,11 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
       return jsonResponse(200, { success: true, claim });
     }
-    if (!['pending', 'approved', 'payment_processing', 'paid', 'rejected'].includes(status)) {
+    if (!['pending', 'approved', 'published', 'payment_processing', 'paid', 'rejected'].includes(status)) {
       return jsonResponse(400, {
         success: false,
         error: 'invalid_claim_status',
-        message: 'Use pending, approved, payment_processing, paid, or rejected as the claim status.',
+        message: 'Use pending, approved, published, payment_processing, paid, or rejected as the claim status.',
       });
     }
     if (status !== 'pending') {
@@ -60,9 +60,9 @@ export async function handler(event: APIGatewayProxyEventV2) {
         'Your current plan does not include approval workflows. Upgrade to Control or Operations to approve claims.',
       );
     }
-    const claim = await updateClaimStatus(user, claimId, status as 'pending' | 'approved' | 'payment_processing' | 'paid' | 'rejected');
+    const claim = await updateClaimStatus(user, claimId, status as 'pending' | 'approved' | 'published' | 'payment_processing' | 'paid' | 'rejected');
     let notificationDelivered = false;
-    if (status === 'approved' || status === 'paid' || status === 'rejected') {
+    if (status === 'approved' || status === 'published' || status === 'paid' || status === 'rejected') {
       const claimant = await findUserById(user.organisationId, claim.createdByUserId);
       if (claimant) {
         try {
