@@ -180,6 +180,26 @@ let companyCardSchemaReady: Promise<void> | null = null;
 let billingCycleSchemaReady: Promise<void> | null = null;
 let expenseClaimMileageSchemaReady: Promise<void> | null = null;
 let organisationMileageRateSchemaReady: Promise<void> | null = null;
+let recycleBinSchemaReady: Promise<void> | null = null;
+
+type RecycleBinItemType = 'receipt' | 'claim';
+
+type RecycleBinItem = {
+  id: string;
+  organisationId: number;
+  itemType: RecycleBinItemType;
+  itemId: number;
+  title: string;
+  workspaceContext: WorkspaceContext | null;
+  deletedByUserId: number;
+  deletedAt: string;
+  purgeAfter: string;
+  payload: {
+    receipt?: ReceiptRow;
+    claim?: ExpenseClaimRow;
+    linkedReceiptIds?: number[];
+  };
+};
 
 function normalizeMileageRate(value: unknown, fallback = 0.45) {
   const rate = Number(value);
@@ -209,6 +229,69 @@ async function ensureExpenseClaimMileageSchema() {
     await pool.execute('ALTER TABLE expense_claims ADD COLUMN IF NOT EXISTS mileage_total_amount DECIMAL(12, 2) NULL AFTER mileage_rate');
   })();
   await expenseClaimMileageSchemaReady;
+}
+
+async function ensureRecycleBinSchema() {
+  if (!pool) {
+    return;
+  }
+  recycleBinSchemaReady ??= (async () => {
+    await pool.execute(
+      `CREATE TABLE IF NOT EXISTS recycle_bin_items (
+        id CHAR(36) NOT NULL,
+        organisation_id BIGINT UNSIGNED NOT NULL,
+        item_type VARCHAR(24) NOT NULL,
+        item_id BIGINT NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        workspace_context VARCHAR(24) NULL,
+        deleted_by_user_id BIGINT UNSIGNED NOT NULL,
+        deleted_at DATETIME NOT NULL,
+        purge_after DATETIME NOT NULL,
+        payload JSON NOT NULL,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_recycle_bin_item (organisation_id, item_type, item_id),
+        KEY idx_recycle_bin_org_deleted (organisation_id, deleted_at),
+        KEY idx_recycle_bin_purge (purge_after)
+      )`,
+    );
+  })();
+  await recycleBinSchemaReady;
+}
+
+function buildRecycleBinItem(
+  user: AuthenticatedUser,
+  itemType: RecycleBinItemType,
+  itemId: number,
+  title: string,
+  workspaceContext: WorkspaceContext | null,
+  payload: RecycleBinItem['payload'],
+): RecycleBinItem {
+  const deletedAt = new Date();
+  return {
+    id: crypto.randomUUID(),
+    organisationId: user.organisationId,
+    itemType,
+    itemId,
+    title: sanitizeText(title) || (itemType === 'claim' ? 'Expense claim' : 'Document'),
+    workspaceContext,
+    deletedByUserId: user.id,
+    deletedAt: deletedAt.toISOString(),
+    purgeAfter: new Date(deletedAt.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+    payload,
+  };
+}
+
+function buildRecycleBinKey(item: Pick<RecycleBinItem, 'organisationId' | 'itemType' | 'itemId'>) {
+  return `recycle-bin/org-${item.organisationId}/${item.itemType}-${item.itemId}.json`;
+}
+
+async function putS3RecycleBinItem(item: RecycleBinItem) {
+  await putReceiptJsonObject(buildRecycleBinKey(item), item);
+}
+
+async function listS3RecycleBinItems(organisationId: number): Promise<RecycleBinItem[]> {
+  const keys = await listReceiptJsonKeys(`recycle-bin/org-${organisationId}/`, 1000);
+  return Promise.all(keys.filter((key) => key.endsWith('.json')).map((key) => getReceiptJsonObject<RecycleBinItem>(key)));
 }
 
 async function ensureBillingCycleSchema() {
@@ -513,10 +596,14 @@ export async function listReceipts(
     const prefix = buildReceiptListPrefix(user, workspaceContext);
     const keys = await listReceiptJsonKeys(prefix, Math.max(limit * 4, 50));
     const receipts = await Promise.all(keys.map((key) => getReceiptJsonObject<ReceiptRow>(key)));
+    const deletedReceiptIds = new Set((await listS3RecycleBinItems(user.organisationId))
+      .filter((item) => item.itemType === 'receipt')
+      .map((item) => item.itemId));
     const users = await listS3UsersForOrganisation(user.organisationId);
     const usersById = new Map(users.map((candidate) => [candidate.id, candidate]));
     const visibleReceipts = receipts
       .filter((receipt) => filterReceiptForUser(receipt, user))
+      .filter((receipt) => !deletedReceiptIds.has(receipt.id))
       .filter((receipt) => (workspaceContext ? receipt.workspaceContext === workspaceContext : true))
       .filter((receipt) =>
         onlyClaimable
@@ -544,8 +631,13 @@ export async function listReceipts(
 
   await ensureTeamSchema();
   await ensureCompanyCardSchema();
+  await ensureRecycleBinSchema();
   const params: Array<string | number | null> = [user.organisationId, user.role, user.id];
-  const where = ['r.organisation_id = ?', "(? = 'Business_Admin' OR r.uploaded_by_user_id = ?)"];
+  const where = [
+    'r.organisation_id = ?',
+    "(? = 'Business_Admin' OR r.uploaded_by_user_id = ?)",
+    "NOT EXISTS (SELECT 1 FROM recycle_bin_items deleted_record WHERE deleted_record.organisation_id = r.organisation_id AND deleted_record.item_type = 'receipt' AND deleted_record.item_id = r.id)",
+  ];
 
   if (workspaceContext) {
     where.push('r.workspace_context = ?');
@@ -608,6 +700,8 @@ function mileageClaimToCostRecord(claim: ExpenseClaimRow): ReceiptRow {
     ? 'Review'
     : claim.status === 'approved'
       ? 'Ready'
+      : claim.status === 'payment_processing'
+        ? 'Payment processing'
       : claim.status === 'paid'
         ? 'Paid'
         : 'Rejected';
@@ -770,10 +864,14 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
     await Promise.all(emptyStandardClaims.map((claim) => deleteReceiptObject(buildClaimKey(claim))));
 
     const emptyClaimIds = new Set(emptyStandardClaims.map((claim) => claim.id));
+    const deletedClaimIds = new Set((await listS3RecycleBinItems(user.organisationId))
+      .filter((item) => item.itemType === 'claim')
+      .map((item) => item.itemId));
     const relevantClaims = claims
       .filter((claim) => claim.organisationId === user.organisationId)
       .filter((claim) => (user.role === 'Business_Admin' ? true : claim.createdByUserId === user.id))
       .filter((claim) => !emptyClaimIds.has(claim.id))
+      .filter((claim) => !deletedClaimIds.has(claim.id))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, limit);
 
@@ -794,6 +892,7 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
   }
 
   await ensureExpenseClaimMileageSchema();
+  await ensureRecycleBinSchema();
 
   // Standard expense claims must have at least one attached receipt. Older
   // interrupted app flows could leave empty drafts behind, so remove them as
@@ -811,6 +910,13 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
          FROM receipts
          WHERE receipts.organisation_id = expense_claims.organisation_id
            AND receipts.claim_id = expense_claims.id
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM recycle_bin_items
+         WHERE recycle_bin_items.organisation_id = expense_claims.organisation_id
+           AND recycle_bin_items.item_type = 'claim'
+           AND recycle_bin_items.item_id = expense_claims.id
        )`,
     [user.organisationId, user.role, user.id],
   );
@@ -845,6 +951,13 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
     LEFT JOIN receipts r ON r.claim_id = c.id
     WHERE c.organisation_id = ?
       AND (? = 'Business_Admin' OR c.created_by_user_id = ?)
+      AND NOT EXISTS (
+        SELECT 1
+        FROM recycle_bin_items deleted_record
+        WHERE deleted_record.organisation_id = c.organisation_id
+          AND deleted_record.item_type = 'claim'
+          AND deleted_record.item_id = c.id
+      )
     GROUP BY c.id, c.currency, c.claim_type, c.mileage_start_postcode, c.mileage_end_postcode,
              c.mileage_total_miles, c.mileage_rate, c.mileage_total_amount, c.status,
              c.created_at, c.updated_at, u.full_name, u.email
@@ -2241,7 +2354,7 @@ export async function updateReimbursementPaymentStatus(
   receiptIds?: number[],
 ) {
   const selectedReceiptIds = receiptIds ? new Set(receiptIds) : null;
-  const receipts = (await listReceipts(user, { workspaceContext: 'cost', limit: 50000 }))
+  const receipts = (await listReceipts(user, { workspaceContext: 'cost', includeMileageCosts: true, limit: 50000 }))
     .filter((receipt) => receipt.paymentMethod === 'cash_personal')
     .filter((receipt) => receipt.status === fromStatus && !receipt.needsReview)
     .filter((receipt) => !selectedReceiptIds || selectedReceiptIds.has(receipt.id));
@@ -2251,9 +2364,14 @@ export async function updateReimbursementPaymentStatus(
   }
 
   const updatedAt = new Date().toISOString();
+  const standardReceipts = receipts.filter((receipt) => !receipt.mileageClaimId);
+  const mileageClaimIds = receipts
+    .map((receipt) => receipt.mileageClaimId)
+    .filter((claimId): claimId is number => typeof claimId === 'number');
+  const nextMileageStatus: ExpenseClaimRow['status'] = toStatus === 'Paid' ? 'paid' : 'payment_processing';
 
   if (!pool) {
-    await Promise.all(receipts.map((receipt) => putReceiptJsonObject(
+    await Promise.all(standardReceipts.map((receipt) => putReceiptJsonObject(
       buildReceiptMetadataKey(receipt),
       {
         ...receipt,
@@ -2264,33 +2382,50 @@ export async function updateReimbursementPaymentStatus(
         updatedAt,
       },
     )));
+    const claims = await listExpenseClaims(user, 50000);
+    await Promise.all(claims.filter((claim) => mileageClaimIds.includes(claim.id)).map((claim) =>
+      putReceiptJsonObject(buildClaimKey(claim), { ...claim, status: nextMileageStatus, updatedAt }),
+    ));
     await reconcileReimbursementClaimStatuses(user);
     return receipts.length;
   }
 
   await ensureReceiptTaxTreatmentSchema();
-  const placeholders = receipts.map(() => '?').join(', ');
-  await pool.execute(
-    `UPDATE receipts
-     SET status = ?,
-         needs_review = 0,
-         reimbursement_batch_id = COALESCE(?, reimbursement_batch_id),
-         reimbursement_batch_created_at = COALESCE(?, reimbursement_batch_created_at),
-         updated_at = CURRENT_TIMESTAMP
-     WHERE organisation_id = ?
-       AND workspace_context = 'cost'
-       AND payment_method = 'cash_personal'
-       AND status = ?
-       AND id IN (${placeholders})`,
-    [
-      toStatus,
-      reimbursementBatch?.id ?? null,
-      reimbursementBatch?.createdAt ?? null,
-      user.organisationId,
-      fromStatus,
-      ...receipts.map((receipt) => receipt.id),
-    ],
-  );
+  if (standardReceipts.length) {
+    const placeholders = standardReceipts.map(() => '?').join(', ');
+    await pool.execute(
+      `UPDATE receipts
+       SET status = ?,
+           needs_review = 0,
+           reimbursement_batch_id = COALESCE(?, reimbursement_batch_id),
+           reimbursement_batch_created_at = COALESCE(?, reimbursement_batch_created_at),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE organisation_id = ?
+         AND workspace_context = 'cost'
+         AND payment_method = 'cash_personal'
+         AND status = ?
+         AND id IN (${placeholders})`,
+      [
+        toStatus,
+        reimbursementBatch?.id ?? null,
+        reimbursementBatch?.createdAt ?? null,
+        user.organisationId,
+        fromStatus,
+        ...standardReceipts.map((receipt) => receipt.id),
+      ],
+    );
+  }
+  if (mileageClaimIds.length) {
+    await ensureExpenseClaimMileageSchema();
+    const placeholders = mileageClaimIds.map(() => '?').join(', ');
+    const expectedStatus = fromStatus === 'Ready' ? 'approved' : 'payment_processing';
+    await pool.execute(
+      `UPDATE expense_claims
+       SET status = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE organisation_id = ? AND claim_type = 'mileage' AND status = ? AND id IN (${placeholders})`,
+      [nextMileageStatus, user.organisationId, expectedStatus, ...mileageClaimIds],
+    );
+  }
   await reconcileReimbursementClaimStatuses(user);
   return receipts.length;
 }
@@ -2301,68 +2436,157 @@ export async function deleteReceiptById(user: AuthenticatedUser, receiptId: numb
     throw forbiddenError('Only the account that uploaded this receipt can delete it.');
   }
 
-  if (!pool) {
-    await putReceiptJsonObject(`deleted/${existing.id}-${Date.now()}.json`, existing);
-    await Promise.all([
-      deleteReceiptObject(buildReceiptMetadataKey(existing)),
-      deleteReceiptObject(existing.s3Key),
-    ]);
-    if (existing.claimId !== null) {
-      await deleteEmptyClaimIfOrphaned(user.organisationId, existing.claimId);
-    }
-    return { success: true };
-  }
-
-  const claimId = existing.claimId;
-  if (user.role === 'Business_Admin') {
-    await pool.execute(`DELETE FROM receipts WHERE id = ? AND organisation_id = ?`, [receiptId, user.organisationId]);
-  } else {
-    await pool.execute(
-      `DELETE FROM receipts WHERE id = ? AND organisation_id = ? AND uploaded_by_user_id = ?`,
-      [receiptId, user.organisationId, user.id],
-    );
-  }
-  if (claimId !== null) {
-    await deleteEmptyClaimIfOrphaned(user.organisationId, claimId);
-  }
-  return { success: true };
-}
-
-export async function deleteExpenseClaim(user: AuthenticatedUser, claimId: number) {
-  if (!pool) {
-    const claim = await getS3Claim(user.organisationId, claimId);
-    if (!claim || (user.role !== 'Business_Admin' && claim.createdByUserId !== user.id)) {
-      throw notFoundError('Expense claim not found.');
-    }
-    if (claim.status !== 'pending') {
-      throw validationError('Only a pending expense claim can be deleted.');
-    }
-    const receipts = await listOrganisationWorkspaceReceiptsFromS3(user.organisationId, 'cost', 1000);
-    await Promise.all(receipts.filter((receipt) => receipt.claimId === claimId).map((receipt) =>
-      putReceiptJsonObject(buildReceiptMetadataKey(receipt), { ...receipt, claimId: null, updatedAt: new Date().toISOString() }),
-    ));
-    await deleteReceiptObject(buildClaimKey(claim));
-    return { success: true };
-  }
-
-  await ensureExpenseClaimMileageSchema();
-  const [claims] = await pool.query<mysql.RowDataPacket[]>(
-    `SELECT id, status FROM expense_claims
-     WHERE id = ? AND organisation_id = ? AND (? = 'Business_Admin' OR created_by_user_id = ?)
-     LIMIT 1`,
-    [claimId, user.organisationId, user.role, user.id],
+  const item = buildRecycleBinItem(
+    user,
+    'receipt',
+    existing.id,
+    existing.sourceFilename || existing.vendorName || 'Receipt',
+    existing.workspaceContext,
+    { receipt: existing },
   );
-  if (!claims[0]) {
-    throw notFoundError('Expense claim not found.');
+  if (!pool) {
+    await putS3RecycleBinItem(item);
+    await deleteReceiptObject(buildReceiptMetadataKey(existing));
+    return { success: true, purgeAfter: item.purgeAfter };
   }
-  if (String(claims[0].status) !== 'pending') {
-    throw validationError('Only a pending expense claim can be deleted.');
-  }
+
+  await ensureRecycleBinSchema();
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
+    await connection.execute(
+      `INSERT INTO recycle_bin_items (id, organisation_id, item_type, item_id, title, workspace_context, deleted_by_user_id, deleted_at, purge_after, payload)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [item.id, item.organisationId, item.itemType, item.itemId, item.title, item.workspaceContext, item.deletedByUserId, item.deletedAt, item.purgeAfter, JSON.stringify(item.payload)],
+    );
+    await connection.execute(`UPDATE receipts SET claim_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND organisation_id = ?`, [receiptId, user.organisationId]);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+  return { success: true, purgeAfter: item.purgeAfter };
+}
+
+export async function deleteExpenseClaim(user: AuthenticatedUser, claimId: number) {
+  const claims = await listExpenseClaims(user, 500);
+  const claim = claims.find((candidate) => candidate.id === claimId);
+  if (!claim || (user.role !== 'Business_Admin' && claim.createdByUserId !== user.id)) {
+    throw notFoundError('Expense claim not found.');
+  }
+  if (user.role !== 'Business_Admin' && claim.status !== 'pending') {
+    throw validationError('Only a pending expense claim can be deleted.');
+  }
+  const receipts = (await listReceipts(user, { workspaceContext: 'cost', limit: 50000 }))
+    .filter((receipt) => receipt.claimId === claimId);
+  const item = buildRecycleBinItem(user, 'claim', claim.id, claim.name || 'Expense claim', 'cost', {
+    claim,
+    linkedReceiptIds: receipts.map((receipt) => receipt.id),
+  });
+  if (!pool) {
+    await putS3RecycleBinItem(item);
+    await Promise.all(receipts.map((receipt) =>
+      putReceiptJsonObject(buildReceiptMetadataKey(receipt), { ...receipt, claimId: null, updatedAt: new Date().toISOString() }),
+    ));
+    await deleteReceiptObject(buildClaimKey(claim));
+    return { success: true, purgeAfter: item.purgeAfter };
+  }
+
+  await ensureRecycleBinSchema();
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute(
+      `INSERT INTO recycle_bin_items (id, organisation_id, item_type, item_id, title, workspace_context, deleted_by_user_id, deleted_at, purge_after, payload)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [item.id, item.organisationId, item.itemType, item.itemId, item.title, item.workspaceContext, item.deletedByUserId, item.deletedAt, item.purgeAfter, JSON.stringify(item.payload)],
+    );
     await connection.execute(`UPDATE receipts SET claim_id = NULL WHERE organisation_id = ? AND claim_id = ?`, [user.organisationId, claimId]);
-    await connection.execute(`DELETE FROM expense_claims WHERE id = ? AND organisation_id = ?`, [claimId, user.organisationId]);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+  return { success: true, purgeAfter: item.purgeAfter };
+}
+
+export async function listRecycleBinItems(user: AuthenticatedUser): Promise<RecycleBinItem[]> {
+  if (user.role !== 'Business_Admin') {
+    throw forbiddenError('Only business admins can access the recycle bin.');
+  }
+  await purgeExpiredRecycleBin();
+  if (!pool) {
+    return (await listS3RecycleBinItems(user.organisationId))
+      .filter((item) => new Date(item.purgeAfter).getTime() > Date.now())
+      .sort((left, right) => right.deletedAt.localeCompare(left.deletedAt));
+  }
+  await ensureRecycleBinSchema();
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT id, organisation_id, item_type, item_id, title, workspace_context, deleted_by_user_id, deleted_at, purge_after, payload
+     FROM recycle_bin_items
+     WHERE organisation_id = ?
+     ORDER BY deleted_at DESC`,
+    [user.organisationId],
+  );
+  return rows.map(mapRecycleBinItem);
+}
+
+export async function restoreRecycleBinItem(user: AuthenticatedUser, itemType: RecycleBinItemType, itemId: number) {
+  if (user.role !== 'Business_Admin') {
+    throw forbiddenError('Only business admins can restore deleted items.');
+  }
+  await purgeExpiredRecycleBin();
+  if (!pool) {
+    const item = (await listS3RecycleBinItems(user.organisationId))
+      .find((candidate) => candidate.itemType === itemType && candidate.itemId === itemId);
+    if (!item) throw notFoundError('Deleted item not found.');
+    if (item.itemType === 'receipt' && item.payload.receipt) {
+      await putReceiptJsonObject(buildReceiptMetadataKey(item.payload.receipt), item.payload.receipt);
+    }
+    if (item.itemType === 'claim' && item.payload.claim) {
+      await putReceiptJsonObject(buildClaimKey(item.payload.claim), item.payload.claim);
+      const receipts = await listOrganisationWorkspaceReceiptsFromS3(user.organisationId, 'cost', 50000);
+      const linked = new Set(item.payload.linkedReceiptIds ?? []);
+      await Promise.all(receipts.filter((receipt) => linked.has(receipt.id) && receipt.claimId === null).map((receipt) =>
+        putReceiptJsonObject(buildReceiptMetadataKey(receipt), { ...receipt, claimId: item.itemId, updatedAt: new Date().toISOString() }),
+      ));
+    }
+    await deleteReceiptObject(buildRecycleBinKey(item));
+    return { success: true };
+  }
+
+  await ensureRecycleBinSchema();
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT id, organisation_id, item_type, item_id, title, workspace_context, deleted_by_user_id, deleted_at, purge_after, payload
+     FROM recycle_bin_items
+     WHERE organisation_id = ? AND item_type = ? AND item_id = ?
+     LIMIT 1`,
+    [user.organisationId, itemType, itemId],
+  );
+  const item = rows[0] ? mapRecycleBinItem(rows[0]) : null;
+  if (!item) throw notFoundError('Deleted item not found.');
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute(`DELETE FROM recycle_bin_items WHERE id = ?`, [item.id]);
+    if (item.itemType === 'receipt' && item.payload.receipt?.claimId) {
+      await connection.execute(
+        `UPDATE receipts SET claim_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND organisation_id = ? AND claim_id IS NULL`,
+        [item.payload.receipt.claimId, item.itemId, user.organisationId],
+      );
+    }
+    if (item.itemType === 'claim' && item.payload.linkedReceiptIds?.length) {
+      const placeholders = item.payload.linkedReceiptIds.map(() => '?').join(', ');
+      await connection.execute(
+        `UPDATE receipts SET claim_id = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE organisation_id = ? AND claim_id IS NULL AND id IN (${placeholders})`,
+        [item.itemId, user.organisationId, ...item.payload.linkedReceiptIds],
+      );
+    }
     await connection.commit();
   } catch (error) {
     await connection.rollback();
@@ -2371,6 +2595,65 @@ export async function deleteExpenseClaim(user: AuthenticatedUser, claimId: numbe
     connection.release();
   }
   return { success: true };
+}
+
+export async function purgeExpiredRecycleBin() {
+  const now = new Date();
+  if (!pool) {
+    const keys = await listReceiptJsonKeys('recycle-bin/', 5000);
+    const items = await Promise.all(keys.filter((key) => key.endsWith('.json')).map((key) => getReceiptJsonObject<RecycleBinItem>(key)));
+    await Promise.all(items.filter((item) => new Date(item.purgeAfter).getTime() <= now.getTime()).map(async (item) => {
+      if (item.itemType === 'receipt' && item.payload.receipt) {
+        await Promise.all([deleteReceiptObject(buildReceiptMetadataKey(item.payload.receipt)), deleteReceiptObject(item.payload.receipt.s3Key)]);
+      }
+      if (item.itemType === 'claim') {
+        await deleteReceiptPrefix(`claim-evidence/org-${item.organisationId}/claim-${item.itemId}/`);
+      }
+      await deleteReceiptObject(buildRecycleBinKey(item));
+    }));
+    return;
+  }
+  await ensureRecycleBinSchema();
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT id, organisation_id, item_type, item_id, title, workspace_context, deleted_by_user_id, deleted_at, purge_after, payload
+     FROM recycle_bin_items WHERE purge_after <= UTC_TIMESTAMP()`,
+  );
+  const items = rows.map(mapRecycleBinItem);
+  if (!items.length) return;
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    for (const item of items) {
+      if (item.itemType === 'receipt') {
+        await connection.execute(`DELETE FROM receipts WHERE id = ? AND organisation_id = ?`, [item.itemId, item.organisationId]);
+      } else {
+        await connection.execute(`DELETE FROM expense_claims WHERE id = ? AND organisation_id = ?`, [item.itemId, item.organisationId]);
+      }
+      await connection.execute(`DELETE FROM recycle_bin_items WHERE id = ?`, [item.id]);
+    }
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+function mapRecycleBinItem(row: mysql.RowDataPacket): RecycleBinItem {
+  const payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+  return {
+    id: String(row.id),
+    organisationId: Number(row.organisation_id),
+    itemType: String(row.item_type) === 'claim' ? 'claim' : 'receipt',
+    itemId: Number(row.item_id),
+    title: String(row.title),
+    workspaceContext: row.workspace_context ? String(row.workspace_context) as WorkspaceContext : null,
+    deletedByUserId: Number(row.deleted_by_user_id),
+    deletedAt: new Date(row.deleted_at).toISOString(),
+    purgeAfter: new Date(row.purge_after).toISOString(),
+    payload: payload as RecycleBinItem['payload'],
+  };
 }
 
 export async function listReceiptsByClaim(user: AuthenticatedUser, claimId: number) {
@@ -3356,6 +3639,7 @@ async function deleteEmptyClaimIfOrphaned(organisationId: number, claimId: numbe
   }
 
   await ensureExpenseClaimMileageSchema();
+  await ensureRecycleBinSchema();
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
     `SELECT c.claim_type, COUNT(r.id) AS receipt_count
      FROM expense_claims c
@@ -3368,7 +3652,12 @@ async function deleteEmptyClaimIfOrphaned(organisationId: number, claimId: numbe
     return;
   }
   const receiptCount = Number(rows[0]?.receipt_count ?? 0);
-  if (receiptCount === 0) {
+  const [deletedRows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT id FROM recycle_bin_items
+     WHERE organisation_id = ? AND item_type = 'claim' AND item_id = ? LIMIT 1`,
+    [organisationId, claimId],
+  );
+  if (receiptCount === 0 && !deletedRows.length) {
     await pool.execute(`DELETE FROM expense_claims WHERE id = ? AND organisation_id = ?`, [claimId, organisationId]);
   }
 }

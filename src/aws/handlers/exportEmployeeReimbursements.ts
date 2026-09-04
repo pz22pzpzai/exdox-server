@@ -33,7 +33,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       'Your current plan does not include reimbursement exports.',
     );
 
-    const receipts = (await listReceipts(user, { workspaceContext: 'cost', limit: 50000 }))
+    const receipts = (await listReceipts(user, { workspaceContext: 'cost', includeMileageCosts: true, limit: 50000 }))
       .filter((receipt) => receipt.paymentMethod === 'cash_personal')
       .filter((receipt) => receipt.status === 'Ready' && !receipt.needsReview);
     if (!receipts.length) {

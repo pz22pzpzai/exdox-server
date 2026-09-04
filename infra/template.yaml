@@ -819,6 +819,50 @@ Resources:
             Path: /claims/{id}
             Method: DELETE
 
+  RecycleBinFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/recycleBin.listHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        ListRecycleBinRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /recycle-bin
+            Method: GET
+
+  RestoreRecycleBinFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/recycleBin.restoreHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        RestoreRecycleBinRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /recycle-bin/{type}/{id}/restore
+            Method: POST
+
+  PurgeRecycleBinFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/purgeRecycleBin.handler
+      Timeout: 60
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        HourlyRecycleBinPurge:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 hour)
+
   GetSettingsFunction:
     Type: AWS::Serverless::Function
     Properties:
