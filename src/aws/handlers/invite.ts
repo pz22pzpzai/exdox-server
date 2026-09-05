@@ -5,7 +5,7 @@ import { canInviteUser, getPlanLimitMessage, isBillingActive } from '../shared/b
 import { createInvite, getOrganisationBillingSummary, isOrganisationOwner, listDepartments } from '../shared/db.js';
 import { sanitizeText } from '../shared/helpers.js';
 import { jsonResponse } from '../shared/http.js';
-import { sendInviteEmail } from '../shared/inviteMail.js';
+import { sendInviteEmailWithRetry } from '../shared/inviteMail.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
@@ -86,7 +86,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     };
 
     try {
-      delivery = await sendInviteEmail({
+      delivery = await sendInviteEmailWithRetry({
         toEmail: email,
         inviterName: user.fullName || user.email,
         organisationName: invite.organisationName,

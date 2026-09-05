@@ -10,3 +10,8 @@ test('team routes use explicit handlers instead of runtime method inspection', (
   assert.match(template, /Handler: dist\/aws\/handlers\/team\.assignDepartmentHandler/);
   assert.doesNotMatch(template, /Handler: dist\/aws\/handlers\/team\.handler/);
 });
+
+test('pending invitations have a dedicated resend route', () => {
+  assert.match(template, /Handler: dist\/aws\/handlers\/resendInvite\.handler/);
+  assert.match(template, /Path: \/invite\/resend\s+Method: POST/);
+});

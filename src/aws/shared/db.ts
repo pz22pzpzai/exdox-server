@@ -1534,6 +1534,19 @@ export async function createInvite(input: {
   };
 }
 
+export async function getPendingInviteForResend(user: AuthenticatedUser, userId: number) {
+  const invitedUser = await findUserById(user.organisationId, userId);
+  if (!invitedUser || invitedUser.status !== 'pending_invite' || !invitedUser.inviteToken) {
+    return null;
+  }
+
+  return {
+    invitedUser,
+    organisationName: await getOrganisationName(user.organisationId),
+    inviteLink: buildInviteLink(invitedUser.inviteToken, invitedUser.email),
+  };
+}
+
 export async function listDepartments(user: AuthenticatedUser): Promise<DepartmentRow[]> {
   if (!pool) {
     return [];

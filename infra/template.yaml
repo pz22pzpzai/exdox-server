@@ -546,6 +546,27 @@ Resources:
             Path: /invite
             Method: POST
 
+  ResendInviteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/resendInvite.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: '*'
+      Events:
+        ResendInviteRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /invite/resend
+            Method: POST
+
   TeamListFunction:
     Type: AWS::Serverless::Function
     Properties:
