@@ -30,6 +30,7 @@ export type ExpenseRequestOptions = {
 
 export type NormalizedExpenseDocument = {
   vendorName: string | null;
+  customer: string | null;
   invoiceDate: string | null;
   dueDate: string | null;
   invoiceNumber: string | null;
@@ -198,6 +199,7 @@ export type ClaimEvidenceRow = {
 export type SupplierRuleRow = {
   id: number;
   organisationId: number;
+  workspaceContext: 'cost' | 'sales';
   supplierMatchText: string;
   category: string;
   taxRate: string;

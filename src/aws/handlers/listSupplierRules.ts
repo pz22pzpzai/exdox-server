@@ -12,10 +12,12 @@ export async function handler(event: APIGatewayProxyEventV2) {
     requireAdminUser(user);
     const billing = await getOrganisationBillingSummary(user.organisationId);
     assertFeatureAccess(billing, 'supplier_rules', 'Your current plan does not include supplier rules.');
-    const rules = await listSupplierRules(user.organisationId);
+    const workspaceContext = event.queryStringParameters?.workspace_context === 'sales' ? 'sales' : 'cost';
+    const rules = await listSupplierRules(user.organisationId, workspaceContext);
 
     return jsonResponse(200, {
       success: true,
+      workspaceContext,
       rules,
     });
   } catch (error) {

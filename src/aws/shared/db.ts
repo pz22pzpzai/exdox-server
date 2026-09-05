@@ -388,6 +388,13 @@ async function ensureCompanyCardSchema() {
   await companyCardSchemaReady;
 }
 
+async function ensureSupplierRuleSchema() {
+  if (!pool) {
+    return;
+  }
+  await pool.execute("ALTER TABLE supplier_rules ADD COLUMN IF NOT EXISTS workspace_context ENUM('cost', 'sales') NOT NULL DEFAULT 'cost' AFTER organisation_id");
+}
+
 type StoredClaim = ExpenseClaimRow;
 
 export async function insertReceiptRecord(input: {
@@ -2926,26 +2933,29 @@ export async function deleteOrganisationAccount(organisationId: number) {
   return { success: true };
 }
 
-export async function listSupplierRules(organisationId: number): Promise<SupplierRuleRow[]> {
+export async function listSupplierRules(organisationId: number, workspaceContext: 'cost' | 'sales' = 'cost'): Promise<SupplierRuleRow[]> {
   if (!pool) {
     const keys = await listReceiptJsonKeys(`supplier-rules/org-${organisationId}/`, 500);
     const rules = await Promise.all(keys.map((key) => getReceiptJsonObject<SupplierRuleRow>(key)));
     return rules
-      .filter((rule) => rule.organisationId === organisationId)
+      .map((rule) => ({ ...rule, workspaceContext: rule.workspaceContext ?? 'cost' }))
+      .filter((rule) => rule.organisationId === organisationId && rule.workspaceContext === workspaceContext)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
+  await ensureSupplierRuleSchema();
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
-    `SELECT id, organisation_id, supplier_match_text, category, tax_rate, payment_method, is_active, created_at, updated_at
+    `SELECT id, organisation_id, workspace_context, supplier_match_text, category, tax_rate, payment_method, is_active, created_at, updated_at
      FROM supplier_rules
-     WHERE organisation_id = ?
+     WHERE organisation_id = ? AND workspace_context = ?
      ORDER BY updated_at DESC`,
-    [organisationId],
+    [organisationId, workspaceContext],
   );
 
   return rows.map((row) => ({
     id: Number(row.id),
     organisationId: Number(row.organisation_id),
+    workspaceContext: String(row.workspace_context) as 'cost' | 'sales',
     supplierMatchText: String(row.supplier_match_text),
     category: String(row.category),
     taxRate: String(row.tax_rate),
@@ -2962,18 +2972,19 @@ export async function applySupplierRulesToDocument(input: {
   paymentMethod: PaymentMethod;
   workspaceContext: WorkspaceContext;
 }) {
-  const rules = await listSupplierRules(input.organisationId);
-  const vendor = sanitizeText(input.document.vendorName).toLowerCase();
-  const matchedRule = rules.find(
-    (rule) => rule.isActive && vendor && vendor.includes(rule.supplierMatchText.trim().toLowerCase()),
-  );
+  const ruleContext = input.workspaceContext === 'sales' ? 'sales' : 'cost';
+  const rules = await listSupplierRules(input.organisationId, ruleContext);
+  const vendor = sanitizeText(input.workspaceContext === 'sales' ? input.document.customer : input.document.vendorName).toLowerCase();
+  const matchedRule = rules
+    .filter((rule) => rule.isActive && vendor && vendor.includes(rule.supplierMatchText.trim().toLowerCase()))
+    .sort((left, right) => right.supplierMatchText.trim().length - left.supplierMatchText.trim().length)[0];
 
   if (!matchedRule) {
     return {
       document: input.document,
       paymentMethod: input.paymentMethod,
       matchedRuleId: null,
-      category: 'Uncategorised',
+      category: input.workspaceContext === 'sales' ? 'Accounts Receivable' : 'Uncategorised',
     };
   }
 
@@ -2981,7 +2992,7 @@ export async function applySupplierRulesToDocument(input: {
     document: {
       ...input.document,
       taxRateApplied: matchedRule.taxRate,
-      notes: [...input.document.notes, `Supplier rule matched: ${matchedRule.supplierMatchText}`],
+      notes: [...input.document.notes, `${input.workspaceContext === 'sales' ? 'Customer' : 'Supplier'} rule matched: ${matchedRule.supplierMatchText}`],
     },
     paymentMethod: matchedRule.paymentMethod,
     matchedRuleId: matchedRule.id,
@@ -3081,7 +3092,7 @@ export async function applyCompanyCardClassification(input: {
 
 export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'createdAt' | 'updatedAt'> & { id?: number }) {
   if (!pool) {
-    const existingRules = await listSupplierRules(input.organisationId);
+    const existingRules = await listSupplierRules(input.organisationId, input.workspaceContext);
     const existing = input.id ? existingRules.find((rule) => rule.id === input.id) : null;
     if (input.id && !existing) {
       throw notFoundError('Supplier rule not found.');
@@ -3090,6 +3101,7 @@ export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'cr
     const nextRule: SupplierRuleRow = {
       id: existing?.id ?? Date.now() + Math.floor(Math.random() * 1000),
       organisationId: input.organisationId,
+      workspaceContext: input.workspaceContext,
       supplierMatchText: sanitizeText(input.supplierMatchText),
       category: sanitizeText(input.category),
       taxRate: sanitizeText(input.taxRate) || '20% Standard',
@@ -3103,10 +3115,11 @@ export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'cr
   }
 
   if (input.id) {
+    await ensureSupplierRuleSchema();
     await pool.execute(
       `UPDATE supplier_rules
        SET supplier_match_text = ?, category = ?, tax_rate = ?, payment_method = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND organisation_id = ?`,
+       WHERE id = ? AND organisation_id = ? AND workspace_context = ?`,
       [
         sanitizeText(input.supplierMatchText),
         sanitizeText(input.category),
@@ -3115,14 +3128,17 @@ export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'cr
         input.isActive ? 1 : 0,
         input.id,
         input.organisationId,
+        input.workspaceContext,
       ],
     );
   } else {
+    await ensureSupplierRuleSchema();
     await pool.execute(
-      `INSERT INTO supplier_rules (organisation_id, supplier_match_text, category, tax_rate, payment_method, is_active)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO supplier_rules (organisation_id, workspace_context, supplier_match_text, category, tax_rate, payment_method, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         input.organisationId,
+        input.workspaceContext,
         sanitizeText(input.supplierMatchText),
         sanitizeText(input.category),
         sanitizeText(input.taxRate),
@@ -3132,13 +3148,13 @@ export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'cr
     );
   }
 
-  const rules = await listSupplierRules(input.organisationId);
+  const rules = await listSupplierRules(input.organisationId, input.workspaceContext);
   return input.id ? rules.find((rule) => rule.id === input.id) ?? rules[0] : rules[0];
 }
 
 export async function deleteSupplierRule(organisationId: number, ruleId: number) {
   if (!pool) {
-    const rules = await listSupplierRules(organisationId);
+    const rules = [...await listSupplierRules(organisationId, 'cost'), ...await listSupplierRules(organisationId, 'sales')];
     const rule = rules.find((candidate) => candidate.id === ruleId);
     if (!rule) {
       throw notFoundError('Supplier rule not found.');

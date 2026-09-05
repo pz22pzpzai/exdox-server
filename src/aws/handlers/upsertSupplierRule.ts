@@ -13,10 +13,12 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const billing = await getOrganisationBillingSummary(user.organisationId);
     assertFeatureAccess(billing, 'supplier_rules', 'Your current plan does not include supplier rules.');
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
+    const workspaceContext = body.workspaceContext === 'sales' ? 'sales' : 'cost';
 
     const rule = await upsertSupplierRule({
       id: Number.isFinite(Number(body.id)) ? Number(body.id) : undefined,
       organisationId: user.organisationId,
+      workspaceContext,
       supplierMatchText: sanitizeText(body.supplierMatchText),
       category: sanitizeText(body.category),
       taxRate: sanitizeText(body.taxRate) || '20% Standard',

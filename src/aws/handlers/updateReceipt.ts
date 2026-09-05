@@ -4,6 +4,7 @@ import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
 import { assertFeatureAccess, assertWorkspaceAccess } from '../shared/billing.js';
 import { getOrganisationBillingSummary, getReceiptById, updateReceiptById } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
+import { canChangeSalesStatus, isSalesStatus } from '../shared/salesWorkflow.js';
 import { parsePaymentMethod, sanitizeText, toNumber } from '../shared/helpers.js';
 import { getHistoricalExchangeRate } from '../shared/exchangeRates.js';
 
@@ -35,6 +36,28 @@ export async function handler(event: APIGatewayProxyEventV2) {
     ]);
     assertWorkspaceAccess(billing, existingReceipt.workspaceContext);
     const requestedStatus = sanitizeText(body.status);
+    if (
+      existingReceipt.workspaceContext === 'sales'
+      && requestedStatus
+      && !canChangeSalesStatus(user.role, existingReceipt.status, requestedStatus)
+    ) {
+      return jsonResponse(403, {
+        success: false,
+        error: 'sales_workflow_admin_required',
+        message: 'Only a business admin can approve or publish a sales document.',
+      });
+    }
+    if (
+      existingReceipt.workspaceContext === 'sales'
+      && requestedStatus
+      && !isSalesStatus(requestedStatus)
+    ) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'invalid_sales_status',
+        message: 'Choose Processing, Review, Ready, Published, Paid, or Rejected for a sales document.',
+      });
+    }
     if (
       requestedStatus !== existingReceipt.status
       && ['Ready', 'Published'].includes(requestedStatus)

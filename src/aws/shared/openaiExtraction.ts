@@ -194,6 +194,9 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     'If tax is not clearly visible, return total_tax_amount as the same value as vat_amount when vat_amount is known, otherwise null.',
     'Currency detection is mandatory whenever a monetary amount is visible. Use the printed symbol or currency code and return the ISO code: £ = GBP, $ or US$ = USD, and € = EUR. Never assume GBP merely because the workspace is in the UK.',
     'The vendor name must come from the document itself, usually the top header or merchant branding. Never invent a workspace name or a filename-based name.',
+    options.workspaceContext === 'sales'
+      ? 'For sales documents, vendor_name is the seller or invoice issuer, and customer_name is the billed customer shown in the Bill to, Sold to, or Customer field.'
+      : 'For purchase documents, return customer_name only when a billed customer is explicitly printed; otherwise return null.',
     'The invoice number must be a literal printed reference number from the document, not a filename or timestamp.',
     'For payment card details, only return the final four digits when a masked or explicitly labelled card reference is visible. Never return a full card number or more than four card digits.',
     'Return card network and issuer only when they are visibly printed. Do not infer an issuer such as Monzo from a Visa or Mastercard logo alone.',
@@ -210,6 +213,7 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     JSON.stringify(
       {
         vendor_name: 'string | null',
+        customer_name: 'string | null',
         invoice_date: 'YYYY-MM-DD | null',
         due_date: 'YYYY-MM-DD | null',
         invoice_number: 'string | null',
@@ -426,6 +430,7 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
     typeof source.document_type === 'string' ? source.document_type : requestedDocumentType,
   );
   const vendorName = normalizeVendorName(source.vendor_name);
+  const customer = normalizeFreeText(source.customer_name) || null;
   const currency = normalizeCurrencyValue(
     source.currency,
     source.raw_text_summary,
@@ -548,6 +553,7 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
     const unreadableNote = 'Could not read receipt or invoice.';
     return {
       vendorName: null,
+      customer,
       invoiceDate,
       dueDate,
       invoiceNumber,
@@ -574,6 +580,7 @@ function normalizeExtractionPayload(raw: unknown, requestedDocumentType: Documen
 
   return {
     vendorName,
+    customer,
     invoiceDate,
     dueDate,
     invoiceNumber,

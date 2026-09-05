@@ -203,6 +203,7 @@ ALTER TABLE receipts
 CREATE TABLE IF NOT EXISTS supplier_rules (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   organisation_id BIGINT UNSIGNED NOT NULL,
+  workspace_context ENUM('cost', 'sales') NOT NULL DEFAULT 'cost',
   supplier_match_text VARCHAR(255) NOT NULL,
   category VARCHAR(255) NOT NULL,
   tax_rate VARCHAR(64) NOT NULL,
@@ -216,6 +217,9 @@ CREATE TABLE IF NOT EXISTS supplier_rules (
     FOREIGN KEY (organisation_id) REFERENCES organisations(id)
     ON DELETE CASCADE
 );
+
+ALTER TABLE supplier_rules
+  ADD COLUMN IF NOT EXISTS workspace_context ENUM('cost', 'sales') NOT NULL DEFAULT 'cost' AFTER organisation_id;
 
 CREATE TABLE IF NOT EXISTS bank_transactions (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

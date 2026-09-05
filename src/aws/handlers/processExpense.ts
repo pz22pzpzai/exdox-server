@@ -13,6 +13,7 @@ import {
   applyCompanyCardClassification,
   duplicateReceiptError,
   findDuplicateReceiptForOrganisation,
+  findUserById,
   getOrganisationBillingSummary,
   getOrganisationBaseCurrency,
   getOrganisationTaxProfile,
@@ -69,6 +70,7 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
   const options = user.role === 'Standard_Employee' && requestedOptions.workspaceContext === 'cost'
     ? { ...requestedOptions, paymentMethod: 'cash_personal' as const }
     : requestedOptions;
+  const uploadOwner = await resolveUploadOwner(user, requestedOptions.workspaceContext, parsed.owner_user_id);
   const billing = await getOrganisationBillingSummary(user.organisationId);
 
   if (!isBillingActive(billing)) {
@@ -92,7 +94,7 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
   const fileName = sanitizeText(file.filename) || `receipt-${Date.now()}.jpg`;
   const mimeType = sanitizeText(file.contentType) || inferMimeType(fileName);
   const contentSha256 = calculateContentSha256(fileBuffer);
-  const s3Key = buildStorageKey(user.organisationId, user.id, fileName, options);
+  const s3Key = buildStorageKey(user.organisationId, uploadOwner.id, fileName, options);
 
   await putReceiptObject({
     key: s3Key,
@@ -118,8 +120,8 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
   });
   const companyCardOutcome = await applyCompanyCardClassification({
     organisationId: user.organisationId,
-    uploadedByUserId: user.id,
-    userRole: user.role,
+    uploadedByUserId: uploadOwner.id,
+    userRole: uploadOwner.role,
     workspaceContext: options.workspaceContext,
     document: supplierRuleOutcome.document,
     paymentMethod: supplierRuleOutcome.paymentMethod,
@@ -146,13 +148,14 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
 
   const receiptId = await insertReceiptRecord({
     organisationId: user.organisationId,
-    uploadedByUserId: user.id,
+    uploadedByUserId: uploadOwner.id,
     workspaceContext: options.workspaceContext,
     paymentMethod,
     paymentMethodMatchState: companyCardOutcome.paymentMethodMatchState,
     paymentMethodReviewRequired: companyCardOutcome.paymentMethodReviewRequired,
     matchedCompanyCardId: companyCardOutcome.matchedCompanyCardId,
     category: supplierRuleOutcome.category,
+    customer: document.customer,
     receiptSource: 'web_upload',
     status: determineInitialReceiptStatus(options, document),
     sourceFileName: fileName,
@@ -211,6 +214,7 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
   const options = user.role === 'Standard_Employee' && requestedOptions.workspaceContext === 'cost'
     ? { ...requestedOptions, paymentMethod: 'cash_personal' as const }
     : requestedOptions;
+  const uploadOwner = await resolveUploadOwner(user, requestedOptions.workspaceContext, payload.owner_user_id);
   const billing = await getOrganisationBillingSummary(user.organisationId);
 
   if (!isBillingActive(billing)) {
@@ -258,8 +262,8 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
   });
   const companyCardOutcome = await applyCompanyCardClassification({
     organisationId: user.organisationId,
-    uploadedByUserId: user.id,
-    userRole: user.role,
+    uploadedByUserId: uploadOwner.id,
+    userRole: uploadOwner.role,
     workspaceContext: options.workspaceContext,
     document: supplierRuleOutcome.document,
     paymentMethod: supplierRuleOutcome.paymentMethod,
@@ -286,13 +290,14 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
 
   const receiptId = await insertReceiptRecord({
     organisationId: user.organisationId,
-    uploadedByUserId: user.id,
+    uploadedByUserId: uploadOwner.id,
     workspaceContext: options.workspaceContext,
     paymentMethod,
     paymentMethodMatchState: companyCardOutcome.paymentMethodMatchState,
     paymentMethodReviewRequired: companyCardOutcome.paymentMethodReviewRequired,
     matchedCompanyCardId: companyCardOutcome.matchedCompanyCardId,
     category: supplierRuleOutcome.category,
+    customer: document.customer,
     receiptSource: 'web_upload',
     status: determineInitialReceiptStatus(options, document),
     sourceFileName: fileName,
@@ -434,6 +439,7 @@ function buildStoredDocumentPlaceholder(
   const cleanName = sanitizeText(fileName.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ')) || 'Uploaded document';
   return {
     vendorName: cleanName,
+    customer: null,
     invoiceDate: null,
     dueDate: null,
     invoiceNumber: null,
@@ -456,4 +462,28 @@ function buildStoredDocumentPlaceholder(
     notes: [workspaceContext === 'vault' ? 'Stored as a processed vault document.' : 'Stored without OCR processing.'],
     rawTextSummary: workspaceContext === 'vault' ? 'Stored as a processed vault document.' : 'Saved without OCR processing.',
   };
+}
+
+async function resolveUploadOwner(user: AuthenticatedUser, workspaceContext: ExpenseRequestOptions['workspaceContext'], requestedOwnerId: unknown) {
+  if (workspaceContext !== 'sales') {
+    return user;
+  }
+  const ownerId = Number(requestedOwnerId);
+  if (!Number.isInteger(ownerId) || ownerId <= 0 || ownerId === user.id) {
+    return user;
+  }
+  if (user.role !== 'Business_Admin') {
+    const error = new Error('Only a business admin can upload a sales document for another team member.') as Error & { statusCode?: number; code?: string };
+    error.statusCode = 403;
+    error.code = 'upload_owner_admin_required';
+    throw error;
+  }
+  const owner = await findUserById(user.organisationId, ownerId);
+  if (!owner || owner.status !== 'active') {
+    const error = new Error('Choose an active team member in this workspace.') as Error & { statusCode?: number; code?: string };
+    error.statusCode = 400;
+    error.code = 'invalid_upload_owner';
+    throw error;
+  }
+  return owner;
 }
