@@ -1549,7 +1549,11 @@ export async function getPendingInviteForResend(user: AuthenticatedUser, userId:
 
 export async function listDepartments(user: AuthenticatedUser): Promise<DepartmentRow[]> {
   if (!pool) {
-    return [];
+    const keys = await listReceiptJsonKeys(`departments/org-${user.organisationId}/`, 500);
+    const departments = await Promise.all(keys.map((key) => getReceiptJsonObject<DepartmentRow>(key)));
+    return departments
+      .filter((department): department is DepartmentRow => Boolean(department))
+      .sort((left, right) => left.name.localeCompare(right.name));
   }
   await ensureTeamSchema();
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
@@ -1575,7 +1579,19 @@ export async function createDepartment(user: AuthenticatedUser, name: string): P
     throw validationError('Enter a department name.');
   }
   if (!pool) {
-    throw validationError('Department management requires the configured workspace database.');
+    const departments = await listDepartments(user);
+    if (departments.some((department) => department.name.toLowerCase() === normalizedName.toLowerCase())) {
+      throw validationError('A department with this name already exists.');
+    }
+    const department: DepartmentRow = {
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      organisationId: user.organisationId,
+      name: normalizedName,
+      managerUserId: null,
+      managerName: null,
+    };
+    await putReceiptJsonObject(buildDepartmentKey(department), department);
+    return department;
   }
   await ensureTeamSchema();
   const [result] = await pool.execute<mysql.ResultSetHeader>(
@@ -1587,7 +1603,24 @@ export async function createDepartment(user: AuthenticatedUser, name: string): P
 
 export async function listTeamMembers(user: AuthenticatedUser): Promise<TeamMemberRow[]> {
   if (!pool) {
-    return [];
+    const [users, departments] = await Promise.all([
+      listS3UsersForOrganisation(user.organisationId),
+      listDepartments(user),
+    ]);
+    const departmentNames = new Map(departments.map((department) => [department.id, department.name]));
+    return users
+      .map((member) => ({
+        id: member.id,
+        organisationId: member.organisationId,
+        email: member.email,
+        fullName: member.fullName,
+        role: normalizeUserRole(member.role),
+        status: member.status,
+        departmentId: member.departmentId ?? null,
+        departmentName: member.departmentId ? departmentNames.get(member.departmentId) ?? null : null,
+        invitedByUserId: member.invitedByUserId,
+      }))
+      .sort((left, right) => (left.fullName || left.email).localeCompare(right.fullName || right.email));
   }
   await ensureTeamSchema();
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
@@ -1614,7 +1647,22 @@ export async function listTeamMembers(user: AuthenticatedUser): Promise<TeamMemb
 
 export async function updateTeamMemberDepartment(user: AuthenticatedUser, userId: number, departmentId: number | null) {
   if (!pool) {
-    throw validationError('Department management requires the configured workspace database.');
+    if (departmentId !== null) {
+      const departments = await listDepartments(user);
+      if (!departments.some((department) => department.id === departmentId)) {
+        throw validationError('Choose a department in this workspace.');
+      }
+    }
+    const users = await listS3UsersForOrganisation(user.organisationId);
+    const member = users.find((candidate) => candidate.id === userId);
+    if (!member) {
+      throw notFoundError('Team member not found.');
+    }
+    await putReceiptJsonObject(buildUserKey(member.email), buildStoredUser({
+      ...member,
+      departmentId,
+    }));
+    return;
   }
   await ensureTeamSchema();
   if (departmentId !== null) {
@@ -4057,6 +4105,10 @@ function buildCompanyCardKey(card: CompanyCardRow) {
 
 function buildCompanyCardExceptionKey(exception: CompanyCardEmployeeExceptionRow) {
   return `company-card-exceptions/org-${exception.organisationId}/${exception.createdAt.slice(0, 10)}/${exception.id}.json`;
+}
+
+function buildDepartmentKey(department: DepartmentRow) {
+  return `departments/org-${department.organisationId}/${department.id}.json`;
 }
 
 function buildUserKey(email: string) {
