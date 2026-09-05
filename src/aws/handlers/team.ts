@@ -4,12 +4,17 @@ import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
 import { createDepartment, listDepartments, listTeamMembers, updateTeamMemberDepartment } from '../shared/db.js';
 import { sanitizeText } from '../shared/helpers.js';
 import { jsonResponse } from '../shared/http.js';
+import { resolveRequestMethod } from '../shared/requestMethod.js';
 
-export async function handler(event: APIGatewayProxyEventV2) {
+type TeamEvent = APIGatewayProxyEventV2 & {
+  httpMethod?: string;
+};
+
+export async function handler(event: TeamEvent) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
-    const method = event.requestContext.http.method;
+    const method = resolveRequestMethod(event);
 
     if (method === 'GET') {
       const [departments, members] = await Promise.all([listDepartments(user), listTeamMembers(user)]);
