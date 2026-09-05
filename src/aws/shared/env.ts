@@ -26,7 +26,7 @@ export const awsEnv = {
   // All account emails use the verified Exdox support identity unless a deployment override is supplied.
   inviteEmailFrom: optionalEnv('INVITE_EMAIL_FROM') || 'contact@exdox.co.uk',
   contactInboxEmail: process.env.CONTACT_INBOX_EMAIL?.trim() || 'contact@exdox.co.uk',
-  inviteBaseUrl: process.env.INVITE_BASE_URL?.trim() || 'exdox://signup',
+  inviteBaseUrl: process.env.INVITE_BASE_URL?.trim() || 'https://exdox.co.uk/register',
   confirmEmailBaseUrl: process.env.CONFIRM_EMAIL_BASE_URL?.trim() || 'https://exdox.co.uk/confirm-email',
   confirmEmailEndpointBaseUrl:
     process.env.CONFIRM_EMAIL_ENDPOINT_BASE_URL?.trim() || 'https://hz2zkm6jkf.execute-api.eu-west-2.amazonaws.com/prod/confirm-email',

@@ -4205,7 +4205,8 @@ function toUserRecord(user: StoredUser): UserRecord {
 }
 
 function buildInviteLink(inviteToken: string, email: string) {
-  const base = awsEnv.inviteBaseUrl.replace(/\/$/, '');
+  const configuredBase = awsEnv.inviteBaseUrl.replace(/\/$/, '');
+  const base = /^https?:\/\//i.test(configuredBase) ? configuredBase : 'https://exdox.co.uk/register';
   const separator = base.includes('?') ? '&' : '?';
   return `${base}${separator}inviteToken=${encodeURIComponent(inviteToken)}&email=${encodeURIComponent(email)}`;
 }

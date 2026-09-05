@@ -1,6 +1,7 @@
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 
 import { awsEnv } from './env.js';
+import { buildExdoxEmailHtml } from './emailHtml.js';
 
 const ses = new SESv2Client({});
 
@@ -22,6 +23,7 @@ export async function sendClaimStatusEmail(input: {
   await ses.send(
     new SendEmailCommand({
       FromEmailAddress: awsEnv.inviteEmailFrom,
+      ReplyToAddresses: [awsEnv.inviteEmailFrom],
       Destination: { ToAddresses: [input.toEmail] },
       Content: {
         Simple: {
@@ -36,7 +38,17 @@ export async function sendClaimStatusEmail(input: {
                 `Claim: ${input.claimName}`,
                 '',
                 'Sign in to Exdox to view the current claim status.',
+                'https://exdox.co.uk/claims',
               ].join('\n'),
+            },
+            Html: {
+              Data: buildExdoxEmailHtml({
+                heading: `Expense claim ${input.status}`,
+                greeting: `Hi ${recipientName},`,
+                paragraphs: [statusCopy, 'Sign in to Exdox to view the current claim status.'],
+                details: [`Claim: ${input.claimName}`],
+                action: { label: 'View claim status', url: 'https://exdox.co.uk/claims' },
+              }),
             },
           },
         },

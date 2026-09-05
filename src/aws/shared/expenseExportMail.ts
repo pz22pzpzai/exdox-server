@@ -1,6 +1,7 @@
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 
 import { awsEnv } from './env.js';
+import { buildExdoxEmailHtml } from './emailHtml.js';
 
 const ses = new SESv2Client({});
 
@@ -23,6 +24,7 @@ export async function sendExpenseExportSummaryEmail(input: {
   await ses.send(
     new SendEmailCommand({
       FromEmailAddress: awsEnv.inviteEmailFrom,
+      ReplyToAddresses: [awsEnv.inviteEmailFrom],
       Destination: { ToAddresses: [input.toEmail] },
       Content: {
         Simple: {
@@ -39,10 +41,27 @@ export async function sendExpenseExportSummaryEmail(input: {
                 `Approved total: ${formattedTotal}`,
                 '',
                 'Sign in to Exdox to view your expense claims and their current payment status.',
+                'https://exdox.co.uk/claims',
                 '',
                 'Thanks,',
                 'The Exdox team',
               ].join('\n'),
+            },
+            Html: {
+              Data: buildExdoxEmailHtml({
+                heading: 'Your approved expense summary',
+                greeting: `Hi ${recipientName},`,
+                paragraphs: [
+                  `Your approved expense summary was prepared for ${input.organisationName} on ${input.exportedAt}.`,
+                  'Sign in to Exdox to view your expense claims and their current payment status.',
+                ],
+                details: [
+                  `Approved claims: ${input.approvedClaimCount}`,
+                  `Approved receipt lines: ${input.approvedDocumentCount}`,
+                  `Approved total: ${formattedTotal}`,
+                ],
+                action: { label: 'View expense claims', url: 'https://exdox.co.uk/claims' },
+              }),
             },
           },
         },
@@ -62,6 +81,7 @@ export async function sendEmployeeReimbursementReadyEmail(input: {
   await ses.send(
     new SendEmailCommand({
       FromEmailAddress: awsEnv.inviteEmailFrom,
+      ReplyToAddresses: [awsEnv.inviteEmailFrom],
       Destination: { ToAddresses: [input.toEmail] },
       Content: {
         Simple: {
@@ -76,10 +96,23 @@ export async function sendEmployeeReimbursementReadyEmail(input: {
                 'Your reimbursement is now with the finance team for payment processing.',
                 '',
                 'Sign in to Exdox to view your expense claims and their current payment status.',
+                'https://exdox.co.uk/claims',
                 '',
                 'Thanks,',
                 'The Exdox team',
               ].join('\n'),
+            },
+            Html: {
+              Data: buildExdoxEmailHtml({
+                heading: 'Your expense reimbursement is being processed',
+                greeting: `Hi ${recipientName},`,
+                paragraphs: [
+                  `Your approved expenses were included in the reimbursement payment summary prepared by ${input.organisationName} on ${input.exportedAt}.`,
+                  'Your reimbursement is now with the finance team for payment processing.',
+                  'Sign in to Exdox to view your expense claims and their current payment status.',
+                ],
+                action: { label: 'View expense claims', url: 'https://exdox.co.uk/claims' },
+              }),
             },
           },
         },

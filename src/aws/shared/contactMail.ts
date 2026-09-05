@@ -1,6 +1,7 @@
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 
 import { awsEnv } from './env.js';
+import { buildExdoxEmailHtml } from './emailHtml.js';
 
 const ses = new SESv2Client({});
 
@@ -48,6 +49,18 @@ export async function sendContactEmail(input: {
                 'Message:',
                 input.message.trim(),
               ].join('\n'),
+            },
+            Html: {
+              Data: buildExdoxEmailHtml({
+                heading: `Contact form: ${safeSubject}`,
+                details: [
+                  `Full name: ${input.fullName}`,
+                  `Email: ${input.email}`,
+                  `Organisation: ${organisationLine}`,
+                  `Subject: ${safeSubject}`,
+                ],
+                paragraphs: [input.message.trim()],
+              }),
             },
           },
         },

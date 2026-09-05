@@ -1,6 +1,7 @@
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 
 import { awsEnv } from './env.js';
+import { buildExdoxEmailHtml } from './emailHtml.js';
 
 const ses = new SESv2Client({});
 
@@ -50,7 +51,19 @@ export async function sendInviteEmail(input: {
               ].join('\n'),
             },
             Html: {
-              Data: buildInviteHtml(input),
+              Data: buildExdoxEmailHtml({
+                heading: `Join ${input.organisationName} on Exdox`,
+                greeting: 'Hello,',
+                paragraphs: [
+                  `${input.inviterName} invited you to join their Exdox workspace.`,
+                  'Use the button below to finish setting your password and activate your account.',
+                  'If you were not expecting this invitation, you can ignore this email.',
+                ],
+                action: {
+                  label: 'Accept invitation',
+                  url: input.inviteLink,
+                },
+              }),
             },
           },
         },
@@ -87,34 +100,4 @@ export async function sendInviteEmailWithRetry(
     }
   }
   throw lastError instanceof Error ? lastError : new Error('Could not send the invitation email.');
-}
-
-function buildInviteHtml(input: Parameters<typeof sendInviteEmail>[0]) {
-  const inviterName = escapeHtml(input.inviterName);
-  const organisationName = escapeHtml(input.organisationName);
-  const inviteLink = escapeHtml(input.inviteLink);
-  return `<!doctype html>
-<html lang="en">
-  <body style="margin:0;background:#eef4f8;font-family:Arial,sans-serif;color:#10203d">
-    <div style="max-width:600px;margin:0 auto;padding:32px 20px">
-      <div style="background:#ffffff;border:1px solid #d3dfeb;border-radius:16px;padding:32px">
-        <div style="font-size:26px;font-weight:700;margin-bottom:24px">Exdox</div>
-        <h1 style="font-size:24px;line-height:1.3;margin:0 0 16px">Join ${organisationName} on Exdox</h1>
-        <p style="font-size:16px;line-height:1.6;margin:0 0 24px">${inviterName} invited you to join their Exdox workspace.</p>
-        <a href="${inviteLink}" style="display:inline-block;background:#10203d;color:#ffffff;text-decoration:none;font-weight:700;padding:14px 22px;border-radius:8px">Accept invitation</a>
-        <p style="font-size:13px;line-height:1.6;color:#65758c;margin:28px 0 0">If the button does not work, paste this link into your browser:<br><a href="${inviteLink}" style="color:#087fc1;word-break:break-all">${inviteLink}</a></p>
-        <p style="font-size:13px;line-height:1.6;color:#65758c;margin:18px 0 0">If you were not expecting this invitation, you can ignore this email.</p>
-      </div>
-    </div>
-  </body>
-</html>`;
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
 }

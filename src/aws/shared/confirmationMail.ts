@@ -1,6 +1,7 @@
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 
 import { awsEnv } from './env.js';
+import { buildExdoxEmailHtml } from './emailHtml.js';
 
 const ses = new SESv2Client({});
 
@@ -26,6 +27,7 @@ export async function sendRegistrationConfirmationEmail(input: {
   await ses.send(
     new SendEmailCommand({
       FromEmailAddress: awsEnv.inviteEmailFrom,
+      ReplyToAddresses: [awsEnv.inviteEmailFrom],
       Destination: {
         ToAddresses: [input.toEmail],
       },
@@ -45,6 +47,18 @@ export async function sendRegistrationConfirmationEmail(input: {
                 '',
                 'If you did not create this account, you can ignore this email.',
               ].join('\n'),
+            },
+            Html: {
+              Data: buildExdoxEmailHtml({
+                heading: 'Confirm your Exdox email',
+                greeting: `Hi ${recipientName},`,
+                paragraphs: [
+                  `Thanks for creating ${input.organisationName} on Exdox.`,
+                  'Confirm your email address to activate your workspace.',
+                  'If you did not create this account, you can ignore this email.',
+                ],
+                action: { label: 'Confirm email address', url: input.confirmationLink },
+              }),
             },
           },
         },
@@ -85,6 +99,7 @@ export async function sendWorkspaceWelcomeEmail(input: {
   await ses.send(
     new SendEmailCommand({
       FromEmailAddress: awsEnv.inviteEmailFrom,
+      ReplyToAddresses: [awsEnv.inviteEmailFrom],
       Destination: {
         ToAddresses: [input.toEmail],
       },
@@ -111,6 +126,18 @@ export async function sendWorkspaceWelcomeEmail(input: {
                 'Exdox support',
                 'contact@exdox.co.uk',
               ].join('\n'),
+            },
+            Html: {
+              Data: buildExdoxEmailHtml({
+                heading: `Welcome to Exdox - ${input.organisationName}`,
+                greeting: `Hi ${recipientName},`,
+                paragraphs: [
+                  'Your email is confirmed and your Exdox workspace is ready.',
+                  'Recommended next steps:\n1. Upload your first receipt or invoice.\n2. Review the extracted details and approve the document.\n3. Invite your team from Profile/Settings.',
+                ],
+                action: { label: 'Open your workspace', url: 'https://exdox.co.uk/overview' },
+                links: [{ label: 'Help and support', url: 'https://exdox.co.uk/contact' }],
+              }),
             },
           },
         },

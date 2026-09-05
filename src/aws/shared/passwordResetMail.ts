@@ -1,6 +1,7 @@
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 
 import { awsEnv } from './env.js';
+import { buildExdoxEmailHtml } from './emailHtml.js';
 
 const ses = new SESv2Client({});
 
@@ -26,6 +27,7 @@ export async function sendPasswordResetEmail(input: {
   await ses.send(
     new SendEmailCommand({
       FromEmailAddress: awsEnv.inviteEmailFrom,
+      ReplyToAddresses: [awsEnv.inviteEmailFrom],
       Destination: {
         ToAddresses: [input.toEmail],
       },
@@ -46,6 +48,18 @@ export async function sendPasswordResetEmail(input: {
                 'This link expires in 1 hour.',
                 'If you did not request this change, you can ignore this email.',
               ].join('\n'),
+            },
+            Html: {
+              Data: buildExdoxEmailHtml({
+                heading: 'Reset your Exdox password',
+                greeting: `Hi ${recipientName},`,
+                paragraphs: [
+                  `We received a request to reset the password for your Exdox access in ${input.organisationName}.`,
+                  'Use the secure button below to choose a new password. This link expires in 1 hour.',
+                  'If you did not request this change, you can ignore this email.',
+                ],
+                action: { label: 'Reset password', url: input.resetLink },
+              }),
             },
           },
         },

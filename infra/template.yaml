@@ -22,7 +22,7 @@ Parameters:
     Default: 'contact@exdox.co.uk'
   InviteBaseUrl:
     Type: String
-    Default: 'exdox://signup'
+    Default: 'https://exdox.co.uk/register'
   ConfirmEmailBaseUrl:
     Type: String
     Default: 'https://exdox.co.uk/confirm-email'
