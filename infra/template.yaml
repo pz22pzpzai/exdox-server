@@ -546,10 +546,10 @@ Resources:
             Path: /invite
             Method: POST
 
-  TeamFunction:
+  TeamListFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Handler: dist/aws/handlers/team.handler
+      Handler: dist/aws/handlers/team.listHandler
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref ReceiptBucketName
@@ -560,12 +560,30 @@ Resources:
             RestApiId: !Ref ReceiptApi
             Path: /team
             Method: GET
+
+  TeamCreateDepartmentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/team.createDepartmentHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
         TeamCreateDepartmentRoute:
           Type: Api
           Properties:
             RestApiId: !Ref ReceiptApi
             Path: /team
             Method: POST
+
+  TeamAssignDepartmentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/team.assignDepartmentHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
         TeamAssignDepartmentRoute:
           Type: Api
           Properties:
