@@ -20,6 +20,7 @@ jobs:
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
       INVITE_EMAIL_FROM: ${{ secrets.INVITE_EMAIL_FROM }}
       INVITE_BASE_URL: ${{ secrets.INVITE_BASE_URL }}
+      SALES_INBOUND_DOMAIN: ${{ secrets.SALES_INBOUND_DOMAIN }}
       RECEIPT_STORE_MODE: ${{ secrets.RECEIPT_STORE_MODE }}
       DB_HOST: ${{ secrets.DB_HOST }}
       DB_PORT: ${{ secrets.DB_PORT }}
@@ -148,6 +149,7 @@ jobs:
           )
 
           add_if_set "InviteEmailFrom" "$INVITE_EMAIL_FROM"
+          add_if_set "SalesInboundDomain" "$SALES_INBOUND_DOMAIN"
           add_if_set "DbHost" "$DB_HOST"
           add_if_set "DbPort" "$DB_PORT"
           add_if_set "DbName" "$DB_NAME"

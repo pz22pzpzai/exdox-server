@@ -5,6 +5,96 @@ export type PaymentMethodMatchState = 'not_detected' | 'personal' | 'company_car
 export type InboxStatus = 'Processing' | 'Ready' | 'Review' | 'Published' | 'Payment processing' | 'Paid' | 'Rejected';
 export type ReceiptSource = 'mobile' | 'email' | 'web_upload' | 'bank_import';
 
+export type SalesDocumentKind = 'invoice' | 'quote' | 'credit_note';
+export type SalesDocumentStatus = 'draft' | 'issued' | 'accepted' | 'declined' | 'part_paid' | 'paid' | 'void';
+
+export type SalesCustomerRow = {
+  id: string;
+  organisationId: number;
+  name: string;
+  contactName: string | null;
+  email: string | null;
+  phone: string | null;
+  billingAddress: string | null;
+  shippingAddress: string | null;
+  companyNumber: string | null;
+  vatNumber: string | null;
+  paymentTermsDays: number;
+  currency: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SalesLineItem = {
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  taxRate: number;
+  netAmount: number;
+  taxAmount: number;
+  totalAmount: number;
+};
+
+export type SalesPaymentRow = {
+  id: string;
+  amount: number;
+  paidAt: string;
+  method: string;
+  reference: string | null;
+  createdAt: string;
+};
+
+export type SalesDocumentRow = {
+  id: string;
+  organisationId: number;
+  createdByUserId: number;
+  kind: SalesDocumentKind;
+  number: string;
+  customerId: string;
+  customerName: string;
+  issueDate: string;
+  dueDate: string | null;
+  currency: string;
+  status: SalesDocumentStatus;
+  notes: string | null;
+  linkedDocumentId: string | null;
+  lineItems: SalesLineItem[];
+  subtotal: number;
+  taxTotal: number;
+  total: number;
+  paidAmount: number;
+  outstandingAmount: number;
+  payments: SalesPaymentRow[];
+  s3Key: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SalesSubmissionRow = {
+  id: string;
+  organisationId: number;
+  submittedByUserId: number;
+  channel: 'web' | 'mobile' | 'email' | 'native';
+  sourceFilename: string;
+  splitMode: 'single_document' | 'one_document_per_page' | 'auto_detect';
+  status: 'processing' | 'completed' | 'duplicate' | 'failed';
+  receiptIds: number[];
+  duplicateReceiptId: number | null;
+  message: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SalesSubmissionAddressRow = {
+  organisationId: number;
+  userId: number;
+  token: string;
+  address: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type UserRole = 'Business_Admin' | 'Standard_Employee';
 export type UserStatus = 'pending_invite' | 'pending_confirmation' | 'active';
 export type UkTaxRate = '20% Standard' | '5% Reduced' | '0% Zero' | 'Exempt' | 'No VAT';

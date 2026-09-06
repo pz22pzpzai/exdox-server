@@ -35,6 +35,9 @@ Parameters:
   ResetPasswordBaseUrl:
     Type: String
     Default: 'https://exdox.co.uk/reset-password'
+  SalesInboundDomain:
+    Type: String
+    Default: 'sales.exdox.co.uk'
   ReceiptStoreMode:
     Type: String
     Default: s3
@@ -121,6 +124,7 @@ Globals:
         CONFIRM_EMAIL_ENDPOINT_BASE_URL: !Ref ConfirmEmailEndpointBaseUrl
         CONFIRM_EMAIL_LOGIN_URL: !Ref ConfirmEmailLoginUrl
         RESET_PASSWORD_BASE_URL: !Ref ResetPasswordBaseUrl
+        SALES_INBOUND_DOMAIN: !Ref SalesInboundDomain
         RECEIPT_STORE_MODE: !Ref ReceiptStoreMode
         DB_HOST: !Ref DbHost
         DB_PORT: !Ref DbPort
@@ -1111,6 +1115,72 @@ Resources:
             RestApiId: !Ref ReceiptApi
             Path: /bank-callback
             Method: GET
+
+  SalesWorkspaceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/salesWorkspace.listHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        SalesWorkspaceGetRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /sales-workspace
+            Method: GET
+  SalesWorkspaceActionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/salesWorkspace.actionHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: '*'
+      Events:
+        SalesWorkspacePostRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /sales-workspace
+            Method: POST
+
+  SalesWorkspaceDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/salesWorkspace.deleteHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        SalesWorkspaceDeleteRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /sales-workspace
+            Method: DELETE
+
+  SalesInboundFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/salesInbound.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+        - AWSLambdaBasicExecutionRole
+      Events:
+        SalesInboundRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /sales-inbound/{token}
+            Method: POST
 
 Outputs:
   ApiBaseUrl:

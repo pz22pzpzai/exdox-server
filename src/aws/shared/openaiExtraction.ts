@@ -53,6 +53,34 @@ export async function processExpenseBuffer(input: {
   return normalized;
 }
 
+export async function processSalesPdfDocuments(input: {
+  fileName: string;
+  buffer: Buffer;
+  options: ExpenseRequestOptions;
+  splitMode: 'one_document_per_page' | 'auto_detect';
+}) {
+  const uploadedFile = await openai.files.create({
+    file: new File([new Uint8Array(input.buffer)], input.fileName, { type: 'application/pdf' }),
+    purpose: 'user_data',
+  });
+  const modeInstruction = input.splitMode === 'one_document_per_page'
+    ? 'Create one result for every PDF page, even when adjacent pages look related.'
+    : 'Detect document boundaries. Combine continuation pages belonging to one invoice, but return separate results when the PDF contains distinct invoices, credit notes, or receipts.';
+  const response = await openai.responses.create({
+    model: awsEnv.openAiModel,
+    input: [{ role: 'user', content: [
+      { type: 'input_text', text: `${buildExtractionPrompt(input.options)}\n${modeInstruction}\nReturn one JSON object with a documents array. Each documents entry must use the requested extraction shape and include page_start and page_end numbers. Return JSON only.` },
+      { type: 'input_file', file_id: uploadedFile.id },
+    ] as never }],
+  });
+  const parsed = parseExtractionJson(response.output_text || '');
+  const rows = parsed && typeof parsed === 'object' && Array.isArray((parsed as { documents?: unknown[] }).documents)
+    ? (parsed as { documents: unknown[] }).documents
+    : [];
+  if (!rows.length) return [await processExpenseBuffer(input)];
+  return rows.slice(0, 50).map((row) => normalizeExtractionPayload(row, 'invoice'));
+}
+
 async function extractWithOpenAI({
   fileName,
   mimeType,

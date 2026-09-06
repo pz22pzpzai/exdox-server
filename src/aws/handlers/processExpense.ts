@@ -7,7 +7,7 @@ import { awsEnv } from '../shared/env.js';
 import { jsonResponse } from '../shared/http.js';
 import { deleteReceiptObject, getReceiptObjectBuffer, putReceiptObject } from '../shared/s3.js';
 import { inferMimeType, readRequestOptions, sanitizeText } from '../shared/helpers.js';
-import { applyVatRegistrationRules, processExpenseBuffer } from '../shared/openaiExtraction.js';
+import { applyVatRegistrationRules, processExpenseBuffer, processSalesPdfDocuments } from '../shared/openaiExtraction.js';
 import {
   applySupplierRulesToDocument,
   applyCompanyCardClassification,
@@ -23,6 +23,7 @@ import {
 import { getHistoricalExchangeRate } from '../shared/exchangeRates.js';
 import { type AuthenticatedUser, type DocumentType, type ExpenseRequestOptions, type NormalizedExpenseDocument } from '../types.js';
 import { calculateContentSha256 } from '../shared/contentHash.js';
+import { matchSalesCustomerName, recordSalesSubmission } from '../shared/salesWorkspaceStore.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
@@ -93,6 +94,10 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
   const fileBuffer = Buffer.isBuffer(file.content) ? file.content : Buffer.from(file.content);
   const fileName = sanitizeText(file.filename) || `receipt-${Date.now()}.jpg`;
   const mimeType = sanitizeText(file.contentType) || inferMimeType(fileName);
+  const splitMode = normalizeSplitMode(parsed.split_mode);
+  if (options.workspaceContext === 'sales' && mimeType === 'application/pdf' && splitMode !== 'single_document') {
+    return processMultipartSalesPdf({ user, uploadOwner, fileBuffer, fileName, mimeType, options, splitMode });
+  }
   const contentSha256 = calculateContentSha256(fileBuffer);
   const s3Key = buildStorageKey(user.organisationId, uploadOwner.id, fileName, options);
 
@@ -130,10 +135,14 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
   const classifiedDocument = withCompanyCardClassificationNote(supplierRuleOutcome.document, companyCardOutcome);
   // OCR may supply complete fields, but a cost or sales document still requires
   // a reviewer to approve it before it can move to Ready.
-  const document =
+  let document =
     options.workspaceContext === 'vault'
       ? classifiedDocument
       : { ...classifiedDocument, needsReview: true };
+  if (options.workspaceContext === 'sales') {
+    const matchedCustomer = await matchSalesCustomerName(user.organisationId, document.customer);
+    if (matchedCustomer) document = { ...document, customer: matchedCustomer.name, notes: [...document.notes, `Matched saved customer: ${matchedCustomer.name}.`] };
+  }
   const duplicateReceipt = await findDuplicateReceiptForOrganisation({
     organisationId: user.organisationId,
     workspaceContext: options.workspaceContext,
@@ -171,6 +180,18 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
   });
 
   const convertedDocument = await applyReceiptCurrencyConversion(user, receiptId, document);
+
+  if (options.workspaceContext === 'sales') {
+    await recordSalesSubmission(user, {
+      channel: 'web',
+      sourceFilename: fileName,
+      splitMode,
+      status: 'completed',
+      receiptIds: [receiptId],
+      duplicateReceiptId: null,
+      message: null,
+    });
+  }
 
   return jsonResponse(200, {
     success: true,
@@ -272,10 +293,14 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
   const classifiedDocument = withCompanyCardClassificationNote(supplierRuleOutcome.document, companyCardOutcome);
   // Keep JSON/direct-to-storage uploads on the same review-first workflow as
   // multipart web and mobile uploads.
-  const document =
+  let document =
     options.workspaceContext === 'vault'
       ? classifiedDocument
       : { ...classifiedDocument, needsReview: true };
+  if (options.workspaceContext === 'sales') {
+    const matchedCustomer = await matchSalesCustomerName(user.organisationId, document.customer);
+    if (matchedCustomer) document = { ...document, customer: matchedCustomer.name, notes: [...document.notes, `Matched saved customer: ${matchedCustomer.name}.`] };
+  }
   const duplicateReceipt = await findDuplicateReceiptForOrganisation({
     organisationId: user.organisationId,
     workspaceContext: options.workspaceContext,
@@ -312,6 +337,18 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
     document,
   });
   const convertedDocument = await applyReceiptCurrencyConversion(user, receiptId, document);
+
+  if (options.workspaceContext === 'sales') {
+    await recordSalesSubmission(user, {
+      channel: 'mobile',
+      sourceFilename: fileName,
+      splitMode: normalizeSplitMode(payload.split_mode),
+      status: 'completed',
+      receiptIds: [receiptId],
+      duplicateReceiptId: null,
+      message: null,
+    });
+  }
 
   return jsonResponse(200, {
     success: true,
@@ -462,6 +499,91 @@ function buildStoredDocumentPlaceholder(
     notes: [workspaceContext === 'vault' ? 'Stored as a processed vault document.' : 'Stored without OCR processing.'],
     rawTextSummary: workspaceContext === 'vault' ? 'Stored as a processed vault document.' : 'Saved without OCR processing.',
   };
+}
+
+function normalizeSplitMode(value: unknown): 'single_document' | 'one_document_per_page' | 'auto_detect' {
+  return value === 'one_document_per_page' || value === 'auto_detect' ? value : 'single_document';
+}
+
+async function processMultipartSalesPdf(input: {
+  user: AuthenticatedUser;
+  uploadOwner: AuthenticatedUser;
+  fileBuffer: Buffer;
+  fileName: string;
+  mimeType: string;
+  options: ExpenseRequestOptions;
+  splitMode: 'one_document_per_page' | 'auto_detect';
+}) {
+  const extractedDocuments = await processSalesPdfDocuments({
+    fileName: input.fileName,
+    buffer: input.fileBuffer,
+    options: input.options,
+    splitMode: input.splitMode,
+  });
+  const receiptIds: number[] = [];
+  const taxProfile = await getOrganisationTaxProfile(input.user.organisationId);
+  for (const [index, extracted] of extractedDocuments.entries()) {
+    const billing = await getOrganisationBillingSummary(input.user.organisationId);
+    if (!canProcessDocument(billing)) break;
+    const ruled = await applySupplierRulesToDocument({
+      organisationId: input.user.organisationId,
+      document: applyVatRegistrationRules(extracted, taxProfile),
+      paymentMethod: input.options.paymentMethod,
+      workspaceContext: 'sales',
+    });
+    let document = { ...ruled.document, needsReview: true };
+    const matchedCustomer = await matchSalesCustomerName(input.user.organisationId, document.customer);
+    if (matchedCustomer) document = { ...document, customer: matchedCustomer.name, notes: [...document.notes, `Matched saved customer: ${matchedCustomer.name}.`] };
+    const partNumber = index + 1;
+    const partName = extractedDocuments.length === 1 ? input.fileName : input.fileName.replace(/\.pdf$/i, `-document-${partNumber}.pdf`);
+    const contentSha256 = calculateContentSha256(Buffer.concat([input.fileBuffer, Buffer.from(`\nexdox-sales-part-${partNumber}`)]));
+    const duplicate = await findDuplicateReceiptForOrganisation({
+      organisationId: input.user.organisationId,
+      workspaceContext: 'sales',
+      document,
+      sourceFileName: partName,
+      contentSha256,
+    });
+    if (duplicate) continue;
+    const s3Key = buildStorageKey(input.user.organisationId, input.uploadOwner.id, partName, input.options);
+    await putReceiptObject({ key: s3Key, body: input.fileBuffer, contentType: input.mimeType });
+    const receiptId = await insertReceiptRecord({
+      organisationId: input.user.organisationId,
+      uploadedByUserId: input.uploadOwner.id,
+      workspaceContext: 'sales',
+      paymentMethod: ruled.paymentMethod,
+      category: ruled.category,
+      customer: document.customer,
+      receiptSource: 'web_upload',
+      status: 'Review',
+      sourceFileName: partName,
+      sourceMimeType: input.mimeType,
+      contentSha256,
+      s3Bucket: awsEnv.receiptBucketName,
+      s3Key,
+      locale: input.options.locale,
+      extractionProvider: 'openai',
+      extractionModel: awsEnv.openAiModel,
+      rawExtractionJson: extracted,
+      document,
+    });
+    await applyReceiptCurrencyConversion(input.user, receiptId, document);
+    receiptIds.push(receiptId);
+  }
+  const status = receiptIds.length ? 'completed' : 'duplicate';
+  const submission = await recordSalesSubmission(input.user, {
+    channel: 'web', sourceFilename: input.fileName, splitMode: input.splitMode, status,
+    receiptIds, duplicateReceiptId: null,
+    message: receiptIds.length ? `${receiptIds.length} Sales document${receiptIds.length === 1 ? '' : 's'} detected.` : 'No new Sales documents were created because matching records already exist.',
+  });
+  return jsonResponse(receiptIds.length ? 200 : 409, {
+    success: Boolean(receiptIds.length),
+    receiptId: receiptIds[0] ?? null,
+    receiptIds,
+    workspaceContext: 'sales',
+    splitMode: input.splitMode,
+    submission,
+  });
 }
 
 async function resolveUploadOwner(user: AuthenticatedUser, workspaceContext: ExpenseRequestOptions['workspaceContext'], requestedOwnerId: unknown) {

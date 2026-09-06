@@ -32,6 +32,7 @@ export const awsEnv = {
     process.env.CONFIRM_EMAIL_ENDPOINT_BASE_URL?.trim() || 'https://hz2zkm6jkf.execute-api.eu-west-2.amazonaws.com/prod/confirm-email',
   confirmEmailLoginUrl: process.env.CONFIRM_EMAIL_LOGIN_URL?.trim() || 'https://exdox.co.uk/login',
   resetPasswordBaseUrl: process.env.RESET_PASSWORD_BASE_URL?.trim() || 'https://exdox.co.uk/reset-password',
+  salesInboundDomain: process.env.SALES_INBOUND_DOMAIN?.trim() || 'sales.exdox.co.uk',
   receiptStoreMode: process.env.RECEIPT_STORE_MODE?.trim() || 's3',
   dbHost: optionalEnv('DB_HOST'),
   dbPort: Number(process.env.DB_PORT ?? 3306),
