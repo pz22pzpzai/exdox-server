@@ -71,6 +71,14 @@ Parameters:
     Type: String
     Default: ''
     NoEcho: true
+  XeroClientId:
+    Type: String
+    Default: ''
+    NoEcho: true
+  XeroClientSecret:
+    Type: String
+    Default: ''
+    NoEcho: true
   StripeCheckoutSuccessUrl:
     Type: String
     Default: 'https://exdox.co.uk/billing?checkout=success'
@@ -135,6 +143,8 @@ Globals:
         DB_IAM_REGION: !Ref DbIamRegion
         STRIPE_SECRET_KEY: !Ref StripeSecretKey
         STRIPE_WEBHOOK_SECRET: !Ref StripeWebhookSecret
+        XERO_CLIENT_ID: !Ref XeroClientId
+        XERO_CLIENT_SECRET: !Ref XeroClientSecret
         STRIPE_CHECKOUT_SUCCESS_URL: !Ref StripeCheckoutSuccessUrl
         STRIPE_CHECKOUT_CANCEL_URL: !Ref StripeCheckoutCancelUrl
         STRIPE_BILLING_PORTAL_RETURN_URL: !Ref StripeBillingPortalReturnUrl

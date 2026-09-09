@@ -47,6 +47,8 @@ export const awsEnv = {
     process.env.OPEN_BANKING_CALLBACK_URL?.trim() || 'https://app.exdox.co.uk/bank-callback',
   stripeSecretKey: optionalEnv('STRIPE_SECRET_KEY'),
   stripeWebhookSecret: optionalEnv('STRIPE_WEBHOOK_SECRET'),
+  xeroClientId: optionalEnv('XERO_CLIENT_ID'),
+  xeroClientSecret: optionalEnv('XERO_CLIENT_SECRET'),
   stripeCheckoutSuccessUrl:
     process.env.STRIPE_CHECKOUT_SUCCESS_URL?.trim() || 'https://exdox.co.uk/billing?checkout=success',
   stripeCheckoutCancelUrl:
