@@ -14,7 +14,7 @@ const XERO_AUTHORIZE_URL = 'https://login.xero.com/identity/connect/authorize';
 const XERO_TOKEN_URL = 'https://identity.xero.com/connect/token';
 const XERO_CONNECTIONS_URL = 'https://api.xero.com/connections';
 const XERO_REDIRECT_URI = 'https://hz2zkm6jkf.execute-api.eu-west-2.amazonaws.com/prod/xero/callback';
-const XERO_SCOPES = ['offline_access', 'accounting.contacts', 'accounting.invoices', 'accounting.payments', 'accounting.banktransactions', 'accounting.settings.read', 'accounting.attachments'];
+const XERO_SCOPES = ['offline_access', 'accounting.contacts', 'accounting.invoices', 'accounting.banktransactions', 'accounting.settings.read', 'accounting.attachments'];
 
 type XeroConnectState = { purpose: 'xero_connect'; organisationId: number; userId: number };
 type XeroTokenResponse = { access_token: string; refresh_token?: string; expires_in: number; token_type: string; scope?: string };
