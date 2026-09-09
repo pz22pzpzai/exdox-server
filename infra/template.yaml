@@ -966,8 +966,11 @@ Resources:
     Properties:
       Handler: dist/aws/handlers/xero.connectHandler
       Policies:
-        - S3CrudPolicy:
-            BucketName: !Ref ReceiptBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub 'arn:${AWS::Partition}:s3:::${ReceiptBucketName}/organisations/*'
       Events:
         ConnectXeroRoute:
           Type: Api
