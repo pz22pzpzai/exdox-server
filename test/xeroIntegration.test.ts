@@ -18,4 +18,7 @@ test('Xero tokens and publication records are protected and duplicate-safe', () 
   assert.match(handler, /accounting\.attachments/);
   assert.match(handler, /loadPublication/);
   assert.match(handler, /alreadyPublished: true/);
+  assert.match(handler, /BankTransactions/);
+  assert.match(handler, /categoryAccountMappings/);
+  assert.match(handler, /taxTypeMappings/);
 });
