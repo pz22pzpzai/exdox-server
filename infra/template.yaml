@@ -1003,6 +1003,21 @@ Resources:
             Path: /xero/connection
             Method: DELETE
 
+  SelectXeroTenantFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/xero.selectTenantHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        SelectXeroTenantRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /xero/tenant
+            Method: POST
+
   SyncXeroCustomersFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -1016,6 +1031,84 @@ Resources:
           Properties:
             RestApiId: !Ref ReceiptApi
             Path: /xero/customers/sync
+            Method: POST
+
+  ImportXeroCustomersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/xero.importCustomersHandler
+      Timeout: 60
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        ImportXeroCustomersRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /xero/customers/import
+            Method: POST
+
+  GetXeroReferenceDataFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/xero.referenceDataHandler
+      Timeout: 60
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        GetXeroReferenceDataRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /xero/reference-data
+            Method: GET
+
+  GetXeroIntegrationSettingsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/xero.getIntegrationSettingsHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        GetXeroIntegrationSettingsRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /xero/settings
+            Method: GET
+
+  UpdateXeroIntegrationSettingsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/xero.updateIntegrationSettingsHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        UpdateXeroIntegrationSettingsRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /xero/settings
+            Method: PUT
+
+  PublishToXeroFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/xero.publishHandler
+      Timeout: 60
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        PublishToXeroRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /xero/publish
             Method: POST
 
   ListSupplierRulesFunction:

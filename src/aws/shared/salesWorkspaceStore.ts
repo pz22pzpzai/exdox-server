@@ -136,6 +136,9 @@ export async function saveSalesDocument(user: AuthenticatedUser, input: Record<s
     outstandingAmount: money(Math.max(0, totals.total - paidAmount)),
     payments,
     s3Key: existing?.s3Key ?? null,
+    xeroId: existing?.xeroId ?? null,
+    xeroNumber: existing?.xeroNumber ?? null,
+    xeroPublishedAt: existing?.xeroPublishedAt ?? null,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
@@ -209,6 +212,15 @@ export async function issueSalesDocument(user: AuthenticatedUser, documentId: st
   const updated: SalesDocumentRow = { ...document, status: document.kind === 'quote' ? 'issued' : document.status === 'paid' ? 'paid' : document.paidAmount > 0 ? 'part_paid' : 'issued', updatedAt: new Date().toISOString() };
   await putReceiptJsonObject(documentKey(user.organisationId, document.id), updated);
   return { document: updated, messageId };
+}
+
+export async function markSalesDocumentPublishedToXero(user: AuthenticatedUser, documentId: string, xeroId: string, xeroNumber: string | null) {
+  const key = documentKey(user.organisationId, documentId);
+  const document = await tryGet<SalesDocumentRow>(key);
+  if (!document) throw notFound('Sales document not found.');
+  const updated: SalesDocumentRow = { ...document, xeroId, xeroNumber, xeroPublishedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  await putReceiptJsonObject(key, updated);
+  return updated;
 }
 
 export async function getOrCreateSubmissionAddress(user: AuthenticatedUser) {

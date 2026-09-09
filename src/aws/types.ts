@@ -67,6 +67,9 @@ export type SalesDocumentRow = {
   outstandingAmount: number;
   payments: SalesPaymentRow[];
   s3Key: string | null;
+  xeroId?: string | null;
+  xeroNumber?: string | null;
+  xeroPublishedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 };
