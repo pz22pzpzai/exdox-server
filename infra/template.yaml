@@ -965,6 +965,9 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: dist/aws/handlers/xero.connectHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
       Events:
         ConnectXeroRoute:
           Type: Api
