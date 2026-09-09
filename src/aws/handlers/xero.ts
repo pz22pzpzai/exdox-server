@@ -7,7 +7,7 @@ import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
 import { awsEnv } from '../shared/env.js';
 import { jsonResponse } from '../shared/http.js';
 import { deleteReceiptObject, getReceiptJsonObject, getReceiptObjectBuffer, putReceiptJsonObject } from '../shared/s3.js';
-import { getOrganisationSettings, getReceiptById, listExpenseClaims, listReceiptsByClaim, updateClaimStatus, updateReceiptById } from '../shared/db.js';
+import { getOrganisationBillingSummary, getOrganisationSettings, getReceiptById, listExpenseClaims, listReceiptsByClaim, updateClaimStatus, updateReceiptById } from '../shared/db.js';
 import { getSalesDocumentPdf, getSalesWorkspace, markSalesDocumentPublishedToXero, saveSalesCustomer } from '../shared/salesWorkspaceStore.js';
 
 const XERO_AUTHORIZE_URL = 'https://login.xero.com/identity/connect/authorize';
@@ -79,8 +79,19 @@ function xeroError(error: unknown, fallback: string) {
   return jsonResponse(status, { success: false, error: typeof error === 'object' && error !== null && 'code' in error ? String((error as { code?: string }).code) : 'xero_integration_failed', message: error instanceof Error ? error.message : fallback });
 }
 
-function redirectToSettings(result: 'connected' | 'failed') {
+function redirectToSettings(result: 'connected' | 'failed' | 'locked') {
   return { statusCode: 302, headers: { Location: `https://exdox.co.uk/settings/integrations?xero=${result}`, 'Cache-Control': 'no-store' }, body: '' };
+}
+
+async function requirePaidXeroAccess(organisationId: number) {
+  const billing = await getOrganisationBillingSummary(organisationId);
+  if (billing.status !== 'active') {
+    const error = new Error('Xero integration unlocks after the trial ends and a paid plan is active.') as Error & { statusCode?: number; code?: string };
+    error.statusCode = 403;
+    error.code = 'xero_plan_required';
+    throw error;
+  }
+  return billing;
 }
 
 async function loadConnection(organisationId: number) {
@@ -189,8 +200,9 @@ export async function statusHandler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
-    const connection = await loadConnection(user.organisationId);
-    return jsonResponse(200, { success: true, configured: configured(), connected: Boolean(connection), tenantId: connection?.tenantId ?? null, tenantName: connection?.tenantName ?? null, connectedAt: connection?.connectedAt ?? null, availableTenants: (connection?.availableTenants ?? []).map((tenant) => ({ tenantId: tenant.tenantId, tenantName: tenant.tenantName })) });
+    const [connection, billing] = await Promise.all([loadConnection(user.organisationId), getOrganisationBillingSummary(user.organisationId)]);
+    const available = billing.status === 'active';
+    return jsonResponse(200, { success: true, configured: configured(), available, billingStatus: billing.status, lockedReason: available ? null : 'Xero integration unlocks after the trial ends and a paid plan is active.', connected: Boolean(connection), tenantId: connection?.tenantId ?? null, tenantName: connection?.tenantName ?? null, connectedAt: connection?.connectedAt ?? null, availableTenants: (connection?.availableTenants ?? []).map((tenant) => ({ tenantId: tenant.tenantId, tenantName: tenant.tenantName })) });
   } catch (error) { return xeroError(error, 'Could not load the Xero connection.'); }
 }
 
@@ -198,6 +210,7 @@ export async function connectHandler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    await requirePaidXeroAccess(user.organisationId);
     if (!configured()) throw new Error('Xero is not configured for this Exdox environment yet.');
     const state = jwt.sign({ purpose: 'xero_connect', organisationId: user.organisationId, userId: user.id } satisfies XeroConnectState, awsEnv.jwtSecret, { expiresIn: '10m' });
     const url = new URL(XERO_AUTHORIZE_URL);
@@ -218,6 +231,7 @@ export async function callbackHandler(event: APIGatewayProxyEventV2) {
     if (!code || !state) throw new Error('The Xero connection was not completed.');
     const decoded = jwt.verify(state, awsEnv.jwtSecret) as jwt.JwtPayload & Partial<XeroConnectState>;
     if (decoded.purpose !== 'xero_connect' || !Number.isFinite(Number(decoded.organisationId)) || Number(decoded.organisationId) <= 0 || !Number.isFinite(Number(decoded.userId)) || Number(decoded.userId) <= 0) throw new Error('The Xero connection request is invalid or has expired.');
+    await requirePaidXeroAccess(Number(decoded.organisationId));
     const basic = Buffer.from(`${awsEnv.xeroClientId}:${awsEnv.xeroClientSecret}`).toString('base64');
     const tokenResponse = await fetch(XERO_TOKEN_URL, { method: 'POST', headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: XERO_REDIRECT_URI }) });
     if (!tokenResponse.ok) throw new Error('Xero did not accept the connection. Please try again.');
@@ -230,7 +244,7 @@ export async function callbackHandler(event: APIGatewayProxyEventV2) {
     if (!connection?.tenantId || !connection.tenantName) throw new Error('No Xero organisation was selected. Please try again and choose an organisation.');
     await putReceiptJsonObject(connectionKey(Number(decoded.organisationId)), { version: 1, tenantId: connection.tenantId, tenantName: connection.tenantName, tenantType: connection.tenantType, connectedAt: new Date().toISOString(), connectedByUserId: Number(decoded.userId), accessTokenExpiresAt: new Date(Date.now() + tokens.expires_in * 1000).toISOString(), encryptedTokens: encryptTokens(tokens), availableTenants: connections } satisfies StoredXeroConnection);
     return redirectToSettings('connected');
-  } catch { return redirectToSettings('failed'); }
+  } catch (error) { return redirectToSettings(typeof error === 'object' && error !== null && 'code' in error && (error as { code?: string }).code === 'xero_plan_required' ? 'locked' : 'failed'); }
 }
 
 export async function disconnectHandler(event: APIGatewayProxyEventV2) {
@@ -246,6 +260,7 @@ export async function selectTenantHandler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    await requirePaidXeroAccess(user.organisationId);
     const body = event.body ? JSON.parse(event.body) as { tenantId?: string } : {};
     const connection = await loadConnection(user.organisationId);
     if (!connection) throw new Error('Connect Xero before choosing an organisation.');
@@ -260,6 +275,7 @@ export async function syncCustomersHandler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    await requirePaidXeroAccess(user.organisationId);
     const { connection, accessToken } = await accessTokenFor(user.organisationId);
     const { customers } = await getSalesWorkspace(user);
     let created = 0;
@@ -281,6 +297,7 @@ export async function importCustomersHandler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    await requirePaidXeroAccess(user.organisationId);
     const auth = await accessTokenFor(user.organisationId);
     const contacts = (await loadXeroContacts(auth)).Contacts ?? [];
     const workspace = await getSalesWorkspace(user);
@@ -302,6 +319,7 @@ export async function referenceDataHandler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    await requirePaidXeroAccess(user.organisationId);
     const auth = await accessTokenFor(user.organisationId);
     const [accountsPayload, taxPayload, trackingPayload, contactsPayload, itemsPayload, currenciesPayload, usersPayload, settings] = await Promise.all([
       xeroGetWithAuth<{ Accounts?: XeroAccount[] }>(auth, 'Accounts'),
@@ -328,6 +346,7 @@ export async function getIntegrationSettingsHandler(event: APIGatewayProxyEventV
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    await requirePaidXeroAccess(user.organisationId);
     return jsonResponse(200, { success: true, settings: await loadSettings(user.organisationId) });
   } catch (error) { return xeroError(error, 'Could not load Xero settings.'); }
 }
@@ -336,6 +355,7 @@ export async function updateIntegrationSettingsHandler(event: APIGatewayProxyEve
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    await requirePaidXeroAccess(user.organisationId);
     const input = event.body ? JSON.parse(event.body) as Partial<XeroIntegrationSettings> : {};
     const status = (value: unknown, fallback: XeroIntegrationSettings['purchaseStatus']) => value === 'DRAFT' || value === 'SUBMITTED' || value === 'AUTHORISED' ? value : fallback;
     const stringMap = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value as Record<string, unknown>).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && Boolean(entry[1].trim())).map(([key, item]) => [key.slice(0, 120), item.trim().slice(0, 50)])) : {};
@@ -362,6 +382,7 @@ export async function publishHandler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
+    await requirePaidXeroAccess(user.organisationId);
     const input = event.body ? JSON.parse(event.body) as { sourceType?: XeroPublication['sourceType']; sourceId?: string | number } : {};
     const sourceType = input.sourceType;
     const sourceId = String(input.sourceId ?? '').trim();

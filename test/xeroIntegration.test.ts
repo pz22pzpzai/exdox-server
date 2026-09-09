@@ -10,6 +10,8 @@ test('Xero integration exposes explicit admin connection, settings, reference, a
     assert.match(template, new RegExp(`Path: ${path.replaceAll('/', '\\/')}`));
   }
   assert.match(handler, /requireAdminUser\(user\)/);
+  assert.match(handler, /requirePaidXeroAccess/);
+  assert.match(handler, /billing\.status !== 'active'/);
 });
 
 test('Xero tokens and publication records are protected and duplicate-safe', () => {
