@@ -946,6 +946,78 @@ Resources:
             Path: /settings
             Method: PUT
 
+  GetXeroStatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/xero.statusHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        GetXeroStatusRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /xero/status
+            Method: GET
+
+  ConnectXeroFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/xero.connectHandler
+      Events:
+        ConnectXeroRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /xero/connect
+            Method: POST
+
+  XeroCallbackFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/xero.callbackHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        XeroCallbackRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /xero/callback
+            Method: GET
+
+  DisconnectXeroFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/xero.disconnectHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        DisconnectXeroRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /xero/connection
+            Method: DELETE
+
+  SyncXeroCustomersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/xero.syncCustomersHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        SyncXeroCustomersRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /xero/customers/sync
+            Method: POST
+
   ListSupplierRulesFunction:
     Type: AWS::Serverless::Function
     Properties:
