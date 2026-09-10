@@ -399,4 +399,5 @@ export type UserRecord = AuthenticatedUser & {
   departmentId?: number | null;
   createdAt?: string | null;
   emailConfirmationGraceStartedAt?: string | null;
+  removedAt?: string | null;
 };

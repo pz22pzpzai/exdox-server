@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS users (
   invite_token VARCHAR(255) NULL,
   invited_by_user_id BIGINT UNSIGNED NULL,
   department_id BIGINT UNSIGNED NULL,
+  removed_at TIMESTAMP NULL DEFAULT NULL,
   invite_sent_at TIMESTAMP NULL DEFAULT NULL,
   invitation_accepted_at TIMESTAMP NULL DEFAULT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -66,6 +67,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 ALTER TABLE users
   ADD COLUMN IF NOT EXISTS department_id BIGINT UNSIGNED NULL AFTER invited_by_user_id,
+  ADD COLUMN IF NOT EXISTS removed_at TIMESTAMP NULL DEFAULT NULL AFTER department_id,
   ADD INDEX IF NOT EXISTS idx_users_org_department (organisation_id, department_id);
 
 CREATE TABLE IF NOT EXISTS departments (

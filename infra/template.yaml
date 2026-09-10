@@ -626,6 +626,21 @@ Resources:
             Path: /team
             Method: PUT
 
+  TeamRemoveMemberFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/team.removeMemberHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        TeamRemoveMemberRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /team/{userId}
+            Method: DELETE
+
   GetSessionFunction:
     Type: AWS::Serverless::Function
     Properties:

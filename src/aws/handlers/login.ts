@@ -39,6 +39,14 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
+    if (user.removedAt) {
+      return jsonResponse(403, {
+        success: false,
+        error: 'account_removed',
+        message: 'This account has been removed from its workspace.',
+      });
+    }
+
     if (!user.passwordHash) {
       return jsonResponse(403, {
         success: false,

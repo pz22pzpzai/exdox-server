@@ -9,14 +9,26 @@ import { hydrateBillingSummaryFromStripe } from '../shared/stripeBilling.js';
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const tokenUser = requireAuthenticatedUser(event);
+    const storedUser = await findUserByEmail(tokenUser.email);
+    if (
+      !storedUser
+      || storedUser.removedAt
+      || storedUser.status === 'pending_invite'
+      || storedUser.id !== tokenUser.id
+      || storedUser.organisationId !== tokenUser.organisationId
+    ) {
+      return jsonResponse(401, {
+        success: false,
+        error: 'account_removed',
+        message: 'This account no longer has access to the workspace.',
+      });
+    }
     let user = tokenUser;
     let refreshedToken: string | null = null;
 
     if (tokenUser.status === 'pending_confirmation') {
-      const storedUser = await findUserByEmail(tokenUser.email);
       if (
-        storedUser
-        && storedUser.id === tokenUser.id
+        storedUser.id === tokenUser.id
         && storedUser.organisationId === tokenUser.organisationId
         && storedUser.status === 'active'
       ) {

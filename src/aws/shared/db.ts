@@ -172,6 +172,7 @@ type StoredUser = {
   departmentId?: number | null;
   createdAt: string;
   emailConfirmationGraceStartedAt?: string | null;
+  removedAt?: string | null;
 };
 
 let teamSchemaReady: Promise<void> | null = null;
@@ -324,6 +325,7 @@ async function ensureTeamSchema() {
       )`,
     );
     await pool.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS department_id BIGINT UNSIGNED NULL AFTER invited_by_user_id');
+    await pool.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS removed_at DATETIME NULL AFTER department_id');
     await pool.execute('ALTER TABLE users ADD INDEX IF NOT EXISTS idx_users_org_department (organisation_id, department_id)');
   })();
   await teamSchemaReady;
@@ -1468,13 +1470,16 @@ export async function createInvite(input: {
 
   if (!pool) {
     const existing = await findUserByEmail(email);
-    if (existing) {
+    if (existing && !existing.removedAt) {
       throw duplicateUserError('An account or invite with this email already exists.');
+    }
+    if (existing && existing.organisationId !== input.organisationId) {
+      throw duplicateUserError('This email was previously attached to another workspace. Contact support before inviting it here.');
     }
 
     const organisation = await getS3Organisation(input.organisationId);
     const user = buildStoredUser({
-      id: Date.now(),
+      id: existing?.id ?? Date.now(),
       organisationId: input.organisationId,
       email,
       passwordHash: null,
@@ -1484,6 +1489,7 @@ export async function createInvite(input: {
       inviteToken,
       invitedByUserId: input.invitedByUserId,
       departmentId,
+      removedAt: null,
     });
     await putReceiptJsonObject(buildUserKey(email), user);
     return {
@@ -1494,9 +1500,12 @@ export async function createInvite(input: {
   }
 
   await ensureTeamSchema();
-  const [existingRows] = await pool.query<mysql.RowDataPacket[]>(`SELECT id FROM users WHERE email = ? LIMIT 1`, [email]);
-  if (existingRows[0]) {
+  const [existingRows] = await pool.query<mysql.RowDataPacket[]>(`SELECT id, organisation_id, removed_at FROM users WHERE email = ? LIMIT 1`, [email]);
+  if (existingRows[0] && !existingRows[0].removed_at) {
     throw duplicateUserError('An account or invite with this email already exists.');
+  }
+  if (existingRows[0] && Number(existingRows[0].organisation_id) !== input.organisationId) {
+    throw duplicateUserError('This email was previously attached to another workspace. Contact support before inviting it here.');
   }
 
   const [orgRows] = await pool.query<mysql.RowDataPacket[]>(`SELECT id, name FROM organisations WHERE id = ? LIMIT 1`, [
@@ -1507,8 +1516,16 @@ export async function createInvite(input: {
     throw new Error('Organisation not found for invite.');
   }
 
-  const [result] = await pool.execute<mysql.ResultSetHeader>(
-    `INSERT INTO users (
+  const result = existingRows[0]
+    ? await pool.execute<mysql.ResultSetHeader>(
+      `UPDATE users
+       SET organisation_id = ?, password_hash = NULL, full_name = ?, user_role = ?, status = 'pending_invite',
+           invite_token = ?, invited_by_user_id = ?, department_id = ?, removed_at = NULL, invite_sent_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [input.organisationId, fullName, role, inviteToken, input.invitedByUserId, departmentId, existingRows[0].id],
+    )
+    : await pool.execute<mysql.ResultSetHeader>(
+      `INSERT INTO users (
       organisation_id,
       email,
       password_hash,
@@ -1520,12 +1537,13 @@ export async function createInvite(input: {
        department_id,
        invite_sent_at
     ) VALUES (?, ?, NULL, ?, ?, 'pending_invite', ?, ?, ?, CURRENT_TIMESTAMP)`,
-    [input.organisationId, email, fullName, role, inviteToken, input.invitedByUserId, departmentId],
-  );
+      [input.organisationId, email, fullName, role, inviteToken, input.invitedByUserId, departmentId],
+    );
+  const invitedUserId = existingRows[0] ? Number(existingRows[0].id) : result[0].insertId;
 
   return {
     invitedUser: {
-      id: result.insertId,
+      id: invitedUserId,
       organisationId: input.organisationId,
       email,
       fullName,
@@ -1535,6 +1553,7 @@ export async function createInvite(input: {
       inviteToken,
       invitedByUserId: input.invitedByUserId,
       departmentId,
+      removedAt: null,
     },
     organisationName: String(organisation.name),
     inviteLink: buildInviteLink(inviteToken, email),
@@ -1543,7 +1562,7 @@ export async function createInvite(input: {
 
 export async function getPendingInviteForResend(user: AuthenticatedUser, userId: number) {
   const invitedUser = await findUserById(user.organisationId, userId);
-  if (!invitedUser || invitedUser.status !== 'pending_invite' || !invitedUser.inviteToken) {
+  if (!invitedUser || invitedUser.removedAt || invitedUser.status !== 'pending_invite' || !invitedUser.inviteToken) {
     return null;
   }
 
@@ -1616,6 +1635,7 @@ export async function listTeamMembers(user: AuthenticatedUser): Promise<TeamMemb
     ]);
     const departmentNames = new Map(departments.map((department) => [department.id, department.name]));
     return users
+      .filter((member) => !member.removedAt)
       .map((member) => ({
         id: member.id,
         organisationId: member.organisationId,
@@ -1635,7 +1655,7 @@ export async function listTeamMembers(user: AuthenticatedUser): Promise<TeamMemb
             d.name AS department_name
      FROM users u
      LEFT JOIN departments d ON d.id = u.department_id AND d.organisation_id = u.organisation_id
-     WHERE u.organisation_id = ?
+     WHERE u.organisation_id = ? AND u.removed_at IS NULL
      ORDER BY u.full_name IS NULL, u.full_name ASC, u.email ASC`,
     [user.organisationId],
   );
@@ -1662,7 +1682,7 @@ export async function updateTeamMemberDepartment(user: AuthenticatedUser, userId
     }
     const users = await listS3UsersForOrganisation(user.organisationId);
     const member = users.find((candidate) => candidate.id === userId);
-    if (!member) {
+    if (!member || member.removedAt) {
       throw notFoundError('Team member not found.');
     }
     await putReceiptJsonObject(buildUserKey(member.email), buildStoredUser({
@@ -1682,12 +1702,77 @@ export async function updateTeamMemberDepartment(user: AuthenticatedUser, userId
     }
   }
   const [result] = await pool.execute<mysql.ResultSetHeader>(
-    'UPDATE users SET department_id = ? WHERE id = ? AND organisation_id = ?',
+    'UPDATE users SET department_id = ? WHERE id = ? AND organisation_id = ? AND removed_at IS NULL',
     [departmentId, userId, user.organisationId],
   );
   if (!result.affectedRows) {
     throw notFoundError('Team member not found.');
   }
+}
+
+export async function removeTeamMember(user: AuthenticatedUser, userId: number) {
+  if (userId === user.id) {
+    throw validationError('You cannot remove the account you are currently signed in with.');
+  }
+
+  const member = await findUserById(user.organisationId, userId);
+  if (!member || member.removedAt) {
+    throw notFoundError('Team member not found.');
+  }
+  if (member.invitedByUserId === null) {
+    throw forbiddenError('The workspace owner cannot be removed from Team members.');
+  }
+
+  const removedAt = new Date().toISOString();
+  if (!pool) {
+    const exceptions = await listCompanyCardEmployeeExceptions(user.organisationId);
+    await Promise.all(exceptions
+      .filter((exception) => exception.employeeUserId === member.id)
+      .map((exception) => deleteReceiptObject(buildCompanyCardExceptionKey(exception))));
+    await putReceiptJsonObject(buildUserKey(member.email), buildStoredUser({
+      id: member.id,
+      organisationId: member.organisationId,
+      email: member.email,
+      passwordHash: null,
+      fullName: member.fullName,
+      role: member.role,
+      status: member.status,
+      inviteToken: null,
+      invitedByUserId: member.invitedByUserId,
+      departmentId: null,
+      createdAt: member.createdAt ?? undefined,
+      emailConfirmationGraceStartedAt: member.emailConfirmationGraceStartedAt ?? null,
+      removedAt,
+    }));
+    return { memberId: member.id, email: member.email, removedAt };
+  }
+
+  await ensureTeamSchema();
+  await ensureCompanyCardSchema();
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute(
+      'DELETE FROM company_card_employee_exceptions WHERE organisation_id = ? AND employee_user_id = ?',
+      [user.organisationId, member.id],
+    );
+    const [result] = await connection.execute<mysql.ResultSetHeader>(
+      `UPDATE users
+       SET password_hash = NULL, invite_token = NULL, department_id = NULL, removed_at = UTC_TIMESTAMP()
+       WHERE id = ? AND organisation_id = ? AND removed_at IS NULL`,
+      [member.id, user.organisationId],
+    );
+    if (!result.affectedRows) {
+      throw notFoundError('Team member not found.');
+    }
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+  return { memberId: member.id, email: member.email, removedAt };
 }
 
 export async function isOrganisationOwner(user: AuthenticatedUser) {
@@ -1773,6 +1858,7 @@ export async function findUserByEmail(emailInput: string): Promise<UserRecord | 
     }
   }
 
+  await ensureTeamSchema();
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
     `SELECT
       id,
@@ -1784,7 +1870,8 @@ export async function findUserByEmail(emailInput: string): Promise<UserRecord | 
       status,
       invite_token,
       invited_by_user_id,
-      created_at
+      created_at,
+      removed_at
     FROM users
     WHERE email = ? LIMIT 1`,
     [email],
@@ -1805,6 +1892,7 @@ export async function findUserByEmail(emailInput: string): Promise<UserRecord | 
     inviteToken: row.invite_token ? String(row.invite_token) : null,
     invitedByUserId: row.invited_by_user_id === null ? null : Number(row.invited_by_user_id),
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+    removedAt: row.removed_at ? new Date(row.removed_at).toISOString() : null,
   };
 }
 
@@ -2037,7 +2125,7 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
   if (!pool) {
     const organisation = await getS3Organisation(organisationId);
     const billingPlan = normalizePlanId(organisation.billingPlan);
-    const users = await listS3UsersForOrganisation(organisationId);
+    const users = (await listS3UsersForOrganisation(organisationId)).filter((user) => !user.removedAt);
     const billingPeriodStartedAt = organisation.billingPeriodStartedAt ?? defaultUsagePeriodStart();
     const monthlyDocumentUsage = await countS3DocumentsForBillingPeriod(organisationId, billingPeriodStartedAt);
 
@@ -2061,6 +2149,7 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
   }
 
   await ensureBillingCycleSchema();
+  await ensureTeamSchema();
 
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
     `SELECT
@@ -2083,7 +2172,7 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
       (
         SELECT COUNT(*)
         FROM users u
-        WHERE u.organisation_id = o.id
+        WHERE u.organisation_id = o.id AND u.removed_at IS NULL
       ) AS current_user_count
      FROM organisations o
      WHERE o.id = ?
@@ -2904,9 +2993,10 @@ export async function findUserById(organisationId: number, userId: number): Prom
     return user ? toUserRecord(user) : null;
   }
 
+  await ensureTeamSchema();
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
     `SELECT id, organisation_id, email, password_hash, full_name, user_role AS role, status,
-            invite_token, invited_by_user_id, created_at
+            invite_token, invited_by_user_id, created_at, removed_at
      FROM users
      WHERE id = ? AND organisation_id = ?
      LIMIT 1`,
@@ -2927,6 +3017,7 @@ export async function findUserById(organisationId: number, userId: number): Prom
     inviteToken: row.invite_token ? String(row.invite_token) : null,
     invitedByUserId: row.invited_by_user_id === null ? null : Number(row.invited_by_user_id),
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+    removedAt: row.removed_at ? new Date(row.removed_at).toISOString() : null,
   };
 }
 
@@ -4302,6 +4393,7 @@ function toUserRecord(user: StoredUser): UserRecord {
     departmentId: user.departmentId ?? null,
     createdAt: user.createdAt,
     emailConfirmationGraceStartedAt: user.emailConfirmationGraceStartedAt ?? null,
+    removedAt: user.removedAt ?? null,
   };
 }
 

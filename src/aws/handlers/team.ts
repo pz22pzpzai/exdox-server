@@ -1,7 +1,7 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
-import { createDepartment, listDepartments, listTeamMembers, updateTeamMemberDepartment } from '../shared/db.js';
+import { createDepartment, listDepartments, listTeamMembers, removeTeamMember, updateTeamMemberDepartment } from '../shared/db.js';
 import { sanitizeText } from '../shared/helpers.js';
 import { jsonResponse } from '../shared/http.js';
 
@@ -42,6 +42,21 @@ export async function assignDepartmentHandler(event: APIGatewayProxyEventV2) {
     }
     await updateTeamMemberDepartment(user, userId, departmentId);
     return jsonResponse(200, { success: true });
+  } catch (error) {
+    return teamErrorResponse(error);
+  }
+}
+
+export async function removeMemberHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const user = requireAuthenticatedUser(event);
+    requireAdminUser(user);
+    const userId = Number(event.pathParameters?.userId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return jsonResponse(400, { success: false, error: 'invalid_team_member', message: 'Choose a valid team member.' });
+    }
+    const removed = await removeTeamMember(user, userId);
+    return jsonResponse(200, { success: true, removed });
   } catch (error) {
     return teamErrorResponse(error);
   }
