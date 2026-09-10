@@ -11,9 +11,10 @@ test('Xero integration exposes explicit admin connection, settings, reference, a
   }
   assert.match(handler, /requireAdminUser\(user\)/);
   assert.match(handler, /requirePaidXeroAccess/);
-  assert.match(handler, /getOrganisationBillingStatus/);
-  assert.match(handler, /billingStatus !== 'active'/);
+  assert.match(handler, /getAccountingIntegrationAccess/);
+  assert.match(handler, /if \(!access\.available\)/);
   assert.match(template, /ConnectXeroFunction:[\s\S]*?s3:GetObject[\s\S]*?ReceiptBucketName\}\/organisations\/\*/);
+  assert.match(template, /ReceiptBucketName\}\/billing-addons\/\*/);
 });
 
 test('Xero tokens and publication records are protected and duplicate-safe', () => {

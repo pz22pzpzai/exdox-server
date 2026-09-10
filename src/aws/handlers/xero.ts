@@ -4,10 +4,11 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import jwt from 'jsonwebtoken';
 
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
+import { ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE, getAccountingIntegrationAccess } from '../shared/accountingIntegrationUnlock.js';
 import { awsEnv } from '../shared/env.js';
 import { jsonResponse } from '../shared/http.js';
 import { deleteReceiptObject, getReceiptJsonObject, getReceiptObjectBuffer, putReceiptJsonObject } from '../shared/s3.js';
-import { getOrganisationBillingStatus, getOrganisationSettings, getReceiptById, listExpenseClaims, listReceiptsByClaim, updateClaimStatus, updateReceiptById } from '../shared/db.js';
+import { getOrganisationSettings, getReceiptById, listExpenseClaims, listReceiptsByClaim, updateClaimStatus, updateReceiptById } from '../shared/db.js';
 import { getSalesDocumentPdf, getSalesWorkspace, markSalesDocumentPublishedToXero, saveSalesCustomer } from '../shared/salesWorkspaceStore.js';
 
 const XERO_AUTHORIZE_URL = 'https://login.xero.com/identity/connect/authorize';
@@ -84,14 +85,14 @@ function redirectToSettings(result: 'connected' | 'failed' | 'locked') {
 }
 
 async function requirePaidXeroAccess(organisationId: number) {
-  const billingStatus = await getOrganisationBillingStatus(organisationId);
-  if (billingStatus !== 'active') {
-    const error = new Error('Xero integration unlocks after the trial ends and a paid plan is active.') as Error & { statusCode?: number; code?: string };
+  const access = await getAccountingIntegrationAccess(organisationId);
+  if (!access.available) {
+    const error = new Error(access.trialUnlockEligible ? 'Accounting integrations are locked during the free trial. The workspace owner can unlock them now with a one-off £5 payment.' : 'Xero integration requires an active paid plan.') as Error & { statusCode?: number; code?: string };
     error.statusCode = 403;
     error.code = 'xero_plan_required';
     throw error;
   }
-  return billingStatus;
+  return access;
 }
 
 async function loadConnection(organisationId: number) {
@@ -200,9 +201,8 @@ export async function statusHandler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
-    const [connection, billingStatus] = await Promise.all([loadConnection(user.organisationId), getOrganisationBillingStatus(user.organisationId)]);
-    const available = billingStatus === 'active';
-    return jsonResponse(200, { success: true, configured: configured(), available, billingStatus, lockedReason: available ? null : 'Xero integration unlocks after the trial ends and a paid plan is active.', connected: Boolean(connection), tenantId: connection?.tenantId ?? null, tenantName: connection?.tenantName ?? null, connectedAt: connection?.connectedAt ?? null, availableTenants: (connection?.availableTenants ?? []).map((tenant) => ({ tenantId: tenant.tenantId, tenantName: tenant.tenantName })) });
+    const [connection, access] = await Promise.all([loadConnection(user.organisationId), getAccountingIntegrationAccess(user.organisationId)]);
+    return jsonResponse(200, { success: true, configured: configured(), ...access, trialUnlockPricePence: ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE, lockedReason: access.available ? null : access.trialUnlockEligible ? 'Linking Xero or any other accounting software is locked during the free trial. Pay a one-off £5 to unlock it now; that £5 is credited against the first subscription payment.' : 'Xero integration requires an active paid plan.', connected: Boolean(connection), tenantId: connection?.tenantId ?? null, tenantName: connection?.tenantName ?? null, connectedAt: connection?.connectedAt ?? null, availableTenants: (connection?.availableTenants ?? []).map((tenant) => ({ tenantId: tenant.tenantId, tenantName: tenant.tenantName })) });
   } catch (error) { return xeroError(error, 'Could not load the Xero connection.'); }
 }
 

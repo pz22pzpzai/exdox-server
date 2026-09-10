@@ -2115,15 +2115,22 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
 }
 
 export async function getOrganisationBillingStatus(organisationId: number): Promise<BillingStatus> {
+  return (await getOrganisationBillingAccessState(organisationId)).billingStatus;
+}
+
+export async function getOrganisationBillingAccessState(organisationId: number) {
   if (!pool) {
     const organisation = await getS3Organisation(organisationId);
     const billingPlan = normalizePlanId(organisation.billingPlan);
-    return normalizeBillingStatus(organisation.billingStatus, billingPlan);
+    return {
+      billingStatus: normalizeBillingStatus(organisation.billingStatus, billingPlan),
+      stripeSubscriptionId: organisation.stripeSubscriptionId ?? null,
+    };
   }
 
   await ensureBillingCycleSchema();
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
-    `SELECT billing_plan, billing_status
+    `SELECT billing_plan, billing_status, stripe_subscription_id
      FROM organisations
      WHERE id = ?
      LIMIT 1`,
@@ -2134,7 +2141,10 @@ export async function getOrganisationBillingStatus(organisationId: number): Prom
     throw notFoundError('Organisation not found.');
   }
   const billingPlan = normalizePlanId(row.billing_plan);
-  return normalizeBillingStatus(row.billing_status, billingPlan);
+  return {
+    billingStatus: normalizeBillingStatus(row.billing_status, billingPlan),
+    stripeSubscriptionId: row.stripe_subscription_id ? String(row.stripe_subscription_id) : null,
+  };
 }
 
 export async function updateOrganisationSettings(input: {

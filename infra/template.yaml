@@ -671,6 +671,36 @@ Resources:
             Path: /billing/checkout-session
             Method: POST
 
+  CreateAccountingIntegrationUnlockCheckoutFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/createAccountingIntegrationUnlockCheckout.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        CreateAccountingIntegrationUnlockCheckoutRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /billing/accounting-integration-unlock/checkout-session
+            Method: POST
+
+  ConfirmAccountingIntegrationUnlockFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/confirmAccountingIntegrationUnlock.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        ConfirmAccountingIntegrationUnlockRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /billing/accounting-integration-unlock/confirm
+            Method: POST
+
   CreateBillingPortalSessionFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -729,6 +759,9 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: dist/aws/handlers/stripeWebhook.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
       Events:
         StripeWebhookRoute:
           Type: Api
@@ -970,7 +1003,9 @@ Resources:
             - Effect: Allow
               Action:
                 - s3:GetObject
-              Resource: !Sub 'arn:${AWS::Partition}:s3:::${ReceiptBucketName}/organisations/*'
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:s3:::${ReceiptBucketName}/organisations/*'
+                - !Sub 'arn:${AWS::Partition}:s3:::${ReceiptBucketName}/billing-addons/*'
       Events:
         ConnectXeroRoute:
           Type: Api

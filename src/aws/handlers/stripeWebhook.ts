@@ -1,6 +1,7 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import Stripe from 'stripe';
 
+import { fulfillAccountingIntegrationUnlock, isAccountingIntegrationUnlockSession, removeUnusedAccountingIntegrationCredit } from '../shared/accountingIntegrationUnlock.js';
 import { isStripeConfigured } from '../shared/billing.js';
 import { awsEnv } from '../shared/env.js';
 import { jsonResponse } from '../shared/http.js';
@@ -36,6 +37,12 @@ export async function handler(event: APIGatewayProxyEventV2) {
       switch (stripeEvent.type) {
         case 'checkout.session.completed': {
           const session = stripeEvent.data.object as Stripe.Checkout.Session;
+          if (isAccountingIntegrationUnlockSession(session)) {
+            if (session.payment_status === 'paid') {
+              await fulfillAccountingIntegrationUnlock(session, stripe);
+            }
+            break;
+          }
           const subscriptionId = typeof session.subscription === 'string' ? session.subscription : session.subscription?.id;
           if (subscriptionId) {
             const subscription = await stripe.subscriptions.retrieve(subscriptionId);
@@ -43,10 +50,22 @@ export async function handler(event: APIGatewayProxyEventV2) {
           }
           break;
         }
+        case 'checkout.session.async_payment_succeeded': {
+          const session = stripeEvent.data.object as Stripe.Checkout.Session;
+          if (isAccountingIntegrationUnlockSession(session)) {
+            await fulfillAccountingIntegrationUnlock(session, stripe);
+          }
+          break;
+        }
         case 'customer.subscription.created':
-        case 'customer.subscription.updated':
+        case 'customer.subscription.updated': {
+          const subscription = stripeEvent.data.object as Stripe.Subscription;
+          await syncStripeSubscription(subscription);
+          break;
+        }
         case 'customer.subscription.deleted': {
           const subscription = stripeEvent.data.object as Stripe.Subscription;
+          await removeUnusedAccountingIntegrationCredit(subscription, stripe);
           await syncStripeSubscription(subscription);
           break;
         }
@@ -69,11 +88,14 @@ export async function handler(event: APIGatewayProxyEventV2) {
         message,
       });
 
-      return jsonResponse(200, {
-        success: true,
-        received: true,
-        deferred: true,
-      });
+      const session = stripeEvent.type === 'checkout.session.completed' || stripeEvent.type === 'checkout.session.async_payment_succeeded'
+        ? stripeEvent.data.object as Stripe.Checkout.Session
+        : null;
+      if (session && isAccountingIntegrationUnlockSession(session)) {
+        return jsonResponse(500, { success: false, error: 'accounting_integration_fulfillment_failed', message: 'Stripe will retry the accounting integration payment fulfilment.' });
+      }
+
+      return jsonResponse(200, { success: true, received: true, deferred: true });
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not process Stripe webhook.';
