@@ -7,7 +7,7 @@ import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
 import { awsEnv } from '../shared/env.js';
 import { jsonResponse } from '../shared/http.js';
 import { deleteReceiptObject, getReceiptJsonObject, getReceiptObjectBuffer, putReceiptJsonObject } from '../shared/s3.js';
-import { getOrganisationBillingSummary, getOrganisationSettings, getReceiptById, listExpenseClaims, listReceiptsByClaim, updateClaimStatus, updateReceiptById } from '../shared/db.js';
+import { getOrganisationBillingStatus, getOrganisationSettings, getReceiptById, listExpenseClaims, listReceiptsByClaim, updateClaimStatus, updateReceiptById } from '../shared/db.js';
 import { getSalesDocumentPdf, getSalesWorkspace, markSalesDocumentPublishedToXero, saveSalesCustomer } from '../shared/salesWorkspaceStore.js';
 
 const XERO_AUTHORIZE_URL = 'https://login.xero.com/identity/connect/authorize';
@@ -84,14 +84,14 @@ function redirectToSettings(result: 'connected' | 'failed' | 'locked') {
 }
 
 async function requirePaidXeroAccess(organisationId: number) {
-  const billing = await getOrganisationBillingSummary(organisationId);
-  if (billing.status !== 'active') {
+  const billingStatus = await getOrganisationBillingStatus(organisationId);
+  if (billingStatus !== 'active') {
     const error = new Error('Xero integration unlocks after the trial ends and a paid plan is active.') as Error & { statusCode?: number; code?: string };
     error.statusCode = 403;
     error.code = 'xero_plan_required';
     throw error;
   }
-  return billing;
+  return billingStatus;
 }
 
 async function loadConnection(organisationId: number) {
@@ -200,9 +200,9 @@ export async function statusHandler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
-    const [connection, billing] = await Promise.all([loadConnection(user.organisationId), getOrganisationBillingSummary(user.organisationId)]);
-    const available = billing.status === 'active';
-    return jsonResponse(200, { success: true, configured: configured(), available, billingStatus: billing.status, lockedReason: available ? null : 'Xero integration unlocks after the trial ends and a paid plan is active.', connected: Boolean(connection), tenantId: connection?.tenantId ?? null, tenantName: connection?.tenantName ?? null, connectedAt: connection?.connectedAt ?? null, availableTenants: (connection?.availableTenants ?? []).map((tenant) => ({ tenantId: tenant.tenantId, tenantName: tenant.tenantName })) });
+    const [connection, billingStatus] = await Promise.all([loadConnection(user.organisationId), getOrganisationBillingStatus(user.organisationId)]);
+    const available = billingStatus === 'active';
+    return jsonResponse(200, { success: true, configured: configured(), available, billingStatus, lockedReason: available ? null : 'Xero integration unlocks after the trial ends and a paid plan is active.', connected: Boolean(connection), tenantId: connection?.tenantId ?? null, tenantName: connection?.tenantName ?? null, connectedAt: connection?.connectedAt ?? null, availableTenants: (connection?.availableTenants ?? []).map((tenant) => ({ tenantId: tenant.tenantId, tenantName: tenant.tenantName })) });
   } catch (error) { return xeroError(error, 'Could not load the Xero connection.'); }
 }
 

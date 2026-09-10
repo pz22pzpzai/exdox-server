@@ -11,7 +11,8 @@ test('Xero integration exposes explicit admin connection, settings, reference, a
   }
   assert.match(handler, /requireAdminUser\(user\)/);
   assert.match(handler, /requirePaidXeroAccess/);
-  assert.match(handler, /billing\.status !== 'active'/);
+  assert.match(handler, /getOrganisationBillingStatus/);
+  assert.match(handler, /billingStatus !== 'active'/);
   assert.match(template, /ConnectXeroFunction:[\s\S]*?s3:GetObject[\s\S]*?ReceiptBucketName\}\/organisations\/\*/);
 });
 

@@ -2114,6 +2114,29 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
   };
 }
 
+export async function getOrganisationBillingStatus(organisationId: number): Promise<BillingStatus> {
+  if (!pool) {
+    const organisation = await getS3Organisation(organisationId);
+    const billingPlan = normalizePlanId(organisation.billingPlan);
+    return normalizeBillingStatus(organisation.billingStatus, billingPlan);
+  }
+
+  await ensureBillingCycleSchema();
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT billing_plan, billing_status
+     FROM organisations
+     WHERE id = ?
+     LIMIT 1`,
+    [organisationId],
+  );
+  const row = rows[0];
+  if (!row) {
+    throw notFoundError('Organisation not found.');
+  }
+  const billingPlan = normalizePlanId(row.billing_plan);
+  return normalizeBillingStatus(row.billing_status, billingPlan);
+}
+
 export async function updateOrganisationSettings(input: {
   organisationId: number;
   baseCurrency?: string;
