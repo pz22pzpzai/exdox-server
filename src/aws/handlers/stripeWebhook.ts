@@ -4,6 +4,7 @@ import Stripe from 'stripe';
 import { fulfillAccountingIntegrationUnlock, isAccountingIntegrationUnlockSession, removeUnusedAccountingIntegrationCredit } from '../shared/accountingIntegrationUnlock.js';
 import { isStripeConfigured } from '../shared/billing.js';
 import { awsEnv } from '../shared/env.js';
+import { sendFreeTrialStartedNotification } from '../shared/freeTrialNotification.js';
 import { jsonResponse } from '../shared/http.js';
 import { syncStripeSubscription } from '../shared/stripeSubscription.js';
 
@@ -57,7 +58,12 @@ export async function handler(event: APIGatewayProxyEventV2) {
           }
           break;
         }
-        case 'customer.subscription.created':
+        case 'customer.subscription.created': {
+          const subscription = stripeEvent.data.object as Stripe.Subscription;
+          await syncStripeSubscription(subscription);
+          await sendFreeTrialStartedNotification(subscription, stripe);
+          break;
+        }
         case 'customer.subscription.updated': {
           const subscription = stripeEvent.data.object as Stripe.Subscription;
           await syncStripeSubscription(subscription);
@@ -93,6 +99,12 @@ export async function handler(event: APIGatewayProxyEventV2) {
         : null;
       if (session && isAccountingIntegrationUnlockSession(session)) {
         return jsonResponse(500, { success: false, error: 'accounting_integration_fulfillment_failed', message: 'Stripe will retry the accounting integration payment fulfilment.' });
+      }
+      const trialSubscription = stripeEvent.type === 'customer.subscription.created'
+        ? stripeEvent.data.object as Stripe.Subscription
+        : null;
+      if (trialSubscription?.status === 'trialing') {
+        return jsonResponse(500, { success: false, error: 'free_trial_notification_failed', message: 'Stripe will retry the free-trial notification.' });
       }
 
       return jsonResponse(200, { success: true, received: true, deferred: true });
