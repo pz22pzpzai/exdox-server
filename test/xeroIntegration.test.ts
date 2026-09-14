@@ -42,7 +42,9 @@ test('Xero tokens and publication records are protected and duplicate-safe', () 
   assert.match(handler, /alreadyPublished: true/);
   assert.match(handler, /BankTransactions/);
   assert.match(handler, /categoryAccountMappings/);
-  assert.match(handler, /taxTypeMappings/);
+  assert.match(handler, /purchaseTaxTypeMappings/);
+  assert.match(handler, /salesTaxTypeMappings/);
+  assert.match(handler, /const taxTypeMappings = isCost \? settings\.purchaseTaxTypeMappings : settings\.salesTaxTypeMappings/);
   assert.match(handler, /Repair the visible Exdox state/);
 });
 

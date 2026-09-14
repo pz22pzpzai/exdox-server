@@ -49,11 +49,14 @@ type XeroIntegrationSettings = {
   trackingCategoryId: string | null;
   trackingOptionId: string | null;
   categoryAccountMappings: Record<string, string>;
-  taxTypeMappings: Record<string, string>;
+  purchaseTaxTypeMappings: Record<string, string>;
+  salesTaxTypeMappings: Record<string, string>;
+  /** Retained only so older stored settings can be read without failing. */
+  taxTypeMappings?: Record<string, string>;
 };
 type XeroPublication = { sourceType: 'receipt' | 'sales_document' | 'claim'; sourceId: string; xeroType: string; xeroId: string; xeroNumber: string | null; publishedAt: string };
 
-const DEFAULT_XERO_SETTINGS: XeroIntegrationSettings = { purchaseAccountCode: null, salesAccountCode: null, purchaseTaxType: null, salesTaxType: null, purchaseStatus: 'DRAFT', salesStatus: 'DRAFT', publishAttachments: true, companyCardBankAccountCode: null, trackingCategoryId: null, trackingOptionId: null, categoryAccountMappings: {}, taxTypeMappings: {} };
+const DEFAULT_XERO_SETTINGS: XeroIntegrationSettings = { purchaseAccountCode: null, salesAccountCode: null, purchaseTaxType: null, salesTaxType: null, purchaseStatus: 'DRAFT', salesStatus: 'DRAFT', publishAttachments: true, companyCardBankAccountCode: null, trackingCategoryId: null, trackingOptionId: null, categoryAccountMappings: {}, purchaseTaxTypeMappings: {}, salesTaxTypeMappings: {} };
 
 function connectionKey(organisationId: number) { return `xero-connections/org-${organisationId}.json`; }
 function settingsKey(organisationId: number) { return `xero-connections/org-${organisationId}-settings.json`; }
@@ -122,7 +125,16 @@ async function accessTokenFor(organisationId: number) {
 }
 
 async function loadSettings(organisationId: number) {
-  try { return { ...DEFAULT_XERO_SETTINGS, ...(await getReceiptJsonObject<Partial<XeroIntegrationSettings>>(settingsKey(organisationId))) }; }
+  try {
+    const stored = await getReceiptJsonObject<Partial<XeroIntegrationSettings>>(settingsKey(organisationId));
+    return {
+      ...DEFAULT_XERO_SETTINGS,
+      ...stored,
+      categoryAccountMappings: stored.categoryAccountMappings ?? {},
+      purchaseTaxTypeMappings: stored.purchaseTaxTypeMappings ?? {},
+      salesTaxTypeMappings: stored.salesTaxTypeMappings ?? {},
+    };
+  }
   catch (error) {
     const status = (error as { $metadata?: { httpStatusCode?: number }; name?: string }).$metadata?.httpStatusCode;
     if (status === 404 || (error as { name?: string }).name === 'NoSuchKey') return { ...DEFAULT_XERO_SETTINGS };
@@ -371,7 +383,8 @@ export async function updateIntegrationSettingsHandler(event: APIGatewayProxyEve
       trackingCategoryId: typeof input.trackingCategoryId === 'string' && input.trackingCategoryId.trim() ? input.trackingCategoryId.trim() : null,
       trackingOptionId: typeof input.trackingOptionId === 'string' && input.trackingOptionId.trim() ? input.trackingOptionId.trim() : null,
       categoryAccountMappings: stringMap(input.categoryAccountMappings),
-      taxTypeMappings: stringMap(input.taxTypeMappings),
+      purchaseTaxTypeMappings: stringMap(input.purchaseTaxTypeMappings),
+      salesTaxTypeMappings: stringMap(input.salesTaxTypeMappings),
     };
     await putReceiptJsonObject(settingsKey(user.organisationId), settings);
     return jsonResponse(200, { success: true, settings });
@@ -426,7 +439,8 @@ export async function publishHandler(event: APIGatewayProxyEventV2) {
       if (!contactName) throw new Error(`Add a ${isCost ? 'supplier' : 'customer'} before publishing to Xero.`);
       const contact = await findOrCreateContact(user.organisationId, contactName);
       const net = receipt.netAmount ?? Math.max(0, Number(receipt.totalAmount ?? 0) - Number(receipt.vatAmount ?? 0));
-      const taxType = (receipt.taxRateApplied ? settings.taxTypeMappings[receipt.taxRateApplied] : null) || (isCost ? settings.purchaseTaxType : settings.salesTaxType);
+      const taxTypeMappings = isCost ? settings.purchaseTaxTypeMappings : settings.salesTaxTypeMappings;
+      const taxType = (receipt.taxRateApplied ? taxTypeMappings[receipt.taxRateApplied] : null) || (isCost ? settings.purchaseTaxType : settings.salesTaxType);
       const line = xeroLine(receipt.description || receipt.category || receipt.sourceFilename, net, accountCode, taxType, 1, settings);
       const sourceDocument = await getReceiptObjectBuffer(receipt.s3Key);
       if (isCost && receipt.paymentMethod === 'business_card' && settings.companyCardBankAccountCode) {
@@ -452,7 +466,7 @@ export async function publishHandler(event: APIGatewayProxyEventV2) {
       const customer = (await getSalesWorkspace(user)).customers.find((item) => item.id === document.customerId);
       const contact = await findOrCreateContact(user.organisationId, document.customerName, customer?.email);
       if (document.kind === 'credit_note') {
-        const response = await xeroPost<{ CreditNotes?: Array<{ CreditNoteID: string; CreditNoteNumber?: string }> }>(user.organisationId, 'CreditNotes', { CreditNotes: [{ Type: 'ACCRECCREDIT', Contact: { ContactID: contact.ContactID }, Date: safeDate(document.issueDate), CurrencyCode: document.currency, Reference: document.number, Status: settings.salesStatus, LineAmountTypes: 'Exclusive', LineItems: document.lineItems.map((line) => xeroLine(line.description, line.unitPrice, settings.salesAccountCode!, settings.taxTypeMappings[exdoxTaxKey(line.taxRate)] || settings.salesTaxType, line.quantity, settings)) }] });
+        const response = await xeroPost<{ CreditNotes?: Array<{ CreditNoteID: string; CreditNoteNumber?: string }> }>(user.organisationId, 'CreditNotes', { CreditNotes: [{ Type: 'ACCRECCREDIT', Contact: { ContactID: contact.ContactID }, Date: safeDate(document.issueDate), CurrencyCode: document.currency, Reference: document.number, Status: settings.salesStatus, LineAmountTypes: 'Exclusive', LineItems: document.lineItems.map((line) => xeroLine(line.description, line.unitPrice, settings.salesAccountCode!, settings.salesTaxTypeMappings[exdoxTaxKey(line.taxRate)] || settings.salesTaxType, line.quantity, settings)) }] });
         const created = response.CreditNotes?.[0];
         if (!created?.CreditNoteID) throw new Error('Xero did not return the credit note it created.');
         let warning: string | null = null;
@@ -466,7 +480,7 @@ export async function publishHandler(event: APIGatewayProxyEventV2) {
         xeroType = 'CreditNote';
       } else {
         const pdf = await getSalesDocumentPdf(user, document.id);
-        result = await publishInvoice({ Type: 'ACCREC', Contact: { ContactID: contact.ContactID }, Date: safeDate(document.issueDate), DueDate: safeDate(document.dueDate), CurrencyCode: document.currency, InvoiceNumber: document.number, Reference: `Exdox ${document.id}`, Status: settings.salesStatus, LineAmountTypes: 'Exclusive', LineItems: document.lineItems.map((line) => xeroLine(line.description, line.unitPrice, settings.salesAccountCode!, settings.taxTypeMappings[exdoxTaxKey(line.taxRate)] || settings.salesTaxType, line.quantity, settings)) }, { filename: `${document.number}.pdf`, contentType: 'application/pdf', body: await getReceiptObjectBuffer(pdf.pdfKey) });
+        result = await publishInvoice({ Type: 'ACCREC', Contact: { ContactID: contact.ContactID }, Date: safeDate(document.issueDate), DueDate: safeDate(document.dueDate), CurrencyCode: document.currency, InvoiceNumber: document.number, Reference: `Exdox ${document.id}`, Status: settings.salesStatus, LineAmountTypes: 'Exclusive', LineItems: document.lineItems.map((line) => xeroLine(line.description, line.unitPrice, settings.salesAccountCode!, settings.salesTaxTypeMappings[exdoxTaxKey(line.taxRate)] || settings.salesTaxType, line.quantity, settings)) }, { filename: `${document.number}.pdf`, contentType: 'application/pdf', body: await getReceiptObjectBuffer(pdf.pdfKey) });
       }
       await markSalesDocumentPublishedToXero(user, document.id, result.xeroId, result.xeroNumber);
     } else {
@@ -477,7 +491,7 @@ export async function publishHandler(event: APIGatewayProxyEventV2) {
       if (!settings.purchaseAccountCode) throw new Error('Choose a default Xero cost account in Integrations first.');
       const receipts = await listReceiptsByClaim(user, claimId);
       const contact = await findOrCreateContact(user.organisationId, claim.claimantName || claim.claimantEmail || `Exdox claimant ${claim.createdByUserId}`, claim.claimantEmail);
-      const lines = receipts.length ? receipts.map((receipt) => xeroLine(receipt.description || receipt.vendorName || receipt.sourceFilename, receipt.netAmount ?? Math.max(0, Number(receipt.totalAmount ?? 0) - Number(receipt.vatAmount ?? 0)), (receipt.category ? settings.categoryAccountMappings[receipt.category] : null) || settings.purchaseAccountCode!, (receipt.taxRateApplied ? settings.taxTypeMappings[receipt.taxRateApplied] : null) || settings.purchaseTaxType, 1, settings)) : [xeroLine(claim.description || claim.name, claim.totalAmount, settings.purchaseAccountCode, settings.purchaseTaxType, 1, settings)];
+      const lines = receipts.length ? receipts.map((receipt) => xeroLine(receipt.description || receipt.vendorName || receipt.sourceFilename, receipt.netAmount ?? Math.max(0, Number(receipt.totalAmount ?? 0) - Number(receipt.vatAmount ?? 0)), (receipt.category ? settings.categoryAccountMappings[receipt.category] : null) || settings.purchaseAccountCode!, (receipt.taxRateApplied ? settings.purchaseTaxTypeMappings[receipt.taxRateApplied] : null) || settings.purchaseTaxType, 1, settings)) : [xeroLine(claim.description || claim.name, claim.totalAmount, settings.purchaseAccountCode, settings.purchaseTaxType, 1, settings)];
       result = await publishInvoice({ Type: 'ACCPAY', Contact: { ContactID: contact.ContactID }, Date: safeDate(claim.createdAt), DueDate: safeDate(claim.createdAt), CurrencyCode: claim.currency, Reference: `Exdox claim ${claim.id}`, Status: settings.purchaseStatus, LineAmountTypes: 'Exclusive', LineItems: lines }, receipts[0] ? { filename: receipts[0].sourceFilename, contentType: receipts[0].sourceMimeType, body: await getReceiptObjectBuffer(receipts[0].s3Key) } : undefined);
       await updateClaimStatus(user, claim.id, 'published');
     }
