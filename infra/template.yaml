@@ -1027,6 +1027,16 @@ Resources:
               Resource:
                 - !Sub 'arn:${AWS::Partition}:s3:::${ReceiptBucketName}/organisations/*'
                 - !Sub 'arn:${AWS::Partition}:s3:::${ReceiptBucketName}/billing-addons/*'
+            - Effect: Allow
+              Action:
+                - s3:ListBucket
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:s3:::${ReceiptBucketName}'
+              Condition:
+                StringLike:
+                  s3:prefix:
+                    - 'users/*'
+                    - 'receipt-records/org-*'
       Events:
         ConnectXeroRoute:
           Type: Api
