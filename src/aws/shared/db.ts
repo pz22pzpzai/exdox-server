@@ -1179,7 +1179,7 @@ export async function createUser(input: {
       inviteToken: confirmationToken,
       invitedByUserId: null,
     });
-    await putReceiptJsonObject(buildUserKey(email), user);
+    await putS3User(user);
     return toUserRecord(user);
   }
 
@@ -1331,7 +1331,7 @@ export async function createDomainEmployeeUser(input: {
       inviteToken: confirmationToken,
       invitedByUserId: null,
     });
-    await putReceiptJsonObject(buildUserKey(email), user);
+    await putS3User(user);
     return toUserRecord(user);
   }
 
@@ -1402,7 +1402,7 @@ export async function confirmRegisteredUserEmail(input: {
       createdAt: existing.createdAt ?? undefined,
       emailConfirmationGraceStartedAt: null,
     });
-    await putReceiptJsonObject(buildUserKey(email), activated);
+    await putS3User(activated);
     return {
       user: toAuthenticatedUser(activated),
       alreadyConfirmed: false,
@@ -1491,7 +1491,7 @@ export async function createInvite(input: {
       departmentId,
       removedAt: null,
     });
-    await putReceiptJsonObject(buildUserKey(email), user);
+    await putS3User(user);
     return {
       invitedUser: toUserRecord(user),
       organisationName: organisation.name,
@@ -1685,7 +1685,7 @@ export async function updateTeamMemberDepartment(user: AuthenticatedUser, userId
     if (!member || member.removedAt) {
       throw notFoundError('Team member not found.');
     }
-    await putReceiptJsonObject(buildUserKey(member.email), buildStoredUser({
+    await putS3User(buildStoredUser({
       ...member,
       departmentId,
     }));
@@ -1729,7 +1729,7 @@ export async function removeTeamMember(user: AuthenticatedUser, userId: number) 
     await Promise.all(exceptions
       .filter((exception) => exception.employeeUserId === member.id)
       .map((exception) => deleteReceiptObject(buildCompanyCardExceptionKey(exception))));
-    await putReceiptJsonObject(buildUserKey(member.email), buildStoredUser({
+    await putS3User(buildStoredUser({
       id: member.id,
       organisationId: member.organisationId,
       email: member.email,
@@ -1814,7 +1814,7 @@ export async function activateInvitedUser(input: {
       inviteToken: null,
       invitedByUserId: existing.invitedByUserId,
     });
-    await putReceiptJsonObject(buildUserKey(email), activated);
+    await putS3User(activated);
     return toAuthenticatedUser(activated);
   }
 
@@ -1918,7 +1918,7 @@ export async function rotateRegistrationConfirmationToken(emailInput: string): P
       createdAt: existing.createdAt ?? undefined,
       emailConfirmationGraceStartedAt: existing.emailConfirmationGraceStartedAt ?? null,
     });
-    await putReceiptJsonObject(buildUserKey(email), updated);
+    await putS3User(updated);
     return toUserRecord(updated);
   }
 
@@ -1963,7 +1963,7 @@ export async function ensureEmailConfirmationGraceStarted(emailInput: string): P
       createdAt: existing.createdAt ?? undefined,
       emailConfirmationGraceStartedAt: startedAt,
     });
-    await putReceiptJsonObject(buildUserKey(email), updated);
+    await putS3User(updated);
     return toUserRecord(updated);
   }
 
@@ -2000,7 +2000,7 @@ export async function updateUserPassword(input: {
       createdAt: existing.createdAt ?? undefined,
       emailConfirmationGraceStartedAt: existing.emailConfirmationGraceStartedAt ?? null,
     });
-    await putReceiptJsonObject(buildUserKey(email), updated);
+    await putS3User(updated);
     return toUserRecord(updated);
   }
 
@@ -2125,7 +2125,7 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
   if (!pool) {
     const organisation = await getS3Organisation(organisationId);
     const billingPlan = normalizePlanId(organisation.billingPlan);
-    const users = (await listS3UsersForOrganisation(organisationId)).filter((user) => !user.removedAt);
+    const currentUserCount = await countS3UsersForOrganisation(organisationId);
     const billingPeriodStartedAt = organisation.billingPeriodStartedAt ?? defaultUsagePeriodStart();
     const monthlyDocumentUsage = await countS3DocumentsForBillingPeriod(organisationId, billingPeriodStartedAt);
 
@@ -2141,7 +2141,7 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
       monthlyDocumentLimit: normalizeNullableNumber(organisation.monthlyDocumentLimit) ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
       monthlyDocumentUsage,
       includedUsers: normalizeNullableNumber(organisation.includedUsers) ?? defaultIncludedUsersForPlan(billingPlan),
-      currentUserCount: users.length,
+      currentUserCount,
       stripeCustomerId: organisation.stripeCustomerId ?? null,
       stripeSubscriptionId: organisation.stripeSubscriptionId ?? null,
       cancellationScheduledFor: organisation.cancellationScheduledFor ?? null,
@@ -3046,6 +3046,7 @@ export async function deleteOrganisationAccount(organisationId: number) {
     deleteReceiptPrefix(`receipts/org-${organisationId}/`),
     deleteReceiptPrefix(`expense-claims/org-${organisationId}/`),
     deleteReceiptPrefix(`supplier-rules/org-${organisationId}/`),
+    deleteReceiptPrefix(buildOrganisationUserPointerPrefix(organisationId)),
     ...organisationUserKeys.map((key) => deleteReceiptPrefix(key)),
     ...organisationDeletedRecordKeys.map((key) => deleteReceiptPrefix(key)),
   ]);
@@ -4255,6 +4256,18 @@ function buildUserKey(email: string) {
   return `users/${encodeURIComponent(normalizeEmail(email))}.json`;
 }
 
+function buildOrganisationUserPointerPrefix(organisationId: number) {
+  return `organisation-users/org-${organisationId}/`;
+}
+
+function buildOrganisationUserPointerKey(user: Pick<StoredUser, 'organisationId' | 'email'>) {
+  return `${buildOrganisationUserPointerPrefix(user.organisationId)}${encodeURIComponent(normalizeEmail(user.email))}.json`;
+}
+
+function buildOrganisationUserPointerReadyKey(organisationId: number) {
+  return `${buildOrganisationUserPointerPrefix(organisationId)}_index-ready.json`;
+}
+
 function buildOrganisationKey(organisationId: number) {
   return `organisations/${organisationId}.json`;
 }
@@ -4307,10 +4320,64 @@ async function listS3Organisations() {
   return Promise.all(keys.map((key) => getReceiptJsonObject<StoredOrganisation>(key)));
 }
 
+async function putS3User(user: StoredUser) {
+  const userKey = buildUserKey(user.email);
+  await putReceiptJsonObject(userKey, user);
+
+  const pointerKey = buildOrganisationUserPointerKey(user);
+  if (user.removedAt) {
+    await deleteReceiptObject(pointerKey);
+    return;
+  }
+
+  await putReceiptJsonObject(pointerKey, {
+    version: 1,
+    organisationId: user.organisationId,
+    userKey,
+  });
+}
+
+async function listS3OrganisationUserKeys(organisationId: number) {
+  const pointerPrefix = buildOrganisationUserPointerPrefix(organisationId);
+  const pointerKeys = await listReceiptJsonKeys(pointerPrefix, 500);
+  const readyKey = buildOrganisationUserPointerReadyKey(organisationId);
+  if (pointerKeys.includes(readyKey)) {
+    return pointerKeys.filter((key) => key !== readyKey).map((key) => {
+      const encodedEmail = key.slice(pointerPrefix.length);
+      return `users/${encodedEmail}`;
+    });
+  }
+
+  // Existing S3-backed workspaces predate the organisation-scoped pointers.
+  // Build them once, then all future billing checks avoid downloading every
+  // user in every organisation.
+  const userKeys = await listAllReceiptJsonKeys('users/');
+  const users = await Promise.all(userKeys.map(async (key) => ({
+    key,
+    user: await getReceiptJsonObject<StoredUser>(key),
+  })));
+  const organisationUsers = users.filter(({ user }) => user.organisationId === organisationId && !user.removedAt);
+  await Promise.all(organisationUsers.map(({ key, user }) => putReceiptJsonObject(buildOrganisationUserPointerKey(user), {
+    version: 1,
+    organisationId,
+    userKey: key,
+  })));
+  await putReceiptJsonObject(readyKey, {
+    version: 1,
+    organisationId,
+    builtAt: new Date().toISOString(),
+  });
+  return organisationUsers.map(({ key }) => key);
+}
+
 async function listS3UsersForOrganisation(organisationId: number) {
-  const keys = await listReceiptJsonKeys('users/', 500);
+  const keys = await listS3OrganisationUserKeys(organisationId);
   const users = await Promise.all(keys.map((key) => getReceiptJsonObject<StoredUser>(key)));
-  return users.filter((user) => user.organisationId === organisationId);
+  return users.filter((user) => user.organisationId === organisationId && !user.removedAt);
+}
+
+async function countS3UsersForOrganisation(organisationId: number) {
+  return (await listS3OrganisationUserKeys(organisationId)).length;
 }
 
 async function countS3DocumentsForBillingPeriod(organisationId: number, billingPeriodStartedAt: string) {
