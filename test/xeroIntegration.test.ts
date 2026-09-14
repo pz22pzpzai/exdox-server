@@ -18,7 +18,7 @@ test('Xero integration exposes explicit admin connection, settings, reference, a
   assert.match(template, /ReceiptBucketName\}\/billing-addons\/\*/);
 });
 
-test('Xero connect billing access uses the lightweight lookup with a restricted legacy listing fallback', () => {
+test('Xero connect billing access uses the lightweight lookup with a bucket-only legacy listing fallback', () => {
   const accessGate = accountingAccess.match(/export async function getAccountingIntegrationAccess[\s\S]*?\n\}/)?.[0];
   assert.ok(accessGate, 'Expected the accounting integration access gate to exist.');
   assert.match(accessGate, /getOrganisationBillingAccessState\(organisationId\)/);
@@ -28,7 +28,7 @@ test('Xero connect billing access uses the lightweight lookup with a restricted 
   assert.ok(connectFunction, 'Expected the ConnectXeroFunction template block to exist.');
   assert.match(connectFunction, /s3:GetObject/);
   assert.match(connectFunction, /s3:ListBucket/);
-  assert.match(connectFunction, /s3:prefix:[\s\S]*?'users\/\*'[\s\S]*?'receipt-records\/org-\*'/);
+  assert.doesNotMatch(connectFunction, /s3:prefix:/);
   assert.doesNotMatch(connectFunction, /S3CrudPolicy/);
 });
 
