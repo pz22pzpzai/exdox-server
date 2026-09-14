@@ -5,6 +5,8 @@ import test from 'node:test';
 const template = readFileSync(new URL('../infra/template.yaml', import.meta.url), 'utf8');
 const handler = readFileSync(new URL('../src/aws/handlers/xero.ts', import.meta.url), 'utf8');
 const accountingAccess = readFileSync(new URL('../src/aws/shared/accountingIntegrationUnlock.ts', import.meta.url), 'utf8');
+const reimbursementExport = readFileSync(new URL('../src/aws/handlers/exportEmployeeReimbursements.ts', import.meta.url), 'utf8');
+const reimbursementPaid = readFileSync(new URL('../src/aws/handlers/markEmployeeReimbursementsPaid.ts', import.meta.url), 'utf8');
 
 test('Xero integration exposes explicit admin connection, settings, reference, and publishing routes', () => {
   for (const path of ['/xero/status', '/xero/connect', '/xero/callback', '/xero/tenant', '/xero/reference-data', '/xero/settings', '/xero/customers/sync', '/xero/customers/import', '/xero/publish']) {
@@ -41,4 +43,14 @@ test('Xero tokens and publication records are protected and duplicate-safe', () 
   assert.match(handler, /BankTransactions/);
   assert.match(handler, /categoryAccountMappings/);
   assert.match(handler, /taxTypeMappings/);
+  assert.match(handler, /Repair the visible Exdox state/);
+});
+
+test('manual reimbursement and Xero publication keep distinct final states', () => {
+  assert.match(reimbursementExport, /selectedReceiptIds/);
+  assert.match(reimbursementExport, /receipt\.status === 'Ready'/);
+  assert.match(reimbursementExport, /receipt\.status === 'Published'/);
+  assert.doesNotMatch(reimbursementExport, /updateReimbursementPaymentStatus\(user, 'Ready', 'Payment processing'/);
+  assert.match(reimbursementPaid, /updateReimbursementPaymentStatus\(user, 'Ready', 'Paid'\)/);
+  assert.match(reimbursementPaid, /updateReimbursementPaymentStatus\(user, 'Payment processing', 'Paid'\)/);
 });

@@ -15,7 +15,9 @@ export async function handler(event: APIGatewayProxyEventV2) {
       'queue_exports',
       'Your current plan does not include reimbursement payment management. Upgrade to Control or Operations to continue.',
     );
-    const paidCount = await updateReimbursementPaymentStatus(user, 'Payment processing', 'Paid');
+    const readyPaidCount = await updateReimbursementPaymentStatus(user, 'Ready', 'Paid');
+    const legacyPaymentProcessingPaidCount = await updateReimbursementPaymentStatus(user, 'Payment processing', 'Paid');
+    const paidCount = readyPaidCount + legacyPaymentProcessingPaidCount;
     return jsonResponse(200, { success: true, paidCount });
   } catch (error) {
     const status = typeof error === 'object' && error !== null && 'statusCode' in error

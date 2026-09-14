@@ -1,9 +1,7 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
-import { randomUUID } from 'node:crypto';
-
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
 import { assertFeatureAccess } from '../shared/billing.js';
-import { findUserById, getOrganisationBillingSummary, getOrganisationName, listReceipts, updateReimbursementPaymentStatus } from '../shared/db.js';
+import { findUserById, getOrganisationBillingSummary, getOrganisationName, listReceipts } from '../shared/db.js';
 import { sendEmployeeReimbursementReadyEmail } from '../shared/expenseExportMail.js';
 import { jsonResponse } from '../shared/http.js';
 
@@ -33,9 +31,19 @@ export async function handler(event: APIGatewayProxyEventV2) {
       'Your current plan does not include reimbursement exports.',
     );
 
+    const input = event.body
+      ? JSON.parse(event.body) as { receiptIds?: number[] }
+      : {};
+    const selectedReceiptIds = Array.isArray(input.receiptIds)
+      ? new Set(input.receiptIds.filter((id) => Number.isInteger(id) && id > 0))
+      : null;
+
     const receipts = (await listReceipts(user, { workspaceContext: 'cost', includeMileageCosts: true, limit: 50000 }))
       .filter((receipt) => receipt.paymentMethod === 'cash_personal')
-      .filter((receipt) => (receipt.status === 'Ready' || (Boolean(receipt.mileageClaimId) && receipt.status === 'Published')) && !receipt.needsReview);
+      .filter((receipt) => !receipt.needsReview)
+      .filter((receipt) => selectedReceiptIds
+        ? selectedReceiptIds.has(receipt.id) && (receipt.status === 'Ready' || receipt.status === 'Published')
+        : receipt.status === 'Ready');
     if (!receipts.length) {
       throw reimbursementExportError(
         'No approved personal-spend expenses are ready for reimbursement. Select Personal spend before approval, then approve the expense before creating a payment summary.',
@@ -106,11 +114,6 @@ export async function handler(event: APIGatewayProxyEventV2) {
       organisationName,
       exportedAt,
     })));
-    const paymentProcessingCount = await updateReimbursementPaymentStatus(user, 'Ready', 'Payment processing', {
-      id: randomUUID(),
-      createdAt: new Date().toISOString(),
-    }, includedReceiptIds);
-
     return jsonResponse(200, {
       success: true,
       organisationName,
@@ -120,7 +123,11 @@ export async function handler(event: APIGatewayProxyEventV2) {
         sent: deliveries.filter((result) => result.status === 'fulfilled').length,
         failed: deliveries.filter((result) => result.status === 'rejected').length,
       },
-      paymentProcessingCount,
+      // Preparing a payment sheet or publishing to Xero does not prove that a
+      // manual reimbursement was paid. Ready costs therefore stay Ready until
+      // the administrator explicitly marks them paid; Xero publication moves
+      // its own successfully published records to Published.
+      paymentProcessingCount: 0,
     });
   } catch (error) {
     const status = typeof error === 'object' && error !== null && 'statusCode' in error

@@ -388,7 +388,19 @@ export async function publishHandler(event: APIGatewayProxyEventV2) {
     const sourceId = String(input.sourceId ?? '').trim();
     if (!sourceType || !['receipt', 'sales_document', 'claim'].includes(sourceType) || !sourceId) throw new Error('Choose an Exdox cost, sale, or claim to publish.');
     const previous = await loadPublication(user.organisationId, sourceType, sourceId);
-    if (previous) return jsonResponse(200, { success: true, alreadyPublished: true, publication: previous });
+    if (previous) {
+      // Repair the visible Exdox state if Xero already accepted the record but a
+      // previous request ended before the local status update completed.
+      if (sourceType === 'receipt') {
+        const receipt = await getReceiptById(user, Number(sourceId));
+        if (receipt.status !== 'Published') await updateReceiptById(user, receipt.id, { status: 'Published' });
+      } else if (sourceType === 'claim') {
+        const claimId = Number(sourceId);
+        const claim = (await listExpenseClaims(user, 200)).find((item) => item.id === claimId);
+        if (claim && claim.status !== 'published') await updateClaimStatus(user, claim.id, 'published');
+      }
+      return jsonResponse(200, { success: true, alreadyPublished: true, publication: previous });
+    }
     const settings = await loadSettings(user.organisationId);
     const publishInvoice = async (invoice: Record<string, unknown>, attachment?: { filename: string; contentType: string; body: Buffer }) => {
       const response = await xeroPost<{ Invoices?: Array<{ InvoiceID: string; InvoiceNumber?: string }> }>(user.organisationId, 'Invoices', { Invoices: [invoice] });
