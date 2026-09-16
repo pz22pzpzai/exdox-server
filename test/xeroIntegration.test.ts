@@ -48,6 +48,21 @@ test('Xero tokens and publication records are protected and duplicate-safe', () 
   assert.match(handler, /Repair the visible Exdox state/);
 });
 
+test('Xero reference refresh stays below the tenant concurrency limit and handles temporary failures', () => {
+  const referenceHandler = handler.match(/export async function referenceDataHandler[\s\S]*?\n\}/)?.[0];
+  assert.ok(referenceHandler, 'Expected the Xero reference-data handler to exist.');
+  const requestWaves = [...referenceHandler.matchAll(/Promise\.all\(\[([\s\S]*?)\]\)/g)];
+  assert.ok(requestWaves.length >= 3, 'Expected reference data to be loaded in bounded waves.');
+  for (const [, wave] of requestWaves) {
+    const xeroRequests = (wave.match(/xeroGetWithAuth|loadXeroContacts/g) ?? []).length;
+    assert.ok(xeroRequests <= 3, `Expected no more than three concurrent Xero requests, found ${xeroRequests}.`);
+  }
+  assert.match(handler, /response\.status === 429/);
+  assert.match(handler, /response\.headers\.get\('retry-after'\)/);
+  assert.match(handler, /xero_temporarily_unavailable/);
+  assert.doesNotMatch(handler, /if \(!response\.ok\) throw new Error\('Xero could not refresh the requested accounting data\. Reconnect Xero and try again\.'\)/);
+});
+
 test('manual reimbursement and Xero publication keep distinct final states', () => {
   assert.match(reimbursementExport, /selectedReceiptIds/);
   assert.match(reimbursementExport, /receipt\.status === 'Ready'/);

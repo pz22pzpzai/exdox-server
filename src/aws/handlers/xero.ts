@@ -116,7 +116,19 @@ async function accessTokenFor(organisationId: number) {
   if (!previousTokens.refresh_token) throw new Error('Reconnect Xero before using accounting integration features.');
   const basic = Buffer.from(`${awsEnv.xeroClientId}:${awsEnv.xeroClientSecret}`).toString('base64');
   const refreshResponse = await fetch(XERO_TOKEN_URL, { method: 'POST', headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: previousTokens.refresh_token }) });
-  if (!refreshResponse.ok) throw new Error('Reconnect Xero before using accounting integration features.');
+  if (!refreshResponse.ok) {
+    console.warn('Xero token refresh failed', { organisationId, status: refreshResponse.status });
+    if (refreshResponse.status === 429 || refreshResponse.status >= 500) {
+      const error = new Error('Xero is temporarily unavailable. Wait a moment and refresh the Xero data again.') as Error & { statusCode?: number; code?: string };
+      error.statusCode = 503;
+      error.code = 'xero_temporarily_unavailable';
+      throw error;
+    }
+    const error = new Error('The Xero authorisation has expired or was revoked. Reconnect Xero and try again.') as Error & { statusCode?: number; code?: string };
+    error.statusCode = 401;
+    error.code = 'xero_authorisation_expired';
+    throw error;
+  }
   const refreshedPayload = await refreshResponse.json() as XeroTokenResponse;
   const refreshedTokens = { ...refreshedPayload, refresh_token: refreshedPayload.refresh_token ?? previousTokens.refresh_token };
   const refreshedConnection: StoredXeroConnection = { ...connection, accessTokenExpiresAt: new Date(Date.now() + refreshedTokens.expires_in * 1000).toISOString(), encryptedTokens: encryptTokens(refreshedTokens) };
@@ -157,9 +169,44 @@ async function xeroGet<T>(organisationId: number, path: string) {
 
 async function xeroGetWithAuth<T>(auth: Awaited<ReturnType<typeof accessTokenFor>>, path: string) {
   const { connection, accessToken } = auth;
-  const response = await fetch(`https://api.xero.com/api.xro/2.0/${path}`, { headers: { Authorization: `Bearer ${accessToken}`, 'xero-tenant-id': connection.tenantId, Accept: 'application/json' } });
-  if (!response.ok) throw new Error('Xero could not refresh the requested accounting data. Reconnect Xero and try again.');
-  return await response.json() as T;
+  const endpoint = path.split('?')[0] || 'unknown';
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await fetch(`https://api.xero.com/api.xro/2.0/${path}`, { headers: { Authorization: `Bearer ${accessToken}`, 'xero-tenant-id': connection.tenantId, Accept: 'application/json' } });
+    if (response.ok) return await response.json() as T;
+
+    const transient = response.status === 429 || response.status >= 500;
+    console.warn('Xero API request failed', {
+      endpoint,
+      status: response.status,
+      attempt: attempt + 1,
+      correlationId: response.headers.get('xero-correlation-id'),
+      rateLimitProblem: response.headers.get('x-rate-limit-problem'),
+    });
+
+    if (transient && attempt < 2) {
+      const retryAfterSeconds = Number(response.headers.get('retry-after'));
+      const retryDelayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+        ? Math.min(retryAfterSeconds * 1000, 5_000)
+        : 400 * (attempt + 1);
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      continue;
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      const error = new Error('The Xero authorisation no longer permits this request. Reconnect Xero and try again.') as Error & { statusCode?: number; code?: string };
+      error.statusCode = 401;
+      error.code = 'xero_authorisation_expired';
+      throw error;
+    }
+
+    const error = new Error(transient
+      ? 'Xero is temporarily limiting or unavailable. Wait a moment and refresh the Xero data again.'
+      : 'Xero could not provide the requested accounting data. Try refreshing the Xero data again.') as Error & { statusCode?: number; code?: string };
+    error.statusCode = transient ? 503 : 502;
+    error.code = transient ? 'xero_temporarily_unavailable' : 'xero_data_request_failed';
+    throw error;
+  }
+  throw new Error('Xero could not provide the requested accounting data.');
 }
 
 async function loadXeroContacts(auth: Awaited<ReturnType<typeof accessTokenFor>>) {
@@ -333,15 +380,22 @@ export async function referenceDataHandler(event: APIGatewayProxyEventV2) {
     requireAdminUser(user);
     await requirePaidXeroAccess(user.organisationId);
     const auth = await accessTokenFor(user.organisationId);
-    const [accountsPayload, taxPayload, trackingPayload, contactsPayload, itemsPayload, currenciesPayload, usersPayload, settings] = await Promise.all([
+    // Xero permits at most five concurrent requests per tenant. Keep each
+    // refresh wave to three so other activity for this organisation has room.
+    const settingsPromise = loadSettings(user.organisationId);
+    const [accountsPayload, taxPayload, trackingPayload] = await Promise.all([
       xeroGetWithAuth<{ Accounts?: XeroAccount[] }>(auth, 'Accounts'),
       xeroGetWithAuth<{ TaxRates?: XeroTaxRate[] }>(auth, 'TaxRates'),
       xeroGetWithAuth<{ TrackingCategories?: XeroTrackingCategory[] }>(auth, 'TrackingCategories'),
+    ]);
+    const [contactsPayload, itemsPayload, currenciesPayload] = await Promise.all([
       loadXeroContacts(auth),
       xeroGetWithAuth<{ Items?: XeroItem[] }>(auth, 'Items'),
       xeroGetWithAuth<{ Currencies?: Array<{ Code: string; Description?: string }> }>(auth, 'Currencies'),
+    ]);
+    const [usersPayload, settings] = await Promise.all([
       xeroGetWithAuth<{ Users?: XeroUser[] }>(auth, 'Users'),
-      loadSettings(user.organisationId),
+      settingsPromise,
     ]);
     const accounts = (accountsPayload.Accounts ?? []).filter((item) => item.Status === 'ACTIVE' && item.Code).map(({ AccountID, Code, Name, Type }) => ({ accountId: AccountID, code: Code, name: Name, type: Type }));
     const taxRates = (taxPayload.TaxRates ?? []).filter((item) => item.Status === 'ACTIVE').map(({ Name, TaxType, CanApplyToExpenses, CanApplyToRevenue }) => ({ name: Name, taxType: TaxType, canApplyToExpenses: Boolean(CanApplyToExpenses), canApplyToRevenue: Boolean(CanApplyToRevenue) }));
