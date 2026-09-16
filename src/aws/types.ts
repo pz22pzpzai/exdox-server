@@ -272,6 +272,8 @@ export type ExpenseClaimRow = {
   mileageTotalMiles?: number | null;
   mileageRate?: number | null;
   mileageTotalAmount?: number | null;
+  reimbursementBatchId?: string | null;
+  reimbursementBatchCreatedAt?: string | null;
   claimantName?: string | null;
   claimantEmail?: string | null;
   createdAt: string;

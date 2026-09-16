@@ -1,7 +1,9 @@
+import crypto from 'node:crypto';
+
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
 import { assertFeatureAccess } from '../shared/billing.js';
-import { findUserById, getOrganisationBillingSummary, getOrganisationName, listReceipts } from '../shared/db.js';
+import { findUserById, getOrganisationBillingSummary, getOrganisationName, listReceipts, markReimbursementProcessingStarted } from '../shared/db.js';
 import { sendEmployeeReimbursementReadyEmail } from '../shared/expenseExportMail.js';
 import { jsonResponse } from '../shared/http.js';
 
@@ -114,6 +116,8 @@ export async function handler(event: APIGatewayProxyEventV2) {
       organisationName,
       exportedAt,
     })));
+    const reimbursementBatch = { id: crypto.randomUUID(), createdAt: new Date().toISOString() };
+    const paymentProcessingCount = await markReimbursementProcessingStarted(user, includedReceiptIds, reimbursementBatch);
     return jsonResponse(200, {
       success: true,
       organisationName,
@@ -123,11 +127,10 @@ export async function handler(event: APIGatewayProxyEventV2) {
         sent: deliveries.filter((result) => result.status === 'fulfilled').length,
         failed: deliveries.filter((result) => result.status === 'rejected').length,
       },
-      // Preparing a payment sheet or publishing to Xero does not prove that a
-      // manual reimbursement was paid. Ready costs therefore stay Ready until
-      // the administrator explicitly marks them paid; Xero publication moves
-      // its own successfully published records to Published.
-      paymentProcessingCount: 0,
+      // Status remains Ready (or Published for Xero) until payment is
+      // confirmed. The batch marks the exact items whose processing started.
+      paymentProcessingCount,
+      reimbursementBatch,
     });
   } catch (error) {
     const status = typeof error === 'object' && error !== null && 'statusCode' in error

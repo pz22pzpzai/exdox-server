@@ -68,6 +68,8 @@ test('manual reimbursement and Xero publication keep distinct final states', () 
   assert.match(reimbursementExport, /receipt\.status === 'Ready'/);
   assert.match(reimbursementExport, /receipt\.status === 'Published'/);
   assert.doesNotMatch(reimbursementExport, /updateReimbursementPaymentStatus\(user, 'Ready', 'Payment processing'/);
+  assert.match(reimbursementExport, /markReimbursementProcessingStarted\(user, includedReceiptIds, reimbursementBatch\)/);
+  assert.match(reimbursementExport, /paymentProcessingCount/);
   assert.match(reimbursementPaid, /updateReimbursementPaymentStatus\(user, 'Ready', 'Paid'\)/);
   assert.match(reimbursementPaid, /updateReimbursementPaymentStatus\(user, 'Payment processing', 'Paid'\)/);
 });

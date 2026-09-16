@@ -228,6 +228,8 @@ async function ensureExpenseClaimMileageSchema() {
     await pool.execute('ALTER TABLE expense_claims ADD COLUMN IF NOT EXISTS mileage_total_miles DECIMAL(10, 2) NULL AFTER mileage_end_postcode');
     await pool.execute('ALTER TABLE expense_claims ADD COLUMN IF NOT EXISTS mileage_rate DECIMAL(10, 4) NULL AFTER mileage_total_miles');
     await pool.execute('ALTER TABLE expense_claims ADD COLUMN IF NOT EXISTS mileage_total_amount DECIMAL(12, 2) NULL AFTER mileage_rate');
+    await pool.execute('ALTER TABLE expense_claims ADD COLUMN IF NOT EXISTS reimbursement_batch_id CHAR(36) NULL AFTER mileage_total_amount');
+    await pool.execute('ALTER TABLE expense_claims ADD COLUMN IF NOT EXISTS reimbursement_batch_created_at DATETIME NULL AFTER reimbursement_batch_id');
   })();
   await expenseClaimMileageSchemaReady;
 }
@@ -766,8 +768,8 @@ function mileageClaimToCostRecord(claim: ExpenseClaimRow): ReceiptRow {
     foreignTaxAmount: null,
     foreignTaxLabel: null,
     ukVatTreatment: 'not_applicable',
-    reimbursementBatchId: null,
-    reimbursementBatchCreatedAt: null,
+    reimbursementBatchId: claim.reimbursementBatchId ?? null,
+    reimbursementBatchCreatedAt: claim.reimbursementBatchCreatedAt ?? null,
     confidenceScore: null,
     confidenceSource: 'unavailable',
     needsReview: status === 'Review',
@@ -816,6 +818,8 @@ export async function createExpenseClaim(input: {
     mileageTotalMiles: input.mileageTotalMiles ?? null,
     mileageRate: input.mileageRate ?? null,
     mileageTotalAmount: input.mileageTotalAmount ?? null,
+    reimbursementBatchId: null,
+    reimbursementBatchCreatedAt: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -945,9 +949,11 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
       c.mileage_start_postcode,
       c.mileage_end_postcode,
       c.mileage_total_miles,
-      c.mileage_rate,
-      c.mileage_total_amount,
-      c.status,
+       c.mileage_rate,
+       c.mileage_total_amount,
+       c.reimbursement_batch_id,
+       c.reimbursement_batch_created_at,
+       c.status,
       c.created_at,
       c.updated_at,
       u.full_name AS claimant_name,
@@ -971,6 +977,7 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
       )
     GROUP BY c.id, c.currency, c.claim_type, c.mileage_start_postcode, c.mileage_end_postcode,
              c.mileage_total_miles, c.mileage_rate, c.mileage_total_amount, c.status,
+             c.reimbursement_batch_id, c.reimbursement_batch_created_at,
              c.created_at, c.updated_at, u.full_name, u.email
     ORDER BY c.created_at DESC
     LIMIT ?`,
@@ -993,6 +1000,10 @@ export async function listExpenseClaims(user: AuthenticatedUser, limit = 50): Pr
     mileageTotalMiles: row.mileage_total_miles === null || row.mileage_total_miles === undefined ? null : Number(row.mileage_total_miles),
     mileageRate: row.mileage_rate === null || row.mileage_rate === undefined ? null : Number(row.mileage_rate),
     mileageTotalAmount: row.mileage_total_amount === null || row.mileage_total_amount === undefined ? null : Number(row.mileage_total_amount),
+    reimbursementBatchId: row.reimbursement_batch_id ? String(row.reimbursement_batch_id) : null,
+    reimbursementBatchCreatedAt: row.reimbursement_batch_created_at
+      ? new Date(row.reimbursement_batch_created_at).toISOString()
+      : null,
     claimantName: row.claimant_name ? String(row.claimant_name) : null,
     claimantEmail: row.claimant_email ? String(row.claimant_email) : null,
     createdAt: new Date(row.created_at).toISOString(),
@@ -2533,6 +2544,66 @@ export async function saveReceiptExchangeRate(input: {
     [input.baseCurrency, input.exchangeRate, input.exchangeRateDate, input.exchangeRateProvider, input.baseTotalAmount, input.receiptId, input.user.organisationId],
   );
   return getReceiptById(input.user, input.receiptId);
+}
+
+export async function markReimbursementProcessingStarted(
+  user: AuthenticatedUser,
+  receiptIds: number[],
+  reimbursementBatch: { id: string; createdAt: string },
+) {
+  const selectedReceiptIds = new Set(receiptIds);
+  const receipts = (await listReceipts(user, { workspaceContext: 'cost', includeMileageCosts: true, limit: 50000 }))
+    .filter((receipt) => selectedReceiptIds.has(receipt.id))
+    .filter((receipt) => receipt.paymentMethod === 'cash_personal')
+    .filter((receipt) => (receipt.status === 'Ready' || receipt.status === 'Published') && !receipt.needsReview);
+  if (!receipts.length) return 0;
+
+  const updatedAt = new Date().toISOString();
+  const standardReceipts = receipts.filter((receipt) => !receipt.mileageClaimId);
+  const mileageClaimIds = receipts
+    .map((receipt) => receipt.mileageClaimId)
+    .filter((claimId): claimId is number => typeof claimId === 'number');
+
+  if (!pool) {
+    await Promise.all(standardReceipts.map((receipt) => putReceiptJsonObject(buildReceiptMetadataKey(receipt), {
+      ...receipt,
+      reimbursementBatchId: reimbursementBatch.id,
+      reimbursementBatchCreatedAt: reimbursementBatch.createdAt,
+      updatedAt,
+    })));
+    const claims = await listExpenseClaims(user, 50000);
+    await Promise.all(claims.filter((claim) => mileageClaimIds.includes(claim.id)).map((claim) =>
+      putReceiptJsonObject(buildClaimKey(claim), {
+        ...claim,
+        reimbursementBatchId: reimbursementBatch.id,
+        reimbursementBatchCreatedAt: reimbursementBatch.createdAt,
+        updatedAt,
+      }),
+    ));
+    return receipts.length;
+  }
+
+  await ensureReceiptTaxTreatmentSchema();
+  if (standardReceipts.length) {
+    const placeholders = standardReceipts.map(() => '?').join(', ');
+    await pool.execute(
+      `UPDATE receipts
+       SET reimbursement_batch_id = ?, reimbursement_batch_created_at = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE organisation_id = ? AND id IN (${placeholders})`,
+      [reimbursementBatch.id, reimbursementBatch.createdAt, user.organisationId, ...standardReceipts.map((receipt) => receipt.id)],
+    );
+  }
+  if (mileageClaimIds.length) {
+    await ensureExpenseClaimMileageSchema();
+    const placeholders = mileageClaimIds.map(() => '?').join(', ');
+    await pool.execute(
+      `UPDATE expense_claims
+       SET reimbursement_batch_id = ?, reimbursement_batch_created_at = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE organisation_id = ? AND claim_type = 'mileage' AND id IN (${placeholders})`,
+      [reimbursementBatch.id, reimbursementBatch.createdAt, user.organisationId, ...mileageClaimIds],
+    );
+  }
+  return receipts.length;
 }
 
 export async function updateReimbursementPaymentStatus(
