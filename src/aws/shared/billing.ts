@@ -326,6 +326,11 @@ export function resolveSelfServeSubscriptionSelection(input: {
 }): SelfServeSubscriptionSelection {
   const includedUsers = Number(input.includedUsers);
   const monthlyDocumentLimit = Number(input.monthlyDocumentLimit);
+  // The entry-level Capture allowance is deliberately distinct from the
+  // five-user increments used by every other published self-serve option.
+  if (input.planId === 'capture' && includedUsers === 1 && monthlyDocumentLimit === 100) {
+    return buildSelfServeSelection('capture', 1, 100, 1000);
+  }
   const isFiveUserIncrement = Number.isInteger(includedUsers) && includedUsers % 5 === 0;
   const hasExpectedDocumentAllowance = monthlyDocumentLimit === includedUsers * 50;
 
@@ -362,7 +367,7 @@ function buildSelfServeSelection(
     includedUsers,
     monthlyDocumentLimit,
     monthlyAmountPence: Math.round(monthlyAmountPence),
-    label: `${getPlanDefinition(planId).label} - ${includedUsers} users`,
+    label: `${getPlanDefinition(planId).label} - ${includedUsers} ${includedUsers === 1 ? 'user' : 'users'}`,
   };
 }
 
