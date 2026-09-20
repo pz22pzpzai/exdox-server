@@ -16,6 +16,7 @@ type JwtPayload = {
   role: UserRole;
   status: UserStatus;
   emailConfirmationDueAt?: string | null;
+  trialEndsAt?: string | null;
 };
 
 type PasswordResetJwtPayload = {
@@ -40,6 +41,7 @@ export function signUserToken(user: AuthenticatedUser) {
       role: user.role,
       status: user.status,
       emailConfirmationDueAt: user.emailConfirmationDueAt ?? null,
+      trialEndsAt: user.trialEndsAt ?? null,
     } satisfies JwtPayload,
     awsEnv.jwtSecret,
     {
@@ -123,6 +125,10 @@ export function requireAuthenticatedUser(event: APIGatewayProxyEventV2): Authent
 
     const emailConfirmationDueAt =
       typeof decoded.emailConfirmationDueAt === 'string' ? decoded.emailConfirmationDueAt : null;
+    const trialEndsAt = typeof decoded.trialEndsAt === 'string' ? decoded.trialEndsAt : null;
+    if (trialEndsAt && Date.parse(trialEndsAt) <= Date.now()) {
+      throw unauthorized('The free trial has ended. Sign in to continue with a paid monthly subscription.');
+    }
     if (status === 'pending_confirmation') {
       const confirmationDeadline = emailConfirmationDueAt ? Date.parse(emailConfirmationDueAt) : Number.NaN;
       if (!Number.isFinite(confirmationDeadline) || confirmationDeadline <= Date.now()) {
@@ -138,6 +144,7 @@ export function requireAuthenticatedUser(event: APIGatewayProxyEventV2): Authent
       role,
       status,
       emailConfirmationDueAt,
+      trialEndsAt,
     };
   } catch (error) {
     if (typeof error === 'object' && error !== null && 'statusCode' in error) {

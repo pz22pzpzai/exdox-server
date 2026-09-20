@@ -3,6 +3,7 @@ import Stripe from 'stripe';
 
 import { fulfillAccountingIntegrationUnlock, isAccountingIntegrationUnlockSession, removeUnusedAccountingIntegrationCredit } from '../shared/accountingIntegrationUnlock.js';
 import { isStripeConfigured } from '../shared/billing.js';
+import { finishPaidContinuation } from '../shared/billingCheckout.js';
 import { awsEnv } from '../shared/env.js';
 import { sendFreeTrialStartedNotification } from '../shared/freeTrialNotification.js';
 import { jsonResponse } from '../shared/http.js';
@@ -48,6 +49,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
           if (subscriptionId) {
             const subscription = await stripe.subscriptions.retrieve(subscriptionId);
             await syncStripeSubscription(subscription);
+            await finishPaidContinuation(session, stripe);
           }
           break;
         }
@@ -99,6 +101,9 @@ export async function handler(event: APIGatewayProxyEventV2) {
         : null;
       if (session && isAccountingIntegrationUnlockSession(session)) {
         return jsonResponse(500, { success: false, error: 'accounting_integration_fulfillment_failed', message: 'Stripe will retry the accounting integration payment fulfilment.' });
+      }
+      if (session?.metadata?.checkoutPurpose === 'paid_continuation') {
+        return jsonResponse(500, { success: false, error: 'paid_continuation_sync_failed', message: 'Stripe will retry the paid subscription reconciliation.' });
       }
       const trialSubscription = stripeEvent.type === 'customer.subscription.created'
         ? stripeEvent.data.object as Stripe.Subscription

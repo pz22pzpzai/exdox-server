@@ -109,7 +109,7 @@ export type UkVatTreatment =
   | 'import_vat'
   | 'accountant_review';
 export type BillingPlanId = 'capture' | 'control' | 'operations' | 'enterprise' | 'legacy';
-export type BillingStatus = 'trialing' | 'active' | 'past_due' | 'canceled' | 'inactive' | 'legacy';
+export type BillingStatus = 'trialing' | 'active' | 'past_due' | 'paused' | 'canceled' | 'inactive' | 'legacy';
 export type BillingCycle = 'monthly' | 'annual' | 'custom';
 
 export type ExpenseRequestOptions = {
@@ -392,6 +392,7 @@ export type AuthenticatedUser = {
   role: UserRole;
   status: UserStatus;
   emailConfirmationDueAt?: string | null;
+  trialEndsAt?: string | null;
 };
 
 export type UserRecord = AuthenticatedUser & {

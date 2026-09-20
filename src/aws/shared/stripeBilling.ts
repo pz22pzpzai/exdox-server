@@ -6,7 +6,7 @@ import { clearMissingStripeBillingReferences, isStripeResourceMissing, syncStrip
 import { awsEnv } from './env.js';
 
 function toStripeBillingStatus(status: string) {
-  if (status === 'trialing' || status === 'active' || status === 'past_due' || status === 'canceled') {
+  if (status === 'trialing' || status === 'active' || status === 'past_due' || status === 'paused' || status === 'canceled') {
     return status;
   }
   return 'inactive';

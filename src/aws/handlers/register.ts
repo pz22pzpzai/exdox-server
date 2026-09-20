@@ -73,9 +73,10 @@ export async function handler(event: APIGatewayProxyEventV2) {
         inviteToken,
       });
 
+      const invitedBilling = await getOrganisationBillingSummary(user.organisationId);
       return jsonResponse(201, {
         success: true,
-        token: signUserToken(user),
+        token: signUserToken({ ...user, trialEndsAt: invitedBilling.status === 'trialing' ? invitedBilling.trialEndsAt : null }),
         user,
       });
     }
@@ -271,7 +272,7 @@ function buildRegistrationMessage(input: {
     ? 'We have sent your confirmation email.'
     : 'We could not send the confirmation email right now; contact contact@exdox.co.uk so we can activate access.';
   const checkoutSummary = input.checkoutReady
-    ? 'Continue to secure card setup now.'
-    : 'Secure card setup is temporarily unavailable; confirm your email and log in to try again.';
-  return `${checkoutSummary} ${confirmationSummary} Your ${packageSummary} is reserved. After card setup, you can use the workspace immediately and have three days to confirm your email. Terms version ${input.termsVersion} was accepted during registration.`;
+    ? 'Continue to Stripe to start your 14-day trial without payment details.'
+    : 'Trial setup is temporarily unavailable; confirm your email and log in to try again.';
+  return `${checkoutSummary} ${confirmationSummary} Your ${packageSummary} is reserved. After starting the trial, you can use the workspace immediately and have three days to confirm your email. The trial ends unless you choose and pay for monthly billing; billing then starts on your payment date. Terms version ${input.termsVersion} was accepted during registration.`;
 }

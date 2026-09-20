@@ -82,11 +82,12 @@ export async function handler(event: APIGatewayProxyEventV2) {
         fullName: user.fullName,
         role: user.role,
         status: user.status,
+        trialEndsAt: billing.status === 'trialing' ? billing.trialEndsAt : null,
       };
       let checkoutUrl: string | null = null;
-      const cardSetupComplete = isBillingActive(billing);
+      const trialOrBillingActive = isBillingActive(billing);
 
-      if (cardSetupComplete) {
+      if (trialOrBillingActive) {
         const firstGraceLogin = !user.emailConfirmationGraceStartedAt;
         const graceUserRecord = await ensureEmailConfirmationGraceStarted(user.email);
         const confirmationDueAt = emailConfirmationDueAt(
@@ -125,11 +126,11 @@ export async function handler(event: APIGatewayProxyEventV2) {
           user: graceUser,
           emailConfirmationRequired: true,
           emailConfirmationDueAt: confirmationDueAt,
-          message: 'Card setup is complete. You can use your workspace now, but you must confirm your email within three days.',
+          message: 'Your trial or paid subscription is ready. You can use your workspace now, but you must confirm your email within three days.',
         });
       }
 
-      if (billing.status === 'inactive' && user.role === 'Business_Admin') {
+      if (['inactive', 'paused', 'canceled'].includes(billing.status) && user.role === 'Business_Admin') {
         try {
           const checkout = await createSelfServeCheckoutSession({
             user: authUser,
@@ -140,7 +141,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
           });
           checkoutUrl = checkout.checkoutUrl;
         } catch (error) {
-          console.warn('Could not resume pending registration checkout.', {
+          console.warn('Could not start pending workspace checkout.', {
             email: user.email,
             message: error instanceof Error ? error.message : 'Unknown checkout error',
           });
@@ -152,10 +153,12 @@ export async function handler(event: APIGatewayProxyEventV2) {
         requiresEmailConfirmation: true,
         checkoutUrl,
         message: checkoutUrl
-          ? 'Continue to secure card setup. After it is complete, you can use the workspace while you confirm your email.'
+          ? billing.status === 'inactive'
+            ? 'Complete the card-free trial start in Stripe. You can then use the workspace while you confirm your email.'
+            : 'The trial has ended. Complete the first monthly payment in Stripe to restore workspace access.'
           : user.role === 'Standard_Employee'
             ? 'Your company workspace is not active yet. Ask the business owner to complete the company subscription setup.'
-            : 'Card setup is temporarily unavailable. Complete secure card setup before entering the workspace.',
+            : 'Checkout is temporarily unavailable. Please try again or contact contact@exdox.co.uk.',
         user: authUser,
       });
     }
@@ -175,12 +178,39 @@ export async function handler(event: APIGatewayProxyEventV2) {
       fullName: user.fullName,
       role: user.role,
       status: user.status,
+      trialEndsAt: billing.status === 'trialing' ? billing.trialEndsAt : null,
     };
     if (!isBillingActive(billing)) {
+      const isOwner = user.role === 'Business_Admin' && await isOrganisationOwner(authUser);
+      if (isOwner && ['paused', 'canceled', 'inactive'].includes(billing.status)) {
+        try {
+          const checkout = await createSelfServeCheckoutSession({
+            user: authUser,
+            planId: billing.planId,
+            billingCycle: billing.billingCycle,
+            successUrl: buildSignupCheckoutReturnUrl(user.email, 'success'),
+            cancelUrl: buildSignupCheckoutReturnUrl(user.email, 'cancelled'),
+          });
+          return jsonResponse(200, {
+            success: true,
+            requiresBillingCheckout: true,
+            checkoutUrl: checkout.checkoutUrl,
+            message: billing.status === 'inactive'
+              ? 'Complete the card-free trial start in Stripe to access your workspace.'
+              : 'The free trial has ended. Pay the first month securely in Stripe to restore access; your monthly billing date starts on the payment date.',
+            user: authUser,
+          });
+        } catch (error) {
+          console.warn('Could not start workspace billing checkout.', {
+            email: user.email,
+            message: error instanceof Error ? error.message : 'Unknown checkout error',
+          });
+        }
+      }
       return jsonResponse(402, {
         success: false,
         error: 'billing_inactive',
-        message: 'This workspace subscription is no longer active. The business owner can restart or update billing to restore access.',
+        message: 'This workspace trial or subscription is not active. The business owner can complete payment to restore access.',
       });
     }
     const isOwner = await isOrganisationOwner(authUser);

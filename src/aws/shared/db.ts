@@ -2146,7 +2146,7 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
       billingCycle: normalizeBillingCycle(organisation.billingCycle),
       trialEndsAt:
         organisation.trialEndsAt
-        ?? (normalizeBillingStatus(organisation.billingStatus, billingPlan) === 'inactive' ? null : defaultTrialEndsAt(billingPlan)),
+        ?? (normalizeBillingStatus(organisation.billingStatus, billingPlan) === 'trialing' ? defaultTrialEndsAt(billingPlan) : null),
       billingPeriodStartedAt,
       billingPeriodEndsAt: organisation.billingPeriodEndsAt ?? null,
       monthlyDocumentLimit: normalizeNullableNumber(organisation.monthlyDocumentLimit) ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
@@ -2201,7 +2201,7 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
     planId: billingPlan,
     status,
     billingCycle: normalizeBillingCycle(row.billing_cycle),
-    trialEndsAt: row.trial_ends_at ? new Date(row.trial_ends_at).toISOString() : (status === 'inactive' ? null : defaultTrialEndsAt(billingPlan)),
+    trialEndsAt: row.trial_ends_at ? new Date(row.trial_ends_at).toISOString() : (status === 'trialing' ? defaultTrialEndsAt(billingPlan) : null),
     billingPeriodStartedAt: row.billing_period_started_at ? new Date(row.billing_period_started_at).toISOString() : defaultUsagePeriodStart(),
     billingPeriodEndsAt: row.billing_period_ends_at ? new Date(row.billing_period_ends_at).toISOString() : null,
     monthlyDocumentLimit: normalizeNullableNumber(row.monthly_document_limit) ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
@@ -2225,12 +2225,13 @@ export async function getOrganisationBillingAccessState(organisationId: number) 
     return {
       billingStatus: normalizeBillingStatus(organisation.billingStatus, billingPlan),
       stripeSubscriptionId: organisation.stripeSubscriptionId ?? null,
+      trialEndsAt: organisation.trialEndsAt ?? null,
     };
   }
 
   await ensureBillingCycleSchema();
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
-    `SELECT billing_plan, billing_status, stripe_subscription_id
+    `SELECT billing_plan, billing_status, stripe_subscription_id, trial_ends_at
      FROM organisations
      WHERE id = ?
      LIMIT 1`,
@@ -2244,6 +2245,7 @@ export async function getOrganisationBillingAccessState(organisationId: number) 
   return {
     billingStatus: normalizeBillingStatus(row.billing_status, billingPlan),
     stripeSubscriptionId: row.stripe_subscription_id ? String(row.stripe_subscription_id) : null,
+    trialEndsAt: row.trial_ends_at ? new Date(row.trial_ends_at).toISOString() : null,
   };
 }
 

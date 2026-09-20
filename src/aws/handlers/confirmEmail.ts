@@ -1,6 +1,6 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
-import { confirmRegisteredUserEmail, getOrganisationName } from '../shared/db.js';
+import { confirmRegisteredUserEmail, getOrganisationBillingSummary, getOrganisationName } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
 import { signUserToken } from '../shared/auth.js';
@@ -74,9 +74,10 @@ export async function handler(event: ConfirmationEvent) {
       }
     }
 
+    const billing = await getOrganisationBillingSummary(user.organisationId);
     return jsonResponse(200, {
       success: true,
-      token: signUserToken(user),
+      token: signUserToken({ ...user, trialEndsAt: billing.status === 'trialing' ? billing.trialEndsAt : null }),
       user,
     });
   } catch (error) {

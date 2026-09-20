@@ -203,7 +203,7 @@ export function normalizeBillingCycle(value: unknown): BillingCycle {
 }
 
 export function normalizeBillingStatus(value: unknown, planId: BillingPlanId): BillingStatus {
-  if (value === 'trialing' || value === 'active' || value === 'past_due' || value === 'canceled' || value === 'inactive') {
+  if (value === 'trialing' || value === 'active' || value === 'past_due' || value === 'paused' || value === 'canceled' || value === 'inactive') {
     return value;
   }
   return planId === 'legacy' ? 'legacy' : 'trialing';
@@ -245,6 +245,11 @@ export function resolveAllowedWebRoutes(summary: OrganisationBillingSummary, rol
 }
 
 export function isBillingActive(summary: OrganisationBillingSummary) {
+  // Do not extend an unpaid trial just because Stripe's end-of-trial webhook
+  // has not arrived yet. Paid subscriptions are reconciled independently.
+  if (summary.status === 'trialing' && summary.trialEndsAt && Date.parse(summary.trialEndsAt) <= Date.now()) {
+    return false;
+  }
   return ACTIVE_BILLING_STATUSES.has(summary.status);
 }
 

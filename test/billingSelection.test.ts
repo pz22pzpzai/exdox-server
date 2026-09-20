@@ -10,6 +10,7 @@ const {
   buildEntitlements,
   canAccessWorkspace,
   hasFeature,
+  isBillingActive,
   resolveAllowedWebRoutes,
   resolveSelfServeSubscriptionSelection,
 } = await import('../src/aws/shared/billing.js');
@@ -85,4 +86,15 @@ test('unsupported one-user allowances and plan combinations are rejected', () =>
       message: /selected plan allowance is not available/i,
     });
   }
+});
+
+test('a 14-day trial stops granting workspace access when its deadline passes', () => {
+  const trial = billingFor('capture', 'trialing');
+  trial.trialEndsAt = new Date(Date.now() + 60_000).toISOString();
+  assert.equal(isBillingActive(trial), true);
+  trial.trialEndsAt = new Date(Date.now() - 60_000).toISOString();
+  assert.equal(isBillingActive(trial), false);
+  assert.deepEqual(resolveAllowedWebRoutes(trial, 'Business_Admin'), ['/billing', '/settings']);
+  assert.equal(isBillingActive(billingFor('capture', 'paused')), false);
+  assert.equal(isBillingActive(billingFor('capture', 'active')), true);
 });

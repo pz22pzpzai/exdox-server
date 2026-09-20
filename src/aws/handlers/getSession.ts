@@ -40,6 +40,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
           role: storedUser.role,
           status: 'active',
           emailConfirmationDueAt: null,
+          trialEndsAt: tokenUser.trialEndsAt,
         };
         refreshedToken = signUserToken(user);
       }
@@ -56,6 +57,10 @@ export async function handler(event: APIGatewayProxyEventV2) {
         error: 'billing_inactive',
         message: 'This workspace subscription is no longer active. The business owner can restart or update billing to restore access.',
       });
+    }
+    if (user.trialEndsAt && billing.status === 'active') {
+      user = { ...user, trialEndsAt: null };
+      refreshedToken = signUserToken(user);
     }
     const isOwner = await isOrganisationOwner(user);
     const allowedWebRoutes = resolveAllowedWebRoutes(billing, user.role)

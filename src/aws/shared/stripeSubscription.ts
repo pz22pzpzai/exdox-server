@@ -18,7 +18,7 @@ import {
 import { awsEnv } from './env.js';
 
 function toStripeBillingStatus(status: string) {
-  if (status === 'trialing' || status === 'active' || status === 'past_due' || status === 'canceled') {
+  if (status === 'trialing' || status === 'active' || status === 'past_due' || status === 'paused' || status === 'canceled') {
     return status;
   }
   return 'inactive';
@@ -72,6 +72,20 @@ export async function syncStripeSubscription(subscription: Stripe.Subscription) 
 
   if (!organisationId) {
     return null;
+  }
+
+  // A completed paid continuation replaces the paused trial. Stripe can deliver
+  // the old trial's cancellation/update after the new subscription's event.
+  const currentBilling = await getOrganisationBillingSummary(organisationId);
+  if (
+    currentBilling.stripeSubscriptionId
+    && currentBilling.stripeSubscriptionId !== subscription.id
+    && currentBilling.status === 'active'
+  ) {
+    return currentBilling;
+  }
+  if (subscription.status === 'incomplete' || subscription.status === 'incomplete_expired') {
+    return currentBilling;
   }
 
   const firstItem = subscription.items.data[0];
@@ -157,6 +171,16 @@ export async function reconcileStripeSubscription(
       throw error;
     }
 
+    if (currentSubscription.status === 'paused' && billing.stripeCustomerId) {
+      const candidates = await stripe.subscriptions.list({ customer: billing.stripeCustomerId, status: 'active', limit: 10 });
+      const paidContinuation = candidates.data.find((subscription) =>
+        subscription.metadata.organisationId === String(organisationId)
+        && subscription.metadata.previousSubscriptionId === currentSubscription.id);
+      if (paidContinuation) {
+        await syncStripeSubscription(paidContinuation);
+        return getOrganisationBillingSummary(organisationId);
+      }
+    }
     await syncStripeSubscription(currentSubscription);
     return getOrganisationBillingSummary(organisationId);
   }

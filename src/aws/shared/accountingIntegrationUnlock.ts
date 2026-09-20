@@ -62,11 +62,12 @@ export async function getAccountingIntegrationAccess(organisationId: number) {
     getAccountingIntegrationUnlock(organisationId),
   ]);
   const billingStatus = billing.billingStatus;
+  const trialOpen = billingStatus === 'trialing' && (!billing.trialEndsAt || Date.parse(billing.trialEndsAt) > Date.now());
   const trialUnlockPurchased = unlock?.status === 'unlocked' && unlock.stripeSubscriptionId === billing.stripeSubscriptionId;
   return {
     billingStatus,
-    available: billingStatus === 'active' || (billingStatus === 'trialing' && trialUnlockPurchased),
-    trialUnlockEligible: billingStatus === 'trialing' && !trialUnlockPurchased,
+    available: billingStatus === 'active' || (trialOpen && trialUnlockPurchased),
+    trialUnlockEligible: trialOpen && !trialUnlockPurchased,
     trialUnlockPurchasedAt: trialUnlockPurchased ? unlock.unlockedAt : null,
   };
 }
@@ -238,4 +239,11 @@ export async function removeUnusedAccountingIntegrationCredit(subscription: Stri
     creditInvoiceItemId: null,
     creditVoidedAt: new Date().toISOString(),
   } satisfies AccountingIntegrationUnlockRecord);
+}
+
+export async function hasUnusedAccountingIntegrationCredit(organisationId: number, subscriptionId: string, stripe: Stripe) {
+  const record = await getAccountingIntegrationUnlock(organisationId);
+  if (record?.status !== 'unlocked' || record.stripeSubscriptionId !== subscriptionId || !record.creditInvoiceItemId) return false;
+  const invoiceItem = await stripe.invoiceItems.retrieve(record.creditInvoiceItemId);
+  return !invoiceItem.invoice && invoiceItem.amount === -ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE;
 }
