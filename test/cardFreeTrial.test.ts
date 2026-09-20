@@ -5,6 +5,7 @@ import test from 'node:test';
 const checkout = readFileSync(new URL('../src/aws/shared/billingCheckout.ts', import.meta.url), 'utf8');
 const login = readFileSync(new URL('../src/aws/handlers/login.ts', import.meta.url), 'utf8');
 const subscription = readFileSync(new URL('../src/aws/shared/stripeSubscription.ts', import.meta.url), 'utf8');
+const webhook = readFileSync(new URL('../src/aws/handlers/stripeWebhook.ts', import.meta.url), 'utf8');
 
 test('initial Checkout starts a card-free trial and pauses it if unpaid', () => {
   assert.match(checkout, /payment_method_collection: startsTrial \? 'if_required' : 'always'/);
@@ -21,4 +22,5 @@ test('post-trial Checkout takes payment without restarting the trial and retains
   assert.match(checkout, /removeUnusedAccountingIntegrationCredit/);
   assert.match(login, /requiresBillingCheckout: true/);
   assert.match(subscription, /currentSubscription\.status === 'paused'/);
+  assert.match(webhook, /checkout\.session\.async_payment_succeeded'[\s\S]*?finishPaidContinuation/);
 });

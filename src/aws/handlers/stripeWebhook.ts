@@ -57,6 +57,13 @@ export async function handler(event: APIGatewayProxyEventV2) {
           const session = stripeEvent.data.object as Stripe.Checkout.Session;
           if (isAccountingIntegrationUnlockSession(session)) {
             await fulfillAccountingIntegrationUnlock(session, stripe);
+          } else {
+            const subscriptionId = typeof session.subscription === 'string' ? session.subscription : session.subscription?.id;
+            if (subscriptionId) {
+              const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+              await syncStripeSubscription(subscription);
+              await finishPaidContinuation(session, stripe);
+            }
           }
           break;
         }
