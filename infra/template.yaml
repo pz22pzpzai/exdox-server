@@ -791,6 +791,26 @@ Resources:
             Path: /billing/webhook
             Method: POST
 
+  SendTrialContinuationRemindersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/sendTrialContinuationReminders.handler
+      Timeout: 300
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: '*'
+      Events:
+        DailyTrialContinuationReminders:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 day)
+
   GetReceiptFunction:
     Type: AWS::Serverless::Function
     Properties:
