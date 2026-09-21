@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { awsEnv } from './env.js';
 import {
   deleteReceiptObject,
+  deleteReceiptPrefix,
   getReceiptJsonObject,
   getReceiptObjectBuffer,
   listAllReceiptJsonKeys,
@@ -25,6 +26,28 @@ import type {
 
 const SALES_ROOT = 'sales-workspace';
 const MONEY_SCALE = 100;
+
+export async function deleteSalesWorkspaceForOrganisation(organisationId: number) {
+  const addressKeys = await listAllReceiptJsonKeys(`${SALES_ROOT}/addresses/by-token/`);
+  const addresses = await Promise.all(
+    addressKeys
+      .filter((key) => key.endsWith('.json'))
+      .map(async (key) => {
+        try {
+          return { key, address: await getReceiptJsonObject<SalesSubmissionAddressRow>(key) };
+        } catch {
+          return null;
+        }
+      }),
+  );
+
+  await Promise.all([
+    ...addresses
+      .filter((entry): entry is { key: string; address: SalesSubmissionAddressRow } => entry?.address.organisationId === organisationId)
+      .map((entry) => deleteReceiptPrefix(entry.key)),
+    deleteReceiptPrefix(`${SALES_ROOT}/org-${organisationId}/`),
+  ]);
+}
 
 export async function getSalesWorkspace(user: AuthenticatedUser) {
   const [customers, documents, submissions, submissionAddress] = await Promise.all([

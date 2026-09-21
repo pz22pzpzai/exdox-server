@@ -3094,7 +3094,10 @@ export async function findUserById(organisationId: number, userId: number): Prom
   };
 }
 
-export async function deleteOrganisationAccount(organisationId: number) {
+export async function deleteOrganisationAccount(
+  organisationId: number,
+  billingIdentifiers?: { stripeSubscriptionId?: string | null },
+) {
   const userKeys = await listAllReceiptJsonKeys('users/');
   const users = await Promise.all(userKeys.map(async (key) => ({
     key,
@@ -3117,9 +3120,27 @@ export async function deleteOrganisationAccount(organisationId: number) {
     deleteReceiptPrefix(`organisations/${organisationId}.json`),
     deleteReceiptPrefix(`receipt-records/org-${organisationId}/`),
     deleteReceiptPrefix(`receipts/org-${organisationId}/`),
+    deleteReceiptPrefix(`vault/org-${organisationId}/`),
+    deleteReceiptPrefix(`incoming/org-${organisationId}/`),
     deleteReceiptPrefix(`expense-claims/org-${organisationId}/`),
+    deleteReceiptPrefix(`claim-evidence/org-${organisationId}/`),
+    deleteReceiptPrefix(`recycle-bin/org-${organisationId}/`),
     deleteReceiptPrefix(`supplier-rules/org-${organisationId}/`),
+    deleteReceiptPrefix(`company-cards/org-${organisationId}/`),
+    deleteReceiptPrefix(`company-card-exceptions/org-${organisationId}/`),
+    deleteReceiptPrefix(`departments/org-${organisationId}/`),
     deleteReceiptPrefix(buildOrganisationUserPointerPrefix(organisationId)),
+    deleteReceiptPrefix(`xero-connections/org-${organisationId}.json`),
+    deleteReceiptPrefix(`xero-connections/org-${organisationId}-settings.json`),
+    deleteReceiptPrefix(`xero-publications/org-${organisationId}/`),
+    deleteReceiptPrefix(`billing-addons/org-${organisationId}-`),
+    deleteReceiptPrefix(`billing-notifications/free-trials/organisation-${organisationId}.json`),
+    ...(billingIdentifiers?.stripeSubscriptionId
+      ? [
+          deleteReceiptPrefix(`billing-notifications/free-trials/${billingIdentifiers.stripeSubscriptionId}.json`),
+          deleteReceiptPrefix(`billing-notifications/trial-continuation/${billingIdentifiers.stripeSubscriptionId}-`),
+        ]
+      : []),
     ...organisationUserKeys.map((key) => deleteReceiptPrefix(key)),
     ...organisationDeletedRecordKeys.map((key) => deleteReceiptPrefix(key)),
   ]);

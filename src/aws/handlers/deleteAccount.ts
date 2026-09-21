@@ -7,6 +7,7 @@ import { deleteOrganisationAccount, findUserByEmail, getOrganisationBillingSumma
 import { awsEnv } from '../shared/env.js';
 import { sanitizeText } from '../shared/helpers.js';
 import { jsonResponse } from '../shared/http.js';
+import { deleteSalesWorkspaceForOrganisation } from '../shared/salesWorkspaceStore.js';
 import { isStripeResourceMissing } from '../shared/stripeSubscription.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
@@ -73,7 +74,10 @@ export async function handler(event: APIGatewayProxyEventV2) {
       }
     }
 
-    await deleteOrganisationAccount(authenticatedUser.organisationId);
+    await deleteSalesWorkspaceForOrganisation(authenticatedUser.organisationId);
+    await deleteOrganisationAccount(authenticatedUser.organisationId, {
+      stripeSubscriptionId: billing.stripeSubscriptionId,
+    });
 
     return jsonResponse(200, {
       success: true,
@@ -95,7 +99,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     return jsonResponse(statusCode, {
       success: false,
       error: code,
-      message: 'We could not complete account deletion. No further deletion steps will be attempted until you try again.',
+      message: 'We could not complete account deletion. Please try again. If the problem continues, contact Exdox support so we can confirm what remains to be removed.',
     });
   }
 }
