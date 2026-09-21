@@ -14,6 +14,7 @@ import {
 } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
+import { sendNewWorkspaceSignupNotificationWithRetry } from '../shared/freeTrialNotification.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
@@ -175,6 +176,24 @@ export async function handler(event: APIGatewayProxyEventV2) {
       monthlyDocumentLimit: billingSelection.monthlyDocumentLimit,
       includedUsers: billingSelection.includedUsers,
     });
+
+    try {
+      await sendNewWorkspaceSignupNotificationWithRetry({
+        organisationId: user.organisationId,
+        organisationName: workspaceName,
+        ownerName: user.fullName,
+        ownerEmail: user.email,
+        planId: billingSelection.planId,
+        includedUsers: billingSelection.includedUsers,
+        monthlyDocuments: billingSelection.monthlyDocumentLimit,
+        source: 'registration',
+      });
+    } catch (error) {
+      console.error('Could not send internal signup notification.', {
+        organisationId: user.organisationId,
+        message: error instanceof Error ? error.message : 'Unknown email error',
+      });
+    }
 
     let confirmationDelivered = false;
     if (user.inviteToken) {
