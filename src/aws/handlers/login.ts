@@ -64,6 +64,14 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
+    if (user.status === 'pending_confirmation' && user.role === 'Standard_Employee') {
+      return jsonResponse(403, {
+        success: false,
+        error: 'email_confirmation_required',
+        message: 'Confirm your email address using the Exdox email before signing in. You can request a new confirmation link below.',
+      });
+    }
+
     let billing = await getOrganisationBillingSummary(user.organisationId);
     try {
       billing = await reconcileStripeSubscription(user.organisationId, billing);

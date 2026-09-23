@@ -4,6 +4,7 @@ import { hashPassword, verifyPasswordResetToken } from '../shared/auth.js';
 import { findUserByEmail, updateUserPassword } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
+import { meetsPasswordRequirements, passwordRequirementsMessage } from '../shared/passwordPolicy.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
@@ -20,11 +21,11 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
-    if (password.length < 8) {
+    if (!meetsPasswordRequirements(password)) {
       return jsonResponse(400, {
         success: false,
         error: 'weak_password',
-        message: 'Use a password with at least 8 characters.',
+        message: passwordRequirementsMessage,
       });
     }
 

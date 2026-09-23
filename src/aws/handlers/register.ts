@@ -14,12 +14,14 @@ import {
 } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
+import { meetsPasswordRequirements, passwordRequirementsMessage } from '../shared/passwordPolicy.js';
 import { sendNewWorkspaceSignupNotificationWithRetry } from '../shared/freeTrialNotification.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
     const email = sanitizeText(body.email).toLowerCase();
+    const confirmEmail = sanitizeText(body.confirmEmail).toLowerCase();
     const password = sanitizeText(body.password);
     const confirmPassword = sanitizeText(body.confirmPassword);
     const fullName = sanitizeText(body.fullName) || null;
@@ -33,11 +35,19 @@ export async function handler(event: APIGatewayProxyEventV2) {
         ? 'sole_trader'
         : 'owner';
 
-    if (!email || !password || !confirmPassword) {
+    if (!email || !confirmEmail || !password || !confirmPassword) {
       return jsonResponse(400, {
         success: false,
         error: 'missing_credentials',
-        message: 'Provide an email address and enter the password twice to create an account.',
+        message: 'Enter your email address twice and your password twice to create an account.',
+      });
+    }
+
+    if (email !== confirmEmail) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'email_mismatch',
+        message: 'The email addresses do not match. Enter the same email address in both fields.',
       });
     }
 
@@ -57,11 +67,11 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
-    if (password.length < 8) {
+    if (!meetsPasswordRequirements(password)) {
       return jsonResponse(400, {
         success: false,
         error: 'weak_password',
-        message: 'Use a password with at least 8 characters.',
+        message: passwordRequirementsMessage,
       });
     }
 

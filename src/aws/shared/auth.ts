@@ -130,6 +130,9 @@ export function requireAuthenticatedUser(event: APIGatewayProxyEventV2): Authent
       throw unauthorized('The free trial has ended. Sign in to continue with a paid monthly subscription.');
     }
     if (status === 'pending_confirmation') {
+      if (role === 'Standard_Employee') {
+        throw unauthorized('Confirm your email address before signing in.');
+      }
       const confirmationDeadline = emailConfirmationDueAt ? Date.parse(emailConfirmationDueAt) : Number.NaN;
       if (!Number.isFinite(confirmationDeadline) || confirmationDeadline <= Date.now()) {
         throw unauthorized('Your three-day email confirmation period has ended. Confirm your email address to continue.');
