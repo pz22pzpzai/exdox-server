@@ -34,6 +34,7 @@ jobs:
       STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
       XERO_CLIENT_ID: ${{ secrets.XERO_CLIENT_ID }}
       XERO_CLIENT_SECRET: ${{ secrets.XERO_CLIENT_SECRET }}
+      MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
       STRIPE_CHECKOUT_SUCCESS_URL: ${{ secrets.STRIPE_CHECKOUT_SUCCESS_URL }}
       STRIPE_CHECKOUT_CANCEL_URL: ${{ secrets.STRIPE_CHECKOUT_CANCEL_URL }}
       STRIPE_BILLING_PORTAL_RETURN_URL: ${{ secrets.STRIPE_BILLING_PORTAL_RETURN_URL }}
@@ -161,6 +162,7 @@ jobs:
           add_if_set "StripeWebhookSecret" "$STRIPE_WEBHOOK_SECRET"
           add_if_set "XeroClientId" "$XERO_CLIENT_ID"
           add_if_set "XeroClientSecret" "$XERO_CLIENT_SECRET"
+          add_if_set "MapboxAccessToken" "$MAPBOX_ACCESS_TOKEN"
           add_if_set "StripePriceCaptureMonthly" "$STRIPE_PRICE_CAPTURE_MONTHLY"
           add_if_set "StripePriceCaptureAnnual" "$STRIPE_PRICE_CAPTURE_ANNUAL"
           add_if_set "StripePriceControlMonthly" "$STRIPE_PRICE_CONTROL_MONTHLY"

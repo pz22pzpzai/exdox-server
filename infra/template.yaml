@@ -79,6 +79,10 @@ Parameters:
     Type: String
     Default: ''
     NoEcho: true
+  MapboxAccessToken:
+    Type: String
+    Default: ''
+    NoEcho: true
   StripeCheckoutSuccessUrl:
     Type: String
     Default: 'https://exdox.co.uk/billing?checkout=success'
@@ -145,6 +149,7 @@ Globals:
         STRIPE_WEBHOOK_SECRET: !Ref StripeWebhookSecret
         XERO_CLIENT_ID: !Ref XeroClientId
         XERO_CLIENT_SECRET: !Ref XeroClientSecret
+        MAPBOX_ACCESS_TOKEN: !Ref MapboxAccessToken
         STRIPE_CHECKOUT_SUCCESS_URL: !Ref StripeCheckoutSuccessUrl
         STRIPE_CHECKOUT_CANCEL_URL: !Ref StripeCheckoutCancelUrl
         STRIPE_BILLING_PORTAL_RETURN_URL: !Ref StripeBillingPortalReturnUrl
@@ -330,6 +335,19 @@ Resources:
           Properties:
             RestApiId: !Ref ReceiptApi
             Path: /claims
+            Method: POST
+
+  CalculateMileageRouteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/calculateMileageRoute.handler
+      Timeout: 20
+      Events:
+        CalculateMileageRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /mileage/route
             Method: POST
 
   AttachReceiptToClaimFunction:
