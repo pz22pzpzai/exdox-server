@@ -14,6 +14,8 @@ This repository contains the Exdox API and AWS SAM deployment. Source: `https://
 
 `POST /mileage/route` requires an authenticated Exdox session and two UK postcodes. The handler uses Mapbox Temporary Geocoding v6 for exact postcode centres, then Directions driving routes and alternatives. It returns miles to one decimal place, travel time, and main road names. The website offers route selection but retains manual mileage adjustment because the actual journey may differ from the suggested route. The Mapbox access token is supplied only to the server through the `MAPBOX_ACCESS_TOKEN` protected `prod` GitHub environment secret and the SAM `MapboxAccessToken` parameter. Never commit or print the token. Mapbox usage is subject to account limits; no automatic paid upgrade is configured.
 
+The protected `prod` environment secret was added on 2026-09-26. A subsequent push to `main` triggers deployment with this setting. The project owner checks the deployment workflow and live website.
+
 ## Caveats
 
 - The Android app is a separate project; this website routing work does not change its mileage form.
