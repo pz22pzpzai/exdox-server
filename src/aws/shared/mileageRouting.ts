@@ -163,7 +163,7 @@ export async function calculateMileageRoutes(
       code?: string;
       routes?: DirectionsRoute[];
     }>(url, fetcher);
-    if (payload.code !== 'Ok' || !payload.routes?.length) {
+    if (payload.code !== 'Ok' || !payload.routes?.length || !Number.isFinite(payload.routes[0].distance) || Number(payload.routes[0].distance) <= 0) {
       throw new MileageRoutingError('No driving route was found between these postcodes. Enter the mileage manually.', 422, 'route_not_found');
     }
     return payload.routes;
