@@ -16,6 +16,8 @@ This repository contains the Exdox API and AWS SAM deployment. Source: `https://
 
 The protected `prod` environment secret was added on 2026-09-26. A subsequent push to `main` triggers deployment with this setting. The project owner checks the deployment workflow and live website.
 
+The route API now accepts `includeMap: true` for the Android mileage sheet and website picker. It requests simplified Mapbox route geometry and renders each suggested/alternative route through the Static Images API; the response includes image data but never the access token. If image rendering fails, miles remain available for manual review. Both clients use the same route distances.
+
 ## Caveats
 
 - The Android app is a separate project; this website routing work does not change its mileage form.
