@@ -735,7 +735,7 @@ function mileageClaimToCostRecord(claim: ExpenseClaimRow): ReceiptRow {
     claimId: null,
     status,
     category: 'Mileage',
-    description: journey || claim.description || 'Mileage journey',
+    description: claim.description || journey || 'Mileage journey',
     customer: null,
     receiptSource: 'mobile',
     sourceFilename: `Mileage journey ${claim.createdAt.slice(0, 10)}`,
