@@ -20,6 +20,8 @@ The route API now accepts `includeMap: true` for the Android mileage sheet and w
 
 For multi-stop Android claims, `/mileage/route` also accepts optional `stops: string[]` in journey order. All postcodes are exact-match geocoded. Directions calls contain up to 25 ordered coordinates; longer journeys are split into overlapping sections and their driving distances, durations, roads, and map geometry are combined. Multi-stop requests return one route; the original two-postcode alternatives remain unchanged. Each extra distinct postcode uses another geocoding request, and a route above 25 coordinates uses more than one Directions request, so Mapbox usage rises with stops. This endpoint has a 20-second Lambda timeout and Mapbox/account limits still apply; manual miles remain available if calculation cannot finish.
 
+The Android claim stores its full ordered postcode journey in the claim description. The synthetic mileage purchase row now prefers that description so reviewers see all stops in Purchases. Multi-stop API and purchase-row changes were pushed to `main` through commit `72ed1f4`; the owner checks the deployment workflow and live site.
+
 ## Caveats
 
 - The Android app is a separate project; this website routing work does not change its mileage form.
