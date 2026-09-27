@@ -72,3 +72,43 @@ test('adds a Mapbox route preview without exposing the token in the result', asy
   assert.equal(result.routes[0].mapImage, 'data:image/png;base64,iVBORw==');
   assert.doesNotMatch(JSON.stringify(result), /public-token/);
 });
+
+test('visits stops in order and recalculates a changed order', async () => {
+  const directions: string[] = [];
+  const locations: Record<string, number> = { 'SW1A 1AA': 1, 'WC2N 5DU': 2, 'EC1A 1BB': 3, 'W1A 0AX': 4 };
+  const fetcher = async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    if (url.pathname.includes('/geocode/')) {
+      const postcode = url.searchParams.get('q')!;
+      return Response.json({ features: [{ properties: { feature_type: 'postcode', name: postcode }, geometry: { coordinates: [locations[postcode], 51] } }] });
+    }
+    directions.push(url.pathname);
+    return Response.json({ code: 'Ok', routes: [{ distance: 1609.344, duration: 120, legs: [{ steps: [] }] }] });
+  };
+  const first = await calculateMileageRoutes('SW1A 1AA', 'W1A 0AX', 'token', fetcher as typeof fetch, false, ['WC2N 5DU', 'EC1A 1BB']);
+  const second = await calculateMileageRoutes('SW1A 1AA', 'W1A 0AX', 'token', fetcher as typeof fetch, false, ['EC1A 1BB', 'WC2N 5DU']);
+  assert.deepEqual(first.stops, ['WC2N 5DU', 'EC1A 1BB']);
+  assert.equal(first.routes[0].miles, 1);
+  assert.match(directions[0], /1,51;2,51;3,51;4,51/);
+  assert.match(directions[1], /1,51;3,51;2,51;4,51/);
+});
+
+test('splits journeys beyond 25 coordinates and combines driving distances', async () => {
+  const urls: URL[] = [];
+  const fetcher = async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    if (url.pathname.includes('/geocode/')) {
+      const postcode = url.searchParams.get('q')!;
+      return Response.json({ features: [{ properties: { feature_type: 'postcode', name: postcode }, geometry: { coordinates: [postcode.charCodeAt(0), 51] } }] });
+    }
+    urls.push(url);
+    return Response.json({ code: 'Ok', routes: [{ distance: 1609.344, duration: 120, legs: [{ steps: [] }] }] });
+  };
+  const stops = Array.from({ length: 26 }, (_, index) => `AB${index + 10} 1AA`);
+  const result = await calculateMileageRoutes('SW1A 1AA', 'WC2N 5DU', 'token', fetcher as typeof fetch, false, stops);
+  assert.equal(urls.length, 2);
+  assert.equal(urls[0].pathname.split(';').length, 25);
+  assert.equal(urls[1].pathname.split(';').length, 4);
+  assert.equal(result.routes[0].miles, 2);
+  assert.equal(result.stops?.length, 26);
+});

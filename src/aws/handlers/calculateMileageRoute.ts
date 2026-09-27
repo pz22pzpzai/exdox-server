@@ -15,7 +15,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     } catch {
       return jsonResponse(400, { success: false, error: 'invalid_request', message: 'Provide the journey postcodes.' });
     }
-    const result = await calculateMileageRoutes(body.startPostcode, body.endPostcode, process.env.MAPBOX_ACCESS_TOKEN ?? '', fetch, body.includeMap === true);
+    const result = await calculateMileageRoutes(body.startPostcode, body.endPostcode, process.env.MAPBOX_ACCESS_TOKEN ?? '', fetch, body.includeMap === true, body.stops);
     return jsonResponse(200, { success: true, ...result });
   } catch (error) {
     if (error instanceof MileageRoutingError) {

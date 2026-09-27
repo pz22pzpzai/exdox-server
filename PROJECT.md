@@ -18,6 +18,8 @@ The protected `prod` environment secret was added on 2026-09-26. A subsequent pu
 
 The route API now accepts `includeMap: true` for the Android mileage sheet and website picker. It requests simplified Mapbox route geometry and renders each suggested/alternative route through the Static Images API; the response includes image data but never the access token. If image rendering fails, miles remain available for manual review. Both clients use the same route distances.
 
+For multi-stop Android claims, `/mileage/route` also accepts optional `stops: string[]` in journey order. All postcodes are exact-match geocoded. Directions calls contain up to 25 ordered coordinates; longer journeys are split into overlapping sections and their driving distances, durations, roads, and map geometry are combined. Multi-stop requests return one route; the original two-postcode alternatives remain unchanged. Each extra distinct postcode uses another geocoding request, and a route above 25 coordinates uses more than one Directions request, so Mapbox usage rises with stops. This endpoint has a 20-second Lambda timeout and Mapbox/account limits still apply; manual miles remain available if calculation cannot finish.
+
 ## Caveats
 
 - The Android app is a separate project; this website routing work does not change its mileage form.
