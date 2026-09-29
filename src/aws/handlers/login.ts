@@ -87,7 +87,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
             message: twoFactor.emailEnabled ? 'Enter the code sent to your registered email, or use your authenticator.' : 'Enter the code from your authenticator app.',
           });
         }
-        if ((method !== 'email' && method !== 'authenticator') || !await verifyTwoFactor(user.id, code, method)) {
+        if ((method !== 'email' && method !== 'authenticator' && method !== 'recovery') || !await verifyTwoFactor(user.id, code, method)) {
           return jsonResponse(401, { success: false, error: 'invalid_two_factor_code', message: 'The verification code is incorrect or expired.' });
         }
       }

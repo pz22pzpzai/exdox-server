@@ -36,7 +36,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     if (action === 'disable') {
       const method = body.method;
       const codeMethod = body.codeMethod;
-      if ((method !== 'email' && method !== 'authenticator') || (codeMethod !== 'email' && codeMethod !== 'authenticator')) {
+      if ((method !== 'email' && method !== 'authenticator') || (codeMethod !== 'email' && codeMethod !== 'authenticator' && codeMethod !== 'recovery')) {
         return jsonResponse(400, { success: false, message: 'Choose a valid verification method.' });
       }
       if (!stored.passwordHash || !await verifyPassword(String(body.password ?? ''), stored.passwordHash)) {

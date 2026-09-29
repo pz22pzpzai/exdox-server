@@ -13,10 +13,11 @@ type State = {
   failures: number;
   lockedUntil: number;
   lastTotpStep: number;
+  recoveryCodeHashes: string[];
 };
 
 const blank = (): State => ({ emailEnabled: false, totpSecret: null, pendingTotpSecret: null,
-  emailCodeHash: null, emailCodeExpiresAt: 0, emailCodeSentAt: 0, failures: 0, lockedUntil: 0, lastTotpStep: -1 });
+  emailCodeHash: null, emailCodeExpiresAt: 0, emailCodeSentAt: 0, failures: 0, lockedUntil: 0, lastTotpStep: -1, recoveryCodeHashes: [] });
 const key = (id: number) => `security/two-factor/${id}.json`;
 const encryptionKey = crypto.scryptSync(awsEnv.jwtSecret, 'exdox-totp-secret-v1', 32);
 const ses = new SESv2Client({});
@@ -93,8 +94,10 @@ export async function enableAuthenticator(id: number, code: string) {
   const state = await readTwoFactor(id);
   if (!state.pendingTotpSecret || matchingStep(unseal(state.pendingTotpSecret), code) < 0) throw new Error('Enter the current six-digit authenticator code.');
   state.totpSecret = state.pendingTotpSecret; state.pendingTotpSecret = null;
+  const recoveryCodes = Array.from({ length: 8 }, () => crypto.randomBytes(6).toString('hex').toUpperCase());
+  state.recoveryCodeHashes = recoveryCodes.map(hashCode);
   await save(id, state);
-  return twoFactorStatus(state);
+  return { ...twoFactorStatus(state), recoveryCodes };
 }
 
 export async function sendEmailCode(id: number, email: string, purpose: 'login' | 'setup') {
@@ -119,7 +122,7 @@ export async function enableEmail(id: number, code: string) {
   state.emailEnabled = true; state.emailCodeHash = null; await save(id, state);
   return twoFactorStatus(state);
 }
-async function checkCode(id: number, state: State, code: string, method: 'email' | 'authenticator', setup = false) {
+async function checkCode(id: number, state: State, code: string, method: 'email' | 'authenticator' | 'recovery', setup = false) {
   if (state.lockedUntil > Date.now()) throw new Error('Too many attempts. Try again in 15 minutes.');
   let valid = false;
   if (method === 'email' && (state.emailEnabled || setup) && /^\d{6}$/.test(code) && state.emailCodeHash && state.emailCodeExpiresAt > Date.now()) {
@@ -131,20 +134,26 @@ async function checkCode(id: number, state: State, code: string, method: 'email'
     valid = step > state.lastTotpStep;
     if (valid) state.lastTotpStep = step;
   }
+  if (method === 'recovery' && state.totpSecret && /^[A-F0-9]{12}$/.test(code.toUpperCase())) {
+    const codeHash = hashCode(code.toUpperCase());
+    const index = state.recoveryCodeHashes.indexOf(codeHash);
+    valid = index >= 0;
+    if (valid) state.recoveryCodeHashes.splice(index, 1);
+  }
   if (valid) { state.failures = 0; state.lockedUntil = 0; }
   else { state.failures += 1; if (state.failures >= 5) { state.lockedUntil = Date.now() + 900_000; state.failures = 0; } }
   await save(id, state);
   return valid;
 }
-export async function verifyTwoFactor(id: number, code: string, method: 'email' | 'authenticator') {
+export async function verifyTwoFactor(id: number, code: string, method: 'email' | 'authenticator' | 'recovery') {
   const state = await readTwoFactor(id);
   return checkCode(id, state, code, method);
 }
-export async function disableTwoFactor(id: number, method: 'email' | 'authenticator', code: string, codeMethod: 'email' | 'authenticator') {
+export async function disableTwoFactor(id: number, method: 'email' | 'authenticator', code: string, codeMethod: 'email' | 'authenticator' | 'recovery') {
   const state = await readTwoFactor(id);
   if (!await checkCode(id, state, code, codeMethod)) throw new Error('The verification code is incorrect or expired.');
   if (method === 'email') state.emailEnabled = false;
-  else state.totpSecret = null;
+  else { state.totpSecret = null; state.recoveryCodeHashes = []; }
   await save(id, state);
   return twoFactorStatus(state);
 }
