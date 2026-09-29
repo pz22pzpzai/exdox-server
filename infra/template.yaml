@@ -429,12 +429,43 @@ Resources:
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref ReceiptBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+              Resource: '*'
       Events:
         LoginRoute:
           Type: Api
           Properties:
             RestApiId: !Ref ReceiptApi
             Path: /login
+            Method: POST
+
+  TwoFactorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/twoFactor.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+              Resource: '*'
+      Events:
+        TwoFactorGetRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /two-factor
+            Method: GET
+        TwoFactorPostRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /two-factor
             Method: POST
 
   RegisterFunction:

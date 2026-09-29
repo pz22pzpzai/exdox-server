@@ -24,6 +24,8 @@ The Android claim stores its full ordered postcode journey in the claim descript
 
 ## Caveats
 
+- Two-factor login (2026-09-29): `/two-factor` GET/POST stores per-user email and authenticator settings in encrypted S3 objects under `security/two-factor/`; TOTP secrets are additionally encrypted with a key derived from `JWT_SECRET`. `/login` sends a six-digit email code through SES when email 2FA is enabled and withholds the session until an email or authenticator code is verified. Codes expire after 10 minutes, email resends have a one-minute cooldown, and five failed attempts pause verification for 15 minutes. The new SAM route and SES permissions require server deployment before the website UI. Account deletion purges these objects. Do not rotate `JWT_SECRET` without a TOTP migration because existing authenticator secrets would become unreadable. The owner checks deployment and real SES delivery; never delete or move mobile signing keystores or signing details.
+
 - The Android app is a separate project; this website routing work does not change its mileage form.
 - Preserve unrelated working-tree changes. Do not commit build output or machine-specific files.
 - Do not inspect the live site or deployment workflow after a push; the project owner checks them.

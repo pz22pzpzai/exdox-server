@@ -3143,6 +3143,9 @@ export async function deleteOrganisationAccount(
   const organisationUserKeys = users
     .filter(({ user }) => user.organisationId === organisationId)
     .map(({ key }) => key);
+  const twoFactorUserIds = pool
+    ? (await pool.query<mysql.RowDataPacket[]>('SELECT id FROM users WHERE organisation_id = ?', [organisationId]))[0].map((row) => Number(row.id))
+    : users.filter(({ user }) => user.organisationId === organisationId).map(({ user }) => user.id);
 
   const deletedRecordKeys = await listAllReceiptJsonKeys('deleted/');
   const deletedRecords = await Promise.all(deletedRecordKeys.map(async (key) => ({
@@ -3179,6 +3182,7 @@ export async function deleteOrganisationAccount(
         ]
       : []),
     ...organisationUserKeys.map((key) => deleteReceiptPrefix(key)),
+    ...twoFactorUserIds.map((id) => deleteReceiptPrefix(`security/two-factor/${id}.json`)),
     ...organisationDeletedRecordKeys.map((key) => deleteReceiptPrefix(key)),
   ]);
 

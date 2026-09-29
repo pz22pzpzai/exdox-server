@@ -15,6 +15,7 @@ import {
 import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
 import { reconcileStripeSubscription } from '../shared/stripeSubscription.js';
+import { hasTwoFactor, readTwoFactor, sendEmailCode, verifyTwoFactor } from '../shared/twoFactor.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
@@ -70,6 +71,26 @@ export async function handler(event: APIGatewayProxyEventV2) {
         error: 'email_confirmation_required',
         message: 'Confirm your email address using the Exdox email before signing in. You can request a new confirmation link below.',
       });
+    }
+
+    if (user.status === 'active') {
+      const twoFactor = await readTwoFactor(user.id);
+      if (hasTwoFactor(twoFactor)) {
+        const code = sanitizeText(body.twoFactorCode);
+        const method = body.twoFactorMethod;
+        if (!code) {
+          if (twoFactor.emailEnabled) await sendEmailCode(user.id, user.email, 'login');
+          return jsonResponse(200, {
+            success: true, requiresTwoFactor: true,
+            emailEnabled: twoFactor.emailEnabled,
+            authenticatorEnabled: Boolean(twoFactor.totpSecret),
+            message: twoFactor.emailEnabled ? 'Enter the code sent to your registered email, or use your authenticator.' : 'Enter the code from your authenticator app.',
+          });
+        }
+        if ((method !== 'email' && method !== 'authenticator') || !await verifyTwoFactor(user.id, code, method)) {
+          return jsonResponse(401, { success: false, error: 'invalid_two_factor_code', message: 'The verification code is incorrect or expired.' });
+        }
+      }
     }
 
     let billing = await getOrganisationBillingSummary(user.organisationId);
@@ -233,9 +254,10 @@ export async function handler(event: APIGatewayProxyEventV2) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Login failed.';
-    return jsonResponse(500, {
+    const locked = message === 'Too many attempts. Try again in 15 minutes.';
+    return jsonResponse(locked ? 429 : 500, {
       success: false,
-      error: 'login_failed',
+      error: locked ? 'two_factor_locked' : 'login_failed',
       message,
     });
   }
