@@ -24,6 +24,7 @@ import { getHistoricalExchangeRate } from '../shared/exchangeRates.js';
 import { type AuthenticatedUser, type DocumentType, type ExpenseRequestOptions, type NormalizedExpenseDocument } from '../types.js';
 import { calculateContentSha256 } from '../shared/contentHash.js';
 import { matchSalesCustomerName, recordSalesSubmission } from '../shared/salesWorkspaceStore.js';
+import { workspaceCountryLocale } from '../shared/workspaceCountry.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
@@ -68,6 +69,9 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
     payment_method: parsed.payment_method,
     skip_processing: parsed.skip_processing,
   });
+  const taxProfile = await getOrganisationTaxProfile(user.organisationId);
+  requestedOptions.country = taxProfile.country;
+  if (!parsed.locale) requestedOptions.locale = workspaceCountryLocale(taxProfile.country);
   const options = user.role === 'Standard_Employee' && requestedOptions.workspaceContext === 'cost'
     ? { ...requestedOptions, paymentMethod: 'cash_personal' as const }
     : requestedOptions;
@@ -115,7 +119,6 @@ async function processMultipartEvent(event: APIGatewayProxyEventV2, user: Authen
         buffer: fileBuffer,
         options,
       });
-  const taxProfile = await getOrganisationTaxProfile(user.organisationId);
   const vatAdjustedDocument = applyVatRegistrationRules(extractedDocument, taxProfile);
   const supplierRuleOutcome = await applySupplierRulesToDocument({
     organisationId: user.organisationId,
@@ -232,6 +235,9 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
     payment_method: payload.payment_method,
     skip_processing: payload.skip_processing,
   });
+  const taxProfile = await getOrganisationTaxProfile(user.organisationId);
+  requestedOptions.country = taxProfile.country;
+  if (!payload.locale) requestedOptions.locale = workspaceCountryLocale(taxProfile.country);
   const options = user.role === 'Standard_Employee' && requestedOptions.workspaceContext === 'cost'
     ? { ...requestedOptions, paymentMethod: 'cash_personal' as const }
     : requestedOptions;
@@ -273,7 +279,6 @@ async function processJsonEvent(event: APIGatewayProxyEventV2, user: Authenticat
         buffer: fileBuffer,
         options,
       });
-  const taxProfile = await getOrganisationTaxProfile(user.organisationId);
   const vatAdjustedDocument = applyVatRegistrationRules(extractedDocument, taxProfile);
   const supplierRuleOutcome = await applySupplierRulesToDocument({
     organisationId: user.organisationId,
@@ -514,6 +519,7 @@ async function processMultipartSalesPdf(input: {
   options: ExpenseRequestOptions;
   splitMode: 'one_document_per_page' | 'auto_detect';
 }) {
+  const taxProfile = await getOrganisationTaxProfile(input.user.organisationId);
   const extractedDocuments = await processSalesPdfDocuments({
     fileName: input.fileName,
     buffer: input.fileBuffer,
@@ -521,7 +527,6 @@ async function processMultipartSalesPdf(input: {
     splitMode: input.splitMode,
   });
   const receiptIds: number[] = [];
-  const taxProfile = await getOrganisationTaxProfile(input.user.organisationId);
   for (const [index, extracted] of extractedDocuments.entries()) {
     const billing = await getOrganisationBillingSummary(input.user.organisationId);
     if (!canProcessDocument(billing)) break;

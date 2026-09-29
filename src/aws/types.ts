@@ -113,6 +113,7 @@ export type BillingStatus = 'trialing' | 'active' | 'past_due' | 'paused' | 'can
 export type BillingCycle = 'monthly' | 'annual' | 'custom';
 
 export type ExpenseRequestOptions = {
+  country?: import('./shared/workspaceCountry.js').WorkspaceCountry;
   locale: string;
   extractLineItems: boolean;
   documentType: DocumentType;
@@ -360,6 +361,7 @@ export type ReconciliationCandidate = Pick<
 };
 
 export type OrganisationSettings = {
+  country: import('./shared/workspaceCountry.js').WorkspaceCountry;
   organisationId: number;
   organisationName: string;
   baseCurrency: string;

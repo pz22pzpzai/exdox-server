@@ -24,11 +24,11 @@ export async function handler(event: APIGatewayProxyEventV2) {
         message: 'Provide a start postcode, end postcode, and a positive total miles value.',
       });
     }
-    const organisationSettings = claimType === 'mileage' ? await getOrganisationSettings(user.organisationId) : null;
+    const organisationSettings = await getOrganisationSettings(user.organisationId);
     const mileageRate = claimType === 'mileage'
       ? (Number.isFinite(submittedMileageRate) && submittedMileageRate > 0 && submittedMileageRate <= 100
         ? Number(submittedMileageRate.toFixed(4))
-        : organisationSettings!.mileageRate)
+        : organisationSettings.mileageRate)
       : null;
     const mileageTotalAmount = claimType === 'mileage' ? Number((totalMiles * mileageRate!).toFixed(2)) : null;
     const claim = await createExpenseClaim({
@@ -36,7 +36,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       createdByUserId: user.id,
       name: sanitizeText(body.name) || `${claimType === 'mileage' ? 'Mileage claim' : 'Expense Claim'} ${new Date().toISOString().slice(0, 10)}`,
       description: sanitizeText(body.description) || null,
-      currency: sanitizeText(body.currency) || 'GBP',
+      currency: sanitizeText(body.currency) || organisationSettings.baseCurrency,
       claimType,
       mileageStartPostcode: claimType === 'mileage' ? startPostcode : null,
       mileageEndPostcode: claimType === 'mileage' ? endPostcode : null,

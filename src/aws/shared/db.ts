@@ -5,6 +5,7 @@ import mysql from 'mysql2/promise';
 
 import { awsEnv } from './env.js';
 import { sanitizeText } from './helpers.js';
+import { workspaceCountry, workspaceCountryDefaults, type WorkspaceCountry } from './workspaceCountry.js';
 import {
   deleteReceiptObject,
   deleteReceiptPrefix,
@@ -141,6 +142,7 @@ async function buildIamAuthToken() {
 type StoredOrganisation = {
   id: number;
   name: string;
+  country?: WorkspaceCountry;
   baseCurrency?: string;
   isVatRegistered?: boolean;
   defaultTaxRateCosts?: string;
@@ -181,6 +183,7 @@ let companyCardSchemaReady: Promise<void> | null = null;
 let billingCycleSchemaReady: Promise<void> | null = null;
 let expenseClaimMileageSchemaReady: Promise<void> | null = null;
 let organisationMileageRateSchemaReady: Promise<void> | null = null;
+let organisationCountrySchemaReady: Promise<void> | null = null;
 let recycleBinSchemaReady: Promise<void> | null = null;
 
 type RecycleBinItemType = 'receipt' | 'claim';
@@ -203,8 +206,9 @@ type RecycleBinItem = {
 };
 
 function normalizeMileageRate(value: unknown, fallback = 0.45) {
+  if (value === null || value === undefined || value === '') return fallback;
   const rate = Number(value);
-  return Number.isFinite(rate) && rate > 0 && rate <= 100 ? Number(rate.toFixed(4)) : fallback;
+  return Number.isFinite(rate) && rate >= 0 && rate <= 100 ? Number(rate.toFixed(4)) : fallback;
 }
 
 async function ensureOrganisationMileageRateSchema() {
@@ -215,6 +219,14 @@ async function ensureOrganisationMileageRateSchema() {
     await pool.execute('ALTER TABLE organisations ADD COLUMN IF NOT EXISTS mileage_rate DECIMAL(10, 4) NOT NULL DEFAULT 0.4500 AFTER default_tax_rate_costs');
   })();
   await organisationMileageRateSchemaReady;
+}
+
+async function ensureOrganisationCountrySchema() {
+  if (!pool) return;
+  organisationCountrySchemaReady ??= (async () => {
+    await pool.execute("ALTER TABLE organisations ADD COLUMN IF NOT EXISTS country CHAR(2) NOT NULL DEFAULT 'GB'");
+  })();
+  await organisationCountrySchemaReady;
 }
 
 async function ensureExpenseClaimMileageSchema() {
@@ -1157,6 +1169,7 @@ export async function createUser(input: {
   billingCycle?: BillingCycle | null;
   monthlyDocumentLimit?: number | null;
   includedUsers?: number | null;
+  country?: WorkspaceCountry;
 }): Promise<UserRecord> {
   const email = normalizeEmail(input.email);
   const fullName = normalizeName(input.fullName);
@@ -1165,6 +1178,8 @@ export async function createUser(input: {
   const billingCycle = normalizeBillingCycle(input.billingCycle);
   const initialBillingStatus = billingPlan === 'legacy' ? 'legacy' : 'inactive';
   const confirmationToken = crypto.randomBytes(24).toString('hex');
+  const country = workspaceCountry(input.country);
+  const regionalDefaults = workspaceCountryDefaults(country);
 
   if (!pool) {
     const existing = await findUserByEmail(email);
@@ -1178,6 +1193,7 @@ export async function createUser(input: {
       billingCycle,
       input.monthlyDocumentLimit,
       input.includedUsers,
+      country,
     );
     const user = buildStoredUser({
       id: Date.now(),
@@ -1194,6 +1210,8 @@ export async function createUser(input: {
     return toUserRecord(user);
   }
 
+  await ensureOrganisationMileageRateSchema();
+  await ensureOrganisationCountrySchema();
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
@@ -1201,19 +1219,25 @@ export async function createUser(input: {
     const [orgResult] = await connection.execute<mysql.ResultSetHeader>(
       `INSERT INTO organisations (
         name,
+        country,
+        base_currency,
         is_vat_registered,
         default_tax_rate_costs,
+        mileage_rate,
         billing_plan,
         billing_status,
         billing_cycle,
         trial_ends_at,
         monthly_document_limit,
         included_users
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         organisationName,
+        country,
+        regionalDefaults.baseCurrency,
         1,
-        '20% Standard',
+        regionalDefaults.defaultTaxRate,
+        regionalDefaults.mileageRate,
         billingPlan,
         initialBillingStatus,
         billingCycle,
@@ -2055,20 +2079,23 @@ export async function getOrganisationTaxProfile(organisationId: number) {
     try {
       const organisation = await getS3Organisation(organisationId);
       return {
+        country: workspaceCountry(organisation.country),
         isVatRegistered: (organisation as StoredOrganisation & { isVatRegistered?: boolean }).isVatRegistered !== false,
         defaultTaxRateCosts:
           (organisation as StoredOrganisation & { defaultTaxRateCosts?: string }).defaultTaxRateCosts || '20% Standard',
       };
     } catch {
       return {
+        country: 'GB' as WorkspaceCountry,
         isVatRegistered: true,
         defaultTaxRateCosts: '20% Standard',
       };
     }
   }
 
+  await ensureOrganisationCountrySchema();
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
-    `SELECT is_vat_registered, default_tax_rate_costs FROM organisations WHERE id = ? LIMIT 1`,
+    `SELECT country, is_vat_registered, default_tax_rate_costs FROM organisations WHERE id = ? LIMIT 1`,
     [organisationId],
   );
   const row = rows[0];
@@ -2077,6 +2104,7 @@ export async function getOrganisationTaxProfile(organisationId: number) {
   }
 
   return {
+    country: workspaceCountry(row.country),
     isVatRegistered: row.is_vat_registered == null ? true : Boolean(row.is_vat_registered),
     defaultTaxRateCosts: row.default_tax_rate_costs ? String(row.default_tax_rate_costs) : '20% Standard',
   };
@@ -2100,6 +2128,7 @@ export async function getOrganisationSettings(organisationId: number): Promise<O
     return {
       organisationId: organisation.id,
       organisationName: organisation.name,
+      country: workspaceCountry(organisation.country),
       baseCurrency: organisation.baseCurrency?.trim().toUpperCase() || 'GBP',
       isVatRegistered: (organisation as StoredOrganisation & { isVatRegistered?: boolean }).isVatRegistered !== false,
       defaultTaxRate:
@@ -2109,9 +2138,10 @@ export async function getOrganisationSettings(organisationId: number): Promise<O
   }
 
   await ensureOrganisationMileageRateSchema();
+  await ensureOrganisationCountrySchema();
 
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
-    `SELECT id, name, base_currency, is_vat_registered, default_tax_rate_costs, mileage_rate
+    `SELECT id, name, country, base_currency, is_vat_registered, default_tax_rate_costs, mileage_rate
      FROM organisations
      WHERE id = ?
      LIMIT 1`,
@@ -2125,6 +2155,7 @@ export async function getOrganisationSettings(organisationId: number): Promise<O
   return {
     organisationId: Number(row.id),
     organisationName: String(row.name),
+    country: workspaceCountry(row.country),
     baseCurrency: row.base_currency ? String(row.base_currency).trim().toUpperCase() : 'GBP',
     isVatRegistered: row.is_vat_registered == null ? true : Boolean(row.is_vat_registered),
     defaultTaxRate: row.default_tax_rate_costs ? String(row.default_tax_rate_costs) : '20% Standard',
@@ -2251,20 +2282,26 @@ export async function getOrganisationBillingAccessState(organisationId: number) 
 
 export async function updateOrganisationSettings(input: {
   organisationId: number;
+  country?: WorkspaceCountry;
   baseCurrency?: string;
   isVatRegistered: boolean;
   defaultTaxRate: string;
   mileageRate?: number;
 }) {
   const existingSettings = await getOrganisationSettings(input.organisationId);
-  const baseCurrency = normalizeCurrencyCode(input.baseCurrency ?? existingSettings.baseCurrency);
+  const country = workspaceCountry(input.country ?? existingSettings.country);
+  const countryChanged = country !== existingSettings.country;
+  const defaults = workspaceCountryDefaults(country);
+  const baseCurrency = normalizeCurrencyCode(input.baseCurrency ?? (countryChanged ? defaults.baseCurrency : existingSettings.baseCurrency));
+  const defaultTaxRate = sanitizeText(input.defaultTaxRate) || (countryChanged ? defaults.defaultTaxRate : existingSettings.defaultTaxRate);
   if (!pool) {
     const organisation = await getS3Organisation(input.organisationId);
     const next = {
       ...organisation,
+      country,
       baseCurrency,
       isVatRegistered: input.isVatRegistered,
-      defaultTaxRateCosts: sanitizeText(input.defaultTaxRate) || '20% Standard',
+      defaultTaxRateCosts: defaultTaxRate,
       mileageRate: normalizeMileageRate(input.mileageRate, existingSettings.mileageRate),
     };
     await putReceiptJsonObject(buildOrganisationKey(input.organisationId), next);
@@ -2274,9 +2311,9 @@ export async function updateOrganisationSettings(input: {
   await ensureOrganisationMileageRateSchema();
   await pool.execute(
     `UPDATE organisations
-     SET base_currency = ?, is_vat_registered = ?, default_tax_rate_costs = ?, mileage_rate = ?, updated_at = CURRENT_TIMESTAMP
+     SET country = ?, base_currency = ?, is_vat_registered = ?, default_tax_rate_costs = ?, mileage_rate = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
-    [baseCurrency, input.isVatRegistered ? 1 : 0, sanitizeText(input.defaultTaxRate) || '20% Standard', normalizeMileageRate(input.mileageRate, existingSettings.mileageRate), input.organisationId],
+    [country, baseCurrency, input.isVatRegistered ? 1 : 0, defaultTaxRate, normalizeMileageRate(input.mileageRate, existingSettings.mileageRate), input.organisationId],
   );
 
   return getOrganisationSettings(input.organisationId);
@@ -4372,14 +4409,17 @@ async function createS3Organisation(
   billingCycle: BillingCycle = 'monthly',
   monthlyDocumentLimit?: number | null,
   includedUsers?: number | null,
+  country: WorkspaceCountry = 'GB',
 ): Promise<StoredOrganisation> {
   const initialBillingStatus = (billingPlan === 'legacy' ? 'legacy' : 'inactive') as BillingStatus;
   const organisation = {
     id: Date.now(),
     name,
+    country,
+    baseCurrency: workspaceCountryDefaults(country).baseCurrency,
     isVatRegistered: true,
-    defaultTaxRateCosts: '20% Standard',
-    mileageRate: 0.45,
+    defaultTaxRateCosts: workspaceCountryDefaults(country).defaultTaxRate,
+    mileageRate: workspaceCountryDefaults(country).mileageRate,
     billingPlan,
     billingStatus: initialBillingStatus,
     billingCycle,

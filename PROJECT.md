@@ -28,3 +28,9 @@ The Android claim stores its full ordered postcode journey in the claim descript
 - Preserve unrelated working-tree changes. Do not commit build output or machine-specific files.
 - Do not inspect the live site or deployment workflow after a push; the project owner checks them.
 - Never delete or move a mobile app keystore or signing details. They belong to the separate app project.
+
+## Country-aware workspaces (2026-09-29)
+
+- Registration now stores GB, US, AU, CA, or one of 27 EUR-using countries and territories in `organisations.country`; existing rows default to GB. The API returns country in organisation settings and updates country, base currency, tax review default, and mileage rate. S3-backed organisations store the same fields.
+- `src/aws/shared/workspaceCountry.ts` centralises country validation, currency, tax review defaults, and document locale. Non-UK OCR retains tax actually printed on the document without applying UK VAT foreign-tax handling. It does not determine tax due, recoverability, place of supply, or file returns. Existing historical records are not converted when an organisation changes its currency.
+- Stripe subscription and trial prices remain GBP. The website shows approximate local currency references; Stripe and card issuers determine actual conversion and international card fees. No Stripe Tax or multi-currency price was added. The Android and iPhone app code was not changed.

@@ -4,14 +4,20 @@ import { requireAdminUser, requireAuthenticatedUser } from '../shared/auth.js';
 import { updateOrganisationSettings } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { parseBoolean, sanitizeText } from '../shared/helpers.js';
+import { workspaceCountry } from '../shared/workspaceCountry.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
+    const country = workspaceCountry(body.country);
+    if (body.country != null && country !== body.country) {
+      return jsonResponse(400, { success: false, error: 'invalid_country', message: 'Choose a supported country.' });
+    }
     const settings = await updateOrganisationSettings({
       organisationId: user.organisationId,
+      country: body.country == null ? undefined : country,
       baseCurrency: sanitizeText(body.baseCurrency) || undefined,
       isVatRegistered: parseBoolean(String(body.isVatRegistered ?? 'false'), false),
       defaultTaxRate: sanitizeText(body.defaultTaxRate) || 'No VAT',

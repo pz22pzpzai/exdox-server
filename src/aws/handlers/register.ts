@@ -16,6 +16,7 @@ import { jsonResponse } from '../shared/http.js';
 import { sanitizeText } from '../shared/helpers.js';
 import { meetsPasswordRequirements, passwordRequirementsMessage } from '../shared/passwordPolicy.js';
 import { sendNewWorkspaceSignupNotificationWithRetry } from '../shared/freeTrialNotification.js';
+import { workspaceCountry, type WorkspaceCountry } from '../shared/workspaceCountry.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
@@ -34,6 +35,10 @@ export async function handler(event: APIGatewayProxyEventV2) {
       : body.accountType === 'sole_trader'
         ? 'sole_trader'
         : 'owner';
+    const country = workspaceCountry(body.country);
+    if (body.country != null && country !== body.country) {
+      return jsonResponse(400, { success: false, error: 'invalid_country', message: 'Choose a supported country.' });
+    }
 
     if (!email || !confirmEmail || !password || !confirmPassword) {
       return jsonResponse(400, {
@@ -181,6 +186,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       passwordHash,
       fullName,
       organisationName: workspaceName,
+      country,
       billingPlan: billingSelection.planId,
       billingCycle: normalizeBillingCycle(body.billingCycle),
       monthlyDocumentLimit: billingSelection.monthlyDocumentLimit,
@@ -249,6 +255,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       checkoutUrl,
       message: buildRegistrationMessage({
         confirmationDelivered,
+        country,
         checkoutReady: Boolean(checkoutUrl),
         packageLabel: billingSelection.label,
         monthlyAmountPence: billingSelection.monthlyAmountPence,
@@ -291,12 +298,13 @@ function formatGbp(amountPence: number) {
 
 function buildRegistrationMessage(input: {
   confirmationDelivered: boolean;
+  country: WorkspaceCountry;
   checkoutReady: boolean;
   packageLabel: string;
   monthlyAmountPence: number;
   termsVersion: string;
 }) {
-  const packageSummary = `${input.packageLabel} package (${formatGbp(input.monthlyAmountPence)} per month, VAT included)`;
+  const packageSummary = `${input.packageLabel} package (${formatGbp(input.monthlyAmountPence)} per month${input.country === 'GB' ? ', VAT included' : ', billed in GBP'})`;
   const confirmationSummary = input.confirmationDelivered
     ? 'We have sent your confirmation email.'
     : 'We could not send the confirmation email right now; contact contact@exdox.co.uk so we can activate access.';

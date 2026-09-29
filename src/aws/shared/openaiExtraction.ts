@@ -11,6 +11,7 @@ import {
   toNumber,
 } from './helpers.js';
 import { type DocumentType, type ExpenseRequestOptions, type NormalizedExpenseDocument } from '../types.js';
+import { type WorkspaceCountry } from './workspaceCountry.js';
 
 const openai = new OpenAI({
   apiKey: awsEnv.openAiApiKey,
@@ -25,7 +26,7 @@ export async function processExpenseBuffer(input: {
 }) {
   const responseText = await extractWithOpenAI(input);
   const raw = parseExtractionJson(responseText);
-  const didRetryVat = shouldRetryVatExtraction(raw);
+  const didRetryVat = (!input.options.country || input.options.country === 'GB') && shouldRetryVatExtraction(raw);
   const vatFallbackRaw = didRetryVat ? parseExtractionJson(await extractVatFallbackWithOpenAI(input, raw)) : null;
   const mergedRaw = vatFallbackRaw ? mergeExtractionPayloads(raw, vatFallbackRaw) : raw;
   const normalized = normalizeExtractionPayload(mergedRaw, input.options.documentType);
@@ -197,7 +198,9 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     'For an unreadable image, return vendor_name as null, total_amount as null, net_amount as null, vat_amount as null, subtotal_amount as null, total_tax_amount as null, raw_text_summary as "Could not read receipt or invoice.", and include the note "Could not read receipt or invoice."',
     'Carefully inspect the entire image, especially the header and the lower summary area where totals are usually printed.',
     'For receipt and invoice dates, use the printed document date only. Never use an upload date, filename date, today\'s date, or a guessed date.',
-    'When the printed date is in UK numeric format, interpret it as day-first (DD/MM/YYYY or DD-MM-YYYY).',
+    options.country === 'US'
+      ? 'For US numeric dates, interpret MM/DD/YYYY as month-first unless the document explicitly says otherwise.'
+      : 'For day-first numeric dates, interpret DD/MM/YYYY or DD-MM-YYYY unless the document explicitly says otherwise.',
     'If more than one date is printed, choose the transaction or invoice date nearest the document header or summary, not a due date unless the document is clearly an invoice and the field is explicitly labelled due date.',
     'For receipts, find the final amount actually paid or charged.',
     'For invoices, find the invoice total due or balance due.',
@@ -208,7 +211,9 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     'Never use a lone price, item amount, subtotal, VAT value, or an unlabeled number as total_amount.',
     'If the document shows several numbers and no final payable label can be read clearly, return total_amount as null.',
     'If the total amount is not clearly visible or cannot be read confidently, return total_amount as null.',
-    'Extract UK VAT fields separately: total_amount is gross paid, vat_amount is VAT/tax, and net_amount is before VAT.',
+    options.country && options.country !== 'GB'
+      ? 'Extract the tax printed on the document. Use vat_amount for the printed sales tax, GST, HST or local VAT amount in this existing JSON contract. Total_amount is gross paid; net_amount is before tax. Do not apply UK VAT rules.'
+      : 'Extract UK VAT fields separately: total_amount is gross paid, vat_amount is VAT/tax, and net_amount is before VAT.',
     'If VAT is printed, return vat_amount exactly as printed.',
     'Only return vat_amount when the document clearly shows a VAT or TAX label, amount, or an explicit printed VAT/tax rate.',
     'Never invent vat_amount from merchant type, product type, or a guessed standard rate.',
@@ -216,11 +221,15 @@ function buildExtractionPrompt(options: ExpenseRequestOptions): string {
     'Only calculate missing vat_amount when the document explicitly shows a VAT or tax rate. Do not calculate VAT from a guessed or inferred rate.',
     'If net_amount is missing but total_amount and vat_amount are clear, calculate net_amount as total_amount - vat_amount.',
     'If VAT is not printed and cannot be reliably inferred, return vat_amount as null.',
-    'Only return suggested_uk_tax_rate when the receipt explicitly prints a VAT/TAX rate, or when total_amount, net_amount, and vat_amount are all clearly visible and support an exact UK VAT rate.',
+    options.country && options.country !== 'GB'
+      ? 'Set suggested_uk_tax_rate to null. This field is UK-only; preserve any local rate in printed_vat_rate_percent.'
+      : 'Only return suggested_uk_tax_rate when the receipt explicitly prints a VAT/TAX rate, or when total_amount, net_amount, and vat_amount are all clearly visible and support an exact UK VAT rate.',
     'Never set suggested_uk_tax_rate from merchant type, merchant brand, item category, or general business knowledge alone.',
     'If subtotal is not clearly visible, return subtotal_amount as the same value as net_amount when net_amount is known, otherwise null.',
     'If tax is not clearly visible, return total_tax_amount as the same value as vat_amount when vat_amount is known, otherwise null.',
-    'Currency detection is mandatory whenever a monetary amount is visible. Use the printed symbol or currency code and return the ISO code: £ = GBP, $ or US$ = USD, and € = EUR. Never assume GBP merely because the workspace is in the UK.',
+    options.country && options.country !== 'GB'
+      ? `Currency detection is mandatory whenever a monetary amount is visible. Use a printed ISO code when present. For a bare $ sign without a code, use ${options.country === 'CA' ? 'CAD' : options.country === 'AU' ? 'AUD' : 'USD'} only when the document's location supports it. € = EUR and £ = GBP. Do not assume GBP from the service location.`
+      : 'Currency detection is mandatory whenever a monetary amount is visible. Use the printed symbol or currency code and return the ISO code: £ = GBP, $ or US$ = USD, and € = EUR. Never assume GBP merely because the workspace is in the UK.',
     'The vendor name must come from the document itself, usually the top header or merchant branding. Never invent a workspace name or a filename-based name.',
     options.workspaceContext === 'sales'
       ? 'For sales documents, vendor_name is the seller or invoice issuer, and customer_name is the billed customer shown in the Bill to, Sold to, or Customer field.'
@@ -669,8 +678,35 @@ function normalizeTaxLine(item: unknown) {
 
 export function applyVatRegistrationRules(
   document: NormalizedExpenseDocument,
-  taxProfile: { isVatRegistered: boolean; defaultTaxRateCosts?: string | null },
+  taxProfile: { country?: WorkspaceCountry; isVatRegistered: boolean; defaultTaxRateCosts?: string | null },
 ): NormalizedExpenseDocument {
+  if (taxProfile.country && taxProfile.country !== 'GB') {
+    if (!taxProfile.isVatRegistered) {
+      return {
+        ...document,
+        netAmount: document.totalAmount,
+        vatAmount: 0,
+        totalTaxAmount: 0,
+        taxRateApplied: 'No tax tracked',
+        ukVatTreatment: 'not_applicable',
+        notes: [...document.notes, 'Tax tracking is off for this workspace. Review the source document before approving.'],
+      };
+    }
+    const documentTax = document.totalTaxAmount ?? document.vatAmount;
+    const sourceRate = documentTax != null && document.netAmount != null && document.netAmount > 0
+      ? `${Number((documentTax / document.netAmount * 100).toFixed(2))}% on document`
+      : taxProfile.defaultTaxRateCosts || 'Review local tax';
+    return {
+      ...document,
+      vatAmount: documentTax,
+      totalTaxAmount: documentTax,
+      taxRateApplied: sourceRate,
+      foreignTaxAmount: null,
+      foreignTaxLabel: null,
+      ukVatTreatment: 'not_applicable',
+      notes: [...document.notes, 'Check local tax and recoverability against the source document.'],
+    };
+  }
   const sourceCurrency = sanitizeText(document.currency).toUpperCase();
   if (sourceCurrency && sourceCurrency !== 'GBP') {
     const foreignTaxAmount = document.foreignTaxAmount ?? document.totalTaxAmount ?? document.vatAmount;
