@@ -76,6 +76,31 @@ test('existing five-user Capture price remains £15', () => {
   assert.equal(selection.monthlyAmountPence, 1500);
 });
 
+test('new 110–200 user tiers use the published prices and larger document allowances', () => {
+  for (let users = 110; users <= 200; users += 10) {
+    const selection = resolveSelfServeSubscriptionSelection({
+      planId: 'operations',
+      includedUsers: users,
+      monthlyDocumentLimit: users * 50 + 5000,
+    });
+    assert.equal(selection.monthlyAmountPence, 37705 + ((users - 110) / 10) * 2881);
+    assert.equal(selection.monthlyDocumentLimit, users * 50 + 5000);
+  }
+});
+
+test('new tiers do not change existing selections or accept other document limits', () => {
+  assert.equal(resolveSelfServeSubscriptionSelection({
+    planId: 'operations',
+    includedUsers: 100,
+    monthlyDocumentLimit: 5000,
+  }).monthlyAmountPence, 28826);
+  assert.throws(() => resolveSelfServeSubscriptionSelection({
+    planId: 'operations',
+    includedUsers: 110,
+    monthlyDocumentLimit: 5500,
+  }), { message: /selected plan allowance is not available/i });
+});
+
 test('unsupported one-user allowances and plan combinations are rejected', () => {
   for (const input of [
     { planId: 'capture', includedUsers: 1, monthlyDocumentLimit: 50 },

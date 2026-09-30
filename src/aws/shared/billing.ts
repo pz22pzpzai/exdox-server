@@ -342,6 +342,14 @@ export function resolveSelfServeSubscriptionSelection(input: {
   if (input.planId === 'capture' && includedUsers === 1 && monthlyDocumentLimit === 100) {
     return buildSelfServeSelection('capture', 1, 100, 1000);
   }
+  const isNewOperationsTier = input.planId === 'operations'
+    && Number.isInteger(includedUsers)
+    && includedUsers >= 110
+    && includedUsers <= 200
+    && includedUsers % 10 === 0;
+  if (isNewOperationsTier && monthlyDocumentLimit === includedUsers * 50 + 5000) {
+    return buildSelfServeSelection('operations', includedUsers, monthlyDocumentLimit, 37705 + ((includedUsers - 110) / 10) * 2881);
+  }
   const isFiveUserIncrement = Number.isInteger(includedUsers) && includedUsers % 5 === 0;
   const hasExpectedDocumentAllowance = monthlyDocumentLimit === includedUsers * 50;
 
