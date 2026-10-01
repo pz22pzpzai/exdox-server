@@ -2,10 +2,10 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAuthenticatedUser } from '../shared/auth.js';
 import { assertWorkspaceAccess, canAccessWorkspace } from '../shared/billing.js';
-import { getOrganisationBillingSummary, listReceipts } from '../shared/db.js';
+import { getOrganisationBillingSummary, listLegacyAdminDeletedReceiptDecisions, listReceipts } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { parseBoolean, parseWorkspaceContext } from '../shared/helpers.js';
-import { listReceiptDecisions } from '../shared/receiptDecisions.js';
+import { listDismissedReceiptDecisionIds, listReceiptDecisions, saveReceiptDecision } from '../shared/receiptDecisions.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
@@ -13,9 +13,18 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const limit = Number(event.queryStringParameters?.limit ?? 50);
     const query = event.queryStringParameters ?? {};
     if (query.decisions_only === 'true') {
+      const [recorded, legacy, dismissed] = await Promise.all([
+        listReceiptDecisions(user.organisationId, user.id),
+        listLegacyAdminDeletedReceiptDecisions(user),
+        listDismissedReceiptDecisionIds(user.organisationId, user.id),
+      ]);
+      const visibleRecorded = recorded.filter((decision) => !dismissed.has(decision.receiptId));
+      const recordedIds = new Set(recorded.map((decision) => decision.receiptId));
+      const recovered = legacy.filter((decision) => !recordedIds.has(decision.receiptId) && !dismissed.has(decision.receiptId));
+      await Promise.all(recovered.map(saveReceiptDecision));
       return jsonResponse(200, {
         success: true,
-        decisions: await listReceiptDecisions(user.organisationId, user.id),
+        decisions: [...visibleRecorded, ...recovered].sort((left, right) => right.decidedAt.localeCompare(left.decidedAt)),
       });
     }
     const claimId = query.claim_id ? Number(query.claim_id) : undefined;

@@ -14,8 +14,12 @@ export type ReceiptDecision = {
   decidedAt: string;
 };
 
-export function isUnreviewedCost(receipt: Pick<ReceiptRow, 'workspaceContext' | 'status'>) {
-  return receipt.workspaceContext === 'cost' && (receipt.status === 'Review' || receipt.status === 'Processing');
+export function isUnreviewedCost(receipt: Pick<ReceiptRow, 'workspaceContext' | 'status' | 'claimId'>) {
+  // A receipt can reach Ready from OCR without a person reviewing it. Once it
+  // enters a claim or a final payment/publication state it is no longer here.
+  return receipt.workspaceContext === 'cost'
+    && receipt.claimId === null
+    && (receipt.status === 'Review' || receipt.status === 'Processing' || receipt.status === 'Ready');
 }
 
 export function decisionFromReceipt(receipt: ReceiptRow, action: ReceiptDecision['action']): ReceiptDecision {

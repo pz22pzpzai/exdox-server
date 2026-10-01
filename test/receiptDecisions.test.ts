@@ -5,10 +5,12 @@ import { decisionFromReceipt, isUnreviewedCost } from '../src/aws/shared/receipt
 import type { ReceiptRow } from '../src/aws/types.js';
 
 test('only purchases awaiting review qualify for an admin decision notice', () => {
-  assert.equal(isUnreviewedCost({ workspaceContext: 'cost', status: 'Review' }), true);
-  assert.equal(isUnreviewedCost({ workspaceContext: 'cost', status: 'Processing' }), true);
-  assert.equal(isUnreviewedCost({ workspaceContext: 'cost', status: 'Ready' }), false);
-  assert.equal(isUnreviewedCost({ workspaceContext: 'sales', status: 'Review' }), false);
+  assert.equal(isUnreviewedCost({ workspaceContext: 'cost', status: 'Review', claimId: null }), true);
+  assert.equal(isUnreviewedCost({ workspaceContext: 'cost', status: 'Processing', claimId: null }), true);
+  assert.equal(isUnreviewedCost({ workspaceContext: 'cost', status: 'Ready', claimId: null }), true);
+  assert.equal(isUnreviewedCost({ workspaceContext: 'cost', status: 'Ready', claimId: 42 }), false);
+  assert.equal(isUnreviewedCost({ workspaceContext: 'cost', status: 'Paid', claimId: null }), false);
+  assert.equal(isUnreviewedCost({ workspaceContext: 'sales', status: 'Review', claimId: null }), false);
 });
 
 test('decision preserves the uploader, vendor and purchase details for the employee', () => {

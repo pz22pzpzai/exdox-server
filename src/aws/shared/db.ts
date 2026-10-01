@@ -49,6 +49,7 @@ import {
 } from './billing.js';
 import { contentHashesMatch } from './contentHash.js';
 import { deleteReceiptDecision } from './receiptDecisions.js';
+import { decisionFromReceipt, isUnreviewedCost, type ReceiptDecision } from './receiptDecisionPolicy.js';
 
 const usesMysql =
   awsEnv.receiptStoreMode === 'mysql' &&
@@ -2860,6 +2861,27 @@ export async function listRecycleBinItems(user: AuthenticatedUser): Promise<Recy
     [user.organisationId],
   );
   return rows.map(mapRecycleBinItem);
+}
+
+export async function listLegacyAdminDeletedReceiptDecisions(user: AuthenticatedUser): Promise<ReceiptDecision[]> {
+  // Recover admin deletions made before a decision record was written. Keep
+  // this user-scoped; the recycle bin itself is only visible to admins.
+  let items: RecycleBinItem[];
+  if (!pool) {
+    items = await listS3RecycleBinItems(user.organisationId);
+  } else {
+    await ensureRecycleBinSchema();
+    const [rows] = await pool.query<mysql.RowDataPacket[]>(
+      `SELECT * FROM recycle_bin_items WHERE organisation_id = ? AND item_type = 'receipt' AND purge_after > UTC_TIMESTAMP()`,
+      [user.organisationId],
+    );
+    items = rows.map(mapRecycleBinItem);
+  }
+  return items
+    .filter((item) => item.itemType === 'receipt' && Date.parse(item.purgeAfter) > Date.now())
+    .filter((item) => item.deletedByUserId !== user.id && item.payload.receipt?.uploadedByUserId === user.id)
+    .filter((item) => item.payload.receipt && isUnreviewedCost(item.payload.receipt))
+    .map((item) => ({ ...decisionFromReceipt(item.payload.receipt!, 'deleted'), decidedAt: item.deletedAt }));
 }
 
 export async function restoreRecycleBinItem(user: AuthenticatedUser, itemType: RecycleBinItemType, itemId: number) {
