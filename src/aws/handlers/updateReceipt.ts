@@ -7,6 +7,7 @@ import { jsonResponse } from '../shared/http.js';
 import { canChangeSalesStatus, isSalesStatus } from '../shared/salesWorkflow.js';
 import { parsePaymentMethod, sanitizeText, toNumber } from '../shared/helpers.js';
 import { getHistoricalExchangeRate } from '../shared/exchangeRates.js';
+import { decisionFromReceipt, deleteReceiptDecision, getReceiptDecision, saveReceiptDecision } from '../shared/receiptDecisions.js';
 
 const ukVatTreatments = new Set([
   'not_applicable',
@@ -36,6 +37,19 @@ export async function handler(event: APIGatewayProxyEventV2) {
     ]);
     assertWorkspaceAccess(billing, existingReceipt.workspaceContext);
     const requestedStatus = sanitizeText(body.status);
+    if (existingReceipt.workspaceContext === 'cost' && requestedStatus === 'Rejected' && existingReceipt.status !== 'Rejected') {
+      requireAdminUser(user);
+      if (existingReceipt.status !== 'Review' || existingReceipt.claimId !== null) {
+        return jsonResponse(409, {
+          success: false,
+          error: 'receipt_not_unreviewed',
+          message: 'Only an unreviewed purchase that is not attached to a claim can be rejected.',
+        });
+      }
+    }
+    if (existingReceipt.workspaceContext === 'cost' && existingReceipt.status === 'Rejected' && user.role !== 'Business_Admin') {
+      return jsonResponse(403, { success: false, error: 'rejected_receipt_locked', message: 'This rejected purchase can only be deleted by its uploader.' });
+    }
     if (
       existingReceipt.workspaceContext === 'sales'
       && requestedStatus
@@ -128,7 +142,22 @@ export async function handler(event: APIGatewayProxyEventV2) {
           : effectiveRate === null
             ? existingReceipt.baseTotalAmount
             : Number((grossTotal * effectiveRate).toFixed(2));
-    const receipt = await updateReceiptById(user, receiptId, {
+    const notifyRejection = existingReceipt.workspaceContext === 'cost'
+      && requestedStatus === 'Rejected'
+      && existingReceipt.status !== 'Rejected'
+      && existingReceipt.uploadedByUserId !== user.id;
+    const previousDecision = notifyRejection
+      ? await getReceiptDecision(user.organisationId, existingReceipt.uploadedByUserId, receiptId)
+      : null;
+    if (notifyRejection) await saveReceiptDecision(decisionFromReceipt({
+      ...existingReceipt,
+      vendorName: sanitizeText(body.vendorName) || existingReceipt.vendorName,
+      totalAmount: grossTotal,
+      currency: sourceCurrency,
+    }, 'rejected'));
+    let receipt;
+    try {
+      receipt = await updateReceiptById(user, receiptId, {
       vendorName: sanitizeText(body.vendorName) || null,
       invoiceDate: sanitizeText(body.invoiceDate) || null,
       dueDate: sanitizeText(body.dueDate) || null,
@@ -142,7 +171,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       vatAmount: toNumber(body.vatAmount),
       totalAmount: toNumber(body.totalAmount),
       taxRateApplied: sanitizeText(body.taxRateApplied) || null,
-      status: sanitizeText(body.status) as never,
+      status: (requestedStatus || existingReceipt.status) as typeof existingReceipt.status,
       baseCurrency,
       exchangeRate: useManualSettlementRate ? requestedRate : automaticExchangeRate?.rate ?? existingReceipt.exchangeRate,
       exchangeRateDate: useManualSettlementRate
@@ -163,7 +192,17 @@ export async function handler(event: APIGatewayProxyEventV2) {
         ? sanitizeText(body.foreignTaxLabel) || null
         : existingReceipt.foreignTaxLabel,
       ukVatTreatment: requestedUkVatTreatment as typeof existingReceipt.ukVatTreatment || existingReceipt.ukVatTreatment,
-    });
+      });
+    } catch (error) {
+      if (notifyRejection) {
+        if (previousDecision) await saveReceiptDecision(previousDecision);
+        else await deleteReceiptDecision(user.organisationId, existingReceipt.uploadedByUserId, receiptId);
+      }
+      throw error;
+    }
+    if (existingReceipt.status === 'Rejected' && receipt.status !== 'Rejected') {
+      await deleteReceiptDecision(user.organisationId, existingReceipt.uploadedByUserId, receiptId);
+    }
 
     return jsonResponse(200, {
       success: true,

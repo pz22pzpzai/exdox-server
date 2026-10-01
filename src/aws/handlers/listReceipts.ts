@@ -5,12 +5,19 @@ import { assertWorkspaceAccess, canAccessWorkspace } from '../shared/billing.js'
 import { getOrganisationBillingSummary, listReceipts } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { parseBoolean, parseWorkspaceContext } from '../shared/helpers.js';
+import { listReceiptDecisions } from '../shared/receiptDecisions.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const user = requireAuthenticatedUser(event);
     const limit = Number(event.queryStringParameters?.limit ?? 50);
     const query = event.queryStringParameters ?? {};
+    if (query.decisions_only === 'true') {
+      return jsonResponse(200, {
+        success: true,
+        decisions: await listReceiptDecisions(user.organisationId, user.id),
+      });
+    }
     const claimId = query.claim_id ? Number(query.claim_id) : undefined;
     const billing = await getOrganisationBillingSummary(user.organisationId);
     const workspaceContext = typeof query.workspace_context === 'string' ? parseWorkspaceContext(query.workspace_context) : undefined;

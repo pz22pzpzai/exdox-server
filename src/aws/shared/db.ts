@@ -48,6 +48,7 @@ import {
   normalizePlanId,
 } from './billing.js';
 import { contentHashesMatch } from './contentHash.js';
+import { deleteReceiptDecision } from './receiptDecisions.js';
 
 const usesMysql =
   awsEnv.receiptStoreMode === 'mysql' &&
@@ -2421,10 +2422,34 @@ export async function updateOrganisationBillingProfile(input: {
 export async function getReceiptById(user: AuthenticatedUser, receiptId: number): Promise<ReceiptRow> {
   const receipts = await listReceipts(user, { limit: 500 });
   const receipt = receipts.find((candidate) => candidate.id === receiptId);
-  if (!receipt) {
-    throw notFoundError('Receipt not found.');
+  if (receipt) return receipt;
+
+  // An employee may keep an admin decision in Purchases long after the receipt
+  // has fallen outside the normal 500-row inbox window.
+  if (!pool) {
+    const keys = await listAllReceiptJsonKeys(`receipt-records/org-${user.organisationId}/`);
+    const key = keys.find((candidate) => candidate.endsWith('.json') && candidate.includes(`/${receiptId}-`));
+    if (key) {
+      const olderReceipt = await getReceiptJsonObject<ReceiptRow>(key);
+      const deleted = (await listS3RecycleBinItems(user.organisationId))
+        .some((item) => item.itemType === 'receipt' && item.itemId === receiptId);
+      if (!deleted && filterReceiptForUser(olderReceipt, user)) return olderReceipt;
+    }
+  } else {
+    await ensureRecycleBinSchema();
+    const [rows] = await pool.query<mysql.RowDataPacket[]>(
+      `SELECT r.* FROM receipts r
+       WHERE r.id = ? AND r.organisation_id = ?
+         AND (? = 'Business_Admin' OR r.uploaded_by_user_id = ?)
+         AND NOT EXISTS (SELECT 1 FROM recycle_bin_items deleted_record
+           WHERE deleted_record.organisation_id = r.organisation_id
+             AND deleted_record.item_type = 'receipt' AND deleted_record.item_id = r.id)
+       LIMIT 1`,
+      [receiptId, user.organisationId, user.role, user.id],
+    );
+    if (rows[0]) return mapReceiptRow(rows[0]);
   }
-  return receipt;
+  throw notFoundError('Receipt not found.');
 }
 
 export async function updateReceiptById(
@@ -2436,7 +2461,7 @@ export async function updateReceiptById(
 ) {
   const existing = await getReceiptById(user, receiptId);
   const normalizedNeedsReview =
-    updates.status === 'Ready' || updates.status === 'Published' || updates.status === 'Payment processing' || updates.status === 'Paid'
+    updates.status === 'Ready' || updates.status === 'Published' || updates.status === 'Payment processing' || updates.status === 'Paid' || updates.status === 'Rejected'
       ? false
       : updates.status === 'Review' || updates.status === 'Processing'
         ? true
@@ -2858,6 +2883,9 @@ export async function restoreRecycleBinItem(user: AuthenticatedUser, itemType: R
       ));
     }
     await deleteReceiptObject(buildRecycleBinKey(item));
+    if (item.itemType === 'receipt' && item.payload.receipt) {
+      await deleteReceiptDecision(user.organisationId, item.payload.receipt.uploadedByUserId, item.itemId);
+    }
     return { success: true };
   }
 
@@ -2895,6 +2923,9 @@ export async function restoreRecycleBinItem(user: AuthenticatedUser, itemType: R
     throw error;
   } finally {
     connection.release();
+  }
+  if (item.itemType === 'receipt' && item.payload.receipt) {
+    await deleteReceiptDecision(user.organisationId, item.payload.receipt.uploadedByUserId, item.itemId);
   }
   return { success: true };
 }
@@ -3159,6 +3190,7 @@ export async function deleteOrganisationAccount(
   await Promise.all([
     deleteReceiptPrefix(`organisations/${organisationId}.json`),
     deleteReceiptPrefix(`receipt-records/org-${organisationId}/`),
+    deleteReceiptPrefix(`receipt-decisions/org-${organisationId}/`),
     deleteReceiptPrefix(`receipts/org-${organisationId}/`),
     deleteReceiptPrefix(`vault/org-${organisationId}/`),
     deleteReceiptPrefix(`incoming/org-${organisationId}/`),
