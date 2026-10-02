@@ -90,7 +90,7 @@ function redirectToSettings(result: 'connected' | 'failed' | 'locked') {
 async function requirePaidXeroAccess(organisationId: number) {
   const access = await getAccountingIntegrationAccess(organisationId);
   if (!access.available) {
-    const error = new Error(access.trialUnlockEligible ? 'Accounting integrations are locked during the free trial. The workspace owner can unlock them now with a one-off £5 payment.' : 'Xero integration requires an active paid plan.') as Error & { statusCode?: number; code?: string };
+    const error = new Error(access.soleTraderXeroUpgradeEligible ? 'The workspace owner can add Xero to the sole trader plan in Integrations for £5 now, then £10 per month.' : access.trialUnlockEligible ? 'Accounting integrations are locked during the free trial. The workspace owner can unlock them now with a one-off £5 payment.' : 'Xero integration requires an active paid plan.') as Error & { statusCode?: number; code?: string };
     error.statusCode = 403;
     error.code = 'xero_plan_required';
     throw error;
@@ -261,7 +261,7 @@ export async function statusHandler(event: APIGatewayProxyEventV2) {
     const user = requireAuthenticatedUser(event);
     requireAdminUser(user);
     const [connection, access] = await Promise.all([loadConnection(user.organisationId), getAccountingIntegrationAccess(user.organisationId)]);
-    return jsonResponse(200, { success: true, configured: configured(), ...access, trialUnlockPricePence: ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE, lockedReason: access.available ? null : access.trialUnlockEligible ? 'Linking Xero or any other accounting software is locked during the free trial. Pay a one-off £5 to unlock it now; that £5 is credited against the first subscription payment.' : 'Xero integration requires an active paid plan.', connected: Boolean(connection), tenantId: connection?.tenantId ?? null, tenantName: connection?.tenantName ?? null, connectedAt: connection?.connectedAt ?? null, availableTenants: (connection?.availableTenants ?? []).map((tenant) => ({ tenantId: tenant.tenantId, tenantName: tenant.tenantName })) });
+    return jsonResponse(200, { success: true, configured: configured(), ...access, trialUnlockPricePence: ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE, lockedReason: access.available ? null : access.soleTraderXeroUpgradeEligible ? 'Add Xero for £5 now. Your existing subscription then becomes £10 per month, including Xero.' : access.trialUnlockEligible ? 'Linking Xero during the free trial costs £5 now; that £5 is credited against the first subscription payment.' : 'Xero integration requires an active paid plan.', connected: Boolean(connection), tenantId: connection?.tenantId ?? null, tenantName: connection?.tenantName ?? null, connectedAt: connection?.connectedAt ?? null, availableTenants: (connection?.availableTenants ?? []).map((tenant) => ({ tenantId: tenant.tenantId, tenantName: tenant.tenantName })) });
   } catch (error) { return xeroError(error, 'Could not load the Xero connection.'); }
 }
 

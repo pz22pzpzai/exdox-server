@@ -54,7 +54,7 @@ export async function createSelfServeCheckoutSession(input: {
     );
   }
 
-  const selection = resolveSelfServeSubscriptionSelection({
+  let selection = resolveSelfServeSubscriptionSelection({
     planId: billing.status === 'inactive' || billing.status === 'paused' || billing.status === 'canceled' ? billing.planId : planId,
     monthlyDocumentLimit:
       billing.status === 'inactive' || billing.status === 'paused' || billing.status === 'canceled' ? billing.monthlyDocumentLimit : getPlanDefinition(planId).monthlyDocumentLimit,
@@ -63,6 +63,13 @@ export async function createSelfServeCheckoutSession(input: {
   const organisationName = await getOrganisationName(input.user.organisationId);
   const planDefinition = getPlanDefinition(selection.planId);
   const previousSubscriptionId = billing.status === 'paused' ? billing.stripeSubscriptionId : null;
+  const previousSubscription = previousSubscriptionId ? await stripe.subscriptions.retrieve(previousSubscriptionId) : null;
+  const continuingSoleTraderXero = selection.includedUsers === 1
+    && selection.monthlyDocumentLimit === 100
+    && previousSubscription?.metadata.xeroUpgrade === 'true';
+  if (continuingSoleTraderXero) {
+    selection = { ...selection, monthlyAmountPence: 1000 };
+  }
   let customerId = billing.stripeCustomerId;
   const priorSubscriptions = customerId && billing.status === 'inactive' && !billing.trialEndsAt
     ? await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 20 })
@@ -95,6 +102,7 @@ export async function createSelfServeCheckoutSession(input: {
     && candidate.metadata?.checkoutPurpose === (startsTrial ? 'trial_start' : 'paid_continuation')
     && (candidate.metadata?.previousSubscriptionId ?? '') === (previousSubscriptionId ?? '')
     && candidate.metadata?.planId === selection.planId
+    && candidate.metadata?.monthlyAmountPence === String(selection.monthlyAmountPence)
     && candidate.url);
   if (matchingOpenSession) {
     return { checkoutUrl: matchingOpenSession.url, sessionId: matchingOpenSession.id };
@@ -116,6 +124,7 @@ export async function createSelfServeCheckoutSession(input: {
     checkoutPurpose: startsTrial ? 'trial_start' : 'paid_continuation',
     ...(previousSubscriptionId ? { previousSubscriptionId } : {}),
     accountingCreditApplied: coupon ? 'true' : 'false',
+    ...(continuingSoleTraderXero ? { xeroUpgrade: 'true' } : {}),
   };
   const session = await stripe.checkout.sessions.create({
     mode: 'subscription',
@@ -150,7 +159,7 @@ export async function createSelfServeCheckoutSession(input: {
       } } : {}),
       metadata: checkoutMetadata,
     },
-  }, { idempotencyKey: `exdox-checkout-${input.user.organisationId}-${startsTrial ? 'trial' : 'paid'}-${previousSubscriptionId ?? 'first'}-${Math.floor(Date.now() / 3_600_000)}` });
+  }, { idempotencyKey: `exdox-checkout-${input.user.organisationId}-${startsTrial ? 'trial' : 'paid'}-${previousSubscriptionId ?? 'first'}-${selection.monthlyAmountPence}-${Math.floor(Date.now() / 3_600_000)}` });
 
   return {
     checkoutUrl: session.url,
