@@ -1,5 +1,11 @@
 # Exdox server
 
+## Private accounting pilot (2026-10-03)
+
+- `GET /accounting`, `POST /accounting/accounts`, and `POST /accounting/journals` are independent SAM routes. Each requires a valid session and a fresh user lookup for active business admin `terryreedbfv@outlook.com`. No other user can read or write this data.
+- Data is stored as AES256 encrypted S3 JSON objects under `accounting/org-{id}/`, separate from all existing Exdox records. Journals are posted as individual immutable objects, use integer GBP pence, validate account IDs and exact debit/credit balance, and drive the website's trial balance, profit and loss, and balance sheet. Workspace deletion purges this prefix.
+- This is a private double-entry foundation. Invoicing, bank feeds, tax returns, payroll, period locks, automatic Exdox posting, and production accounting assurance remain future work. Deploy the server routes before the website UI. Never delete or move signing keystores or details; the owner checks deployment and live behaviour.
+
 This repository contains the Exdox API and AWS SAM deployment. Source: `https://github.com/pz22pzpzai/exdox-server`. The production API is `https://hz2zkm6jkf.execute-api.eu-west-2.amazonaws.com/prod`; the website is `https://exdox.co.uk` and its separate source repository is `https://github.com/pz22pzpzai/exdox`.
 
 ## Main folders and commands

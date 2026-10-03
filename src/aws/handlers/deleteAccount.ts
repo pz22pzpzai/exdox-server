@@ -8,6 +8,7 @@ import { awsEnv } from '../shared/env.js';
 import { sanitizeText } from '../shared/helpers.js';
 import { jsonResponse } from '../shared/http.js';
 import { deleteSalesWorkspaceForOrganisation } from '../shared/salesWorkspaceStore.js';
+import { deleteReceiptPrefix } from '../shared/s3.js';
 import { isStripeResourceMissing } from '../shared/stripeSubscription.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
@@ -75,6 +76,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     }
 
     await deleteSalesWorkspaceForOrganisation(authenticatedUser.organisationId);
+    await deleteReceiptPrefix(`accounting/org-${authenticatedUser.organisationId}/`);
     await deleteOrganisationAccount(authenticatedUser.organisationId, {
       stripeSubscriptionId: billing.stripeSubscriptionId,
     });

@@ -1292,6 +1292,51 @@ Resources:
             Path: /rules/{id}
             Method: DELETE
 
+  AccountingGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.getHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingGetRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting
+            Method: GET
+
+  AccountingAccountFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.accountHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingAccountRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/accounts
+            Method: POST
+
+  AccountingJournalFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.journalHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingJournalRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/journals
+            Method: POST
+
   CompanyCardsFunction:
     Type: AWS::Serverless::Function
     Properties:
