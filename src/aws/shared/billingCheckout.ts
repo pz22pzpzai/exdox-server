@@ -1,7 +1,7 @@
 import Stripe from 'stripe';
 
 import type { AuthenticatedUser } from '../types.js';
-import { ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE, hasUnusedAccountingIntegrationCredit, removeUnusedAccountingIntegrationCredit } from './accountingIntegrationUnlock.js';
+import { ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE, getAccountingIntegrationUnlock, hasUnusedAccountingIntegrationCredit, removeUnusedAccountingIntegrationCredit } from './accountingIntegrationUnlock.js';
 import {
   getPlanDefinition,
   isStripeConfigured,
@@ -19,6 +19,8 @@ export async function createSelfServeCheckoutSession(input: {
   user: AuthenticatedUser;
   planId: unknown;
   billingCycle: unknown;
+  monthlyDocumentLimit?: unknown;
+  includedUsers?: unknown;
   successUrl?: string;
   cancelUrl?: string;
 }) {
@@ -31,6 +33,9 @@ export async function createSelfServeCheckoutSession(input: {
   }
 
   const planId = normalizePlanId(input.planId);
+  if (planId === 'trial' || planId === 'legacy' || planId === 'enterprise') {
+    throw checkoutError(400, 'invalid_paid_plan', 'Choose an available monthly plan.');
+  }
   const billingCycle = normalizeBillingCycle(input.billingCycle);
   const stripe = new Stripe(awsEnv.stripeSecretKey, {
     apiVersion: '2026-06-24.dahlia',
@@ -46,7 +51,7 @@ export async function createSelfServeCheckoutSession(input: {
     );
   }
 
-  if ((billing.status === 'inactive' || billing.status === 'paused' || billing.status === 'canceled') && planId !== billing.planId) {
+  if (billing.planId !== 'trial' && (billing.status === 'inactive' || billing.status === 'paused' || billing.status === 'canceled') && planId !== billing.planId) {
     throw checkoutError(
       400,
       'checkout_selection_mismatch',
@@ -55,11 +60,13 @@ export async function createSelfServeCheckoutSession(input: {
   }
 
   let selection = resolveSelfServeSubscriptionSelection({
-    planId: billing.status === 'inactive' || billing.status === 'paused' || billing.status === 'canceled' ? billing.planId : planId,
+    planId: billing.planId !== 'trial' && (billing.status === 'inactive' || billing.status === 'paused' || billing.status === 'canceled') ? billing.planId : planId,
     monthlyDocumentLimit:
-      billing.status === 'inactive' || billing.status === 'paused' || billing.status === 'canceled' ? billing.monthlyDocumentLimit : getPlanDefinition(planId).monthlyDocumentLimit,
-    includedUsers: billing.status === 'inactive' || billing.status === 'paused' || billing.status === 'canceled' ? billing.includedUsers : getPlanDefinition(planId).includedUsers,
+      billing.planId === 'trial' ? Number(input.monthlyDocumentLimit) : billing.status === 'inactive' || billing.status === 'paused' || billing.status === 'canceled' ? billing.monthlyDocumentLimit : getPlanDefinition(planId).monthlyDocumentLimit,
+    includedUsers: billing.planId === 'trial' ? Number(input.includedUsers) : billing.status === 'inactive' || billing.status === 'paused' || billing.status === 'canceled' ? billing.includedUsers : getPlanDefinition(planId).includedUsers,
   });
+  const trialUnlock = billing.planId === 'trial' ? await getAccountingIntegrationUnlock(input.user.organisationId) : null;
+  const trialXeroPurchased = trialUnlock?.status === 'unlocked' && trialUnlock.stripeSubscriptionId === null;
   const organisationName = await getOrganisationName(input.user.organisationId);
   const planDefinition = getPlanDefinition(selection.planId);
   const previousSubscriptionId = billing.status === 'paused' ? billing.stripeSubscriptionId : null;
@@ -67,7 +74,7 @@ export async function createSelfServeCheckoutSession(input: {
   const continuingSoleTraderXero = selection.includedUsers === 1
     && selection.monthlyDocumentLimit === 100
     && previousSubscription?.metadata.xeroUpgrade === 'true';
-  if (continuingSoleTraderXero) {
+  if (continuingSoleTraderXero || (trialXeroPurchased && selection.includedUsers === 1 && selection.monthlyDocumentLimit === 100)) {
     selection = { ...selection, monthlyAmountPence: 1000 };
   }
   let customerId = billing.stripeCustomerId;
@@ -77,7 +84,7 @@ export async function createSelfServeCheckoutSession(input: {
   const trialAlreadyUsed = priorSubscriptions?.data.some((subscription) =>
     subscription.metadata.organisationId === String(input.user.organisationId)
     && (subscription.trial_start || subscription.trial_end)) ?? false;
-  const startsTrial = billing.status === 'inactive' && !billing.trialEndsAt && !billing.stripeSubscriptionId && !trialAlreadyUsed;
+  const startsTrial = billing.planId !== 'trial' && billing.status === 'inactive' && !billing.trialEndsAt && !billing.stripeSubscriptionId && !trialAlreadyUsed;
 
   if (!customerId) {
     const customer = await stripe.customers.create({
@@ -103,28 +110,29 @@ export async function createSelfServeCheckoutSession(input: {
     && (candidate.metadata?.previousSubscriptionId ?? '') === (previousSubscriptionId ?? '')
     && candidate.metadata?.planId === selection.planId
     && candidate.metadata?.monthlyAmountPence === String(selection.monthlyAmountPence)
+    && (!trialXeroPurchased || candidate.metadata?.accountingCreditApplied === 'true')
     && candidate.url);
   if (matchingOpenSession) {
     return { checkoutUrl: matchingOpenSession.url, sessionId: matchingOpenSession.id };
   }
 
-  const applyAccountingCredit = previousSubscriptionId
+  const applyAccountingCredit = trialXeroPurchased || (previousSubscriptionId
     ? await hasUnusedAccountingIntegrationCredit(input.user.organisationId, previousSubscriptionId, stripe)
-    : false;
+    : false);
   const coupon = applyAccountingCredit
     ? await stripe.coupons.create({
       amount_off: ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE,
       currency: 'gbp',
       duration: 'once',
       name: 'Exdox trial accounting integration credit',
-    }, { idempotencyKey: `trial-accounting-credit-coupon-${previousSubscriptionId}` })
+    }, { idempotencyKey: `trial-accounting-credit-coupon-${previousSubscriptionId ?? `organisation-${input.user.organisationId}`}` })
     : null;
   const checkoutMetadata = {
     ...buildCheckoutMetadata(input.user.organisationId, selection, billingCycle),
     checkoutPurpose: startsTrial ? 'trial_start' : 'paid_continuation',
     ...(previousSubscriptionId ? { previousSubscriptionId } : {}),
     accountingCreditApplied: coupon ? 'true' : 'false',
-    ...(continuingSoleTraderXero ? { xeroUpgrade: 'true' } : {}),
+    ...(continuingSoleTraderXero || (trialXeroPurchased && selection.includedUsers === 1 && selection.monthlyDocumentLimit === 100) ? { xeroUpgrade: 'true' } : {}),
   };
   const session = await stripe.checkout.sessions.create({
     mode: 'subscription',
@@ -159,7 +167,7 @@ export async function createSelfServeCheckoutSession(input: {
       } } : {}),
       metadata: checkoutMetadata,
     },
-  }, { idempotencyKey: `exdox-checkout-${input.user.organisationId}-${startsTrial ? 'trial' : 'paid'}-${previousSubscriptionId ?? 'first'}-${selection.monthlyAmountPence}-${Math.floor(Date.now() / 3_600_000)}` });
+  }, { idempotencyKey: `exdox-checkout-${input.user.organisationId}-${startsTrial ? 'trial' : 'paid'}-${previousSubscriptionId ?? 'first'}-${selection.monthlyAmountPence}-${coupon ? 'credit' : 'no-credit'}-${Math.floor(Date.now() / 3_600_000)}` });
 
   return {
     checkoutUrl: session.url,

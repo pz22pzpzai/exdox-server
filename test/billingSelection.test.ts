@@ -9,8 +9,11 @@ process.env.JWT_SECRET ||= 'billing-selection-test';
 const {
   buildEntitlements,
   canAccessWorkspace,
+  canInviteUser,
+  canProcessDocument,
   hasFeature,
   isBillingActive,
+  listPlanDefinitions,
   resolveAllowedWebRoutes,
   resolveSelfServeSubscriptionSelection,
 } = await import('../src/aws/shared/billing.js');
@@ -51,6 +54,27 @@ test('every self-serve plan unlocks both rule areas and Vault while retaining ro
     assert.ok(!hasFeature(billingFor(planId, 'inactive'), 'supplier_rules'));
     assert.ok(!canAccessWorkspace(billingFor(planId, 'inactive'), 'vault'));
   }
+});
+
+test('plan-free trial has unlimited core use for 14 days, then locks workspace access', () => {
+  const trial = {
+    ...billingFor('trial', 'trialing'),
+    trialEndsAt: new Date(Date.now() + 86_400_000).toISOString(),
+    monthlyDocumentLimit: null,
+    includedUsers: null,
+    monthlyDocumentUsage: 100_000,
+    currentUserCount: 10_000,
+  };
+  assert.equal(isBillingActive(trial), true);
+  assert.equal(canProcessDocument(trial), true);
+  assert.equal(canInviteUser(trial), true);
+  assert.ok(resolveAllowedWebRoutes(trial, 'Business_Admin').includes('/vault'));
+  assert.ok(!resolveAllowedWebRoutes(trial, 'Business_Admin').includes('/accounting'));
+  assert.ok(!listPlanDefinitions().some((plan) => plan.id === 'trial'));
+
+  const expired = { ...trial, trialEndsAt: new Date(Date.now() - 60_000).toISOString() };
+  assert.equal(isBillingActive(expired), false);
+  assert.deepEqual(resolveAllowedWebRoutes(expired, 'Business_Admin'), ['/billing', '/settings']);
 });
 
 test('one-user Capture selection bills £5 monthly with 100 documents', () => {

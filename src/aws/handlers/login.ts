@@ -159,6 +159,15 @@ export async function handler(event: APIGatewayProxyEventV2) {
         });
       }
 
+      if (billing.planId === 'trial') {
+        return jsonResponse(200, {
+          success: true,
+          requiresEmailConfirmation: true,
+          checkoutUrl: null,
+          message: 'Your free trial has ended. Confirm your email and choose a plan in Billing to continue.',
+          user: authUser,
+        });
+      }
       if (['inactive', 'paused', 'canceled'].includes(billing.status) && user.role === 'Business_Admin') {
         try {
           const checkout = await createSelfServeCheckoutSession({
@@ -211,6 +220,14 @@ export async function handler(event: APIGatewayProxyEventV2) {
     };
     if (!isBillingActive(billing)) {
       const isOwner = user.role === 'Business_Admin' && await isOrganisationOwner(authUser);
+      if (isOwner && billing.planId === 'trial') {
+        return jsonResponse(200, {
+          success: true,
+          token: signUserToken(authUser),
+          user: { ...authUser, isOwner },
+          message: 'Your free trial has ended. Choose a plan in Billing to continue.',
+        });
+      }
       if (isOwner && ['paused', 'canceled', 'inactive'].includes(billing.status)) {
         try {
           const checkout = await createSelfServeCheckoutSession({

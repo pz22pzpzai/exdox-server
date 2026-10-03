@@ -51,7 +51,8 @@ export async function handler(event: APIGatewayProxyEventV2) {
       await getOrganisationBillingSummary(user.organisationId),
       user.organisationId,
     );
-    if (!isBillingActive(billing)) {
+    const isOwner = await isOrganisationOwner(user);
+    if (!isBillingActive(billing) && !(billing.planId === 'trial' && isOwner)) {
       return jsonResponse(402, {
         success: false,
         error: 'billing_inactive',
@@ -62,7 +63,6 @@ export async function handler(event: APIGatewayProxyEventV2) {
       user = { ...user, trialEndsAt: null };
       refreshedToken = signUserToken(user);
     }
-    const isOwner = await isOrganisationOwner(user);
     const allowedWebRoutes = resolveAllowedWebRoutes(billing, user.role)
       .filter((route) => isOwner || route !== '/billing');
 

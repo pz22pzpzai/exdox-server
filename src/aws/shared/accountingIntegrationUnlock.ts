@@ -2,7 +2,7 @@ import Stripe from 'stripe';
 
 import type { AuthenticatedUser } from '../types.js';
 import { isStripeConfigured } from './billing.js';
-import { getOrganisationBillingAccessState, getOrganisationBillingSummary } from './db.js';
+import { getOrganisationBillingAccessState, getOrganisationBillingSummary, updateOrganisationBillingProfile } from './db.js';
 import { awsEnv } from './env.js';
 import { getReceiptJsonObject, putReceiptJsonObject } from './s3.js';
 import { reconcileStripeSubscription } from './stripeSubscription.js';
@@ -24,7 +24,7 @@ type AccountingIntegrationUnlockRecord = {
   status: 'pending' | 'unlocked';
   checkoutSessionId: string;
   stripeCustomerId: string;
-  stripeSubscriptionId: string;
+  stripeSubscriptionId: string | null;
   paymentIntentId: string | null;
   creditInvoiceItemId: string | null;
   amountPence: number;
@@ -102,11 +102,12 @@ export async function createAccountingIntegrationUnlockCheckout(user: Authentica
   const existing = await getAccountingIntegrationUnlock(user.organisationId);
   const subscription = billing.stripeSubscriptionId ? await stripe.subscriptions.retrieve(billing.stripeSubscriptionId) : null;
   const soleTraderBase = subscription ? isSoleTraderBaseSubscription(subscription) : false;
+  const standaloneTrial = billing.planId === 'trial' && billing.status === 'trialing' && Boolean(billing.trialEndsAt && Date.parse(billing.trialEndsAt) > Date.now());
 
-  if (billing.status !== 'trialing' && !(billing.status === 'active' && soleTraderBase)) {
+  if (!standaloneTrial && billing.status !== 'trialing' && !(billing.status === 'active' && soleTraderBase)) {
     throw unlockError(409, 'trial_unlock_unavailable', 'The £5 accounting integration unlock is available only during an active free trial.');
   }
-  if (!billing.stripeCustomerId || !billing.stripeSubscriptionId) {
+  if (!standaloneTrial && (!billing.stripeCustomerId || !billing.stripeSubscriptionId)) {
     throw unlockError(409, 'trial_subscription_required', 'Start the free trial with Stripe before unlocking accounting integrations.');
   }
   if (existing?.status === 'unlocked' && existing.stripeSubscriptionId === billing.stripeSubscriptionId && !soleTraderBase) {
@@ -124,20 +125,27 @@ export async function createAccountingIntegrationUnlockCheckout(user: Authentica
     }
   }
 
+  let customerId = billing.stripeCustomerId;
+  if (standaloneTrial && !customerId) {
+    const customer = await stripe.customers.create({ email: user.email, metadata: { organisationId: String(user.organisationId) } });
+    customerId = customer.id;
+    await updateOrganisationBillingProfile({ organisationId: user.organisationId, stripeCustomerId: customerId });
+  }
+  if (!customerId) throw unlockError(503, 'billing_customer_missing', 'Could not prepare the Xero payment. Please try again.');
   const successUrl = 'https://exdox.co.uk/settings/integrations?accounting_unlock=success&session_id={CHECKOUT_SESSION_ID}';
   const cancelUrl = 'https://exdox.co.uk/settings/integrations?accounting_unlock=cancelled';
   const generation = existing?.checkoutSessionId ?? 'initial';
   const metadata = {
     action: ACCOUNTING_INTEGRATION_UNLOCK_ACTION,
     organisationId: String(user.organisationId),
-    stripeSubscriptionId: billing.stripeSubscriptionId,
+    ...(billing.stripeSubscriptionId ? { stripeSubscriptionId: billing.stripeSubscriptionId } : { trialStandalone: 'true' }),
     amountPence: String(ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE),
     ...(soleTraderBase ? { soleTraderXeroUpgrade: 'true' } : {}),
   };
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
     ...(soleTraderBase ? { payment_method_types: ['card' as const] } : {}),
-    customer: billing.stripeCustomerId,
+    customer: customerId,
     success_url: successUrl,
     cancel_url: cancelUrl,
     line_items: [{
@@ -150,7 +158,7 @@ export async function createAccountingIntegrationUnlockCheckout(user: Authentica
     }],
     metadata,
     payment_intent_data: { metadata, ...(soleTraderBase ? { setup_future_usage: 'off_session' as const } : {}) },
-  }, { idempotencyKey: `accounting-integration-unlock-${user.organisationId}-${billing.stripeSubscriptionId}-${generation}` });
+  }, { idempotencyKey: `accounting-integration-unlock-${user.organisationId}-${billing.stripeSubscriptionId ?? 'trial'}-${generation}` });
 
   if (!session.url) {
     throw unlockError(502, 'checkout_url_missing', 'Stripe did not return a checkout page. Please try again.');
@@ -161,7 +169,7 @@ export async function createAccountingIntegrationUnlockCheckout(user: Authentica
     organisationId: user.organisationId,
     status: 'pending',
     checkoutSessionId: session.id,
-    stripeCustomerId: billing.stripeCustomerId,
+    stripeCustomerId: customerId,
     stripeSubscriptionId: billing.stripeSubscriptionId,
     paymentIntentId: null,
     creditInvoiceItemId: null,
@@ -204,18 +212,33 @@ export async function fulfillAccountingIntegrationUnlock(session: Stripe.Checkou
   const metadataSubscriptionId = session.metadata?.stripeSubscriptionId;
   const customerId = typeof session.customer === 'string' ? session.customer : session.customer?.id;
   const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id ?? null;
-  if (!Number.isFinite(organisationId) || organisationId <= 0 || !customerId || !metadataSubscriptionId) {
+  const standaloneTrial = session.metadata?.trialStandalone === 'true';
+  if (!Number.isFinite(organisationId) || organisationId <= 0 || !customerId || (!metadataSubscriptionId && !standaloneTrial)) {
     throw unlockError(400, 'invalid_unlock_metadata', 'The accounting integration payment details are incomplete.');
   }
 
   const billing = await getOrganisationBillingSummary(organisationId);
-  if (billing.stripeCustomerId !== customerId || billing.stripeSubscriptionId !== metadataSubscriptionId) {
+  if (billing.stripeCustomerId !== customerId || (standaloneTrial
+    ? billing.planId !== 'trial' || Boolean(billing.stripeSubscriptionId)
+    : billing.stripeSubscriptionId !== metadataSubscriptionId)) {
     throw unlockError(403, 'unlock_subscription_mismatch', 'The Stripe payment does not match this workspace subscription.');
   }
   const existing = await getAccountingIntegrationUnlock(organisationId);
-  if (existing?.status === 'unlocked' && existing.stripeSubscriptionId === metadataSubscriptionId) {
+  if (existing?.status === 'unlocked' && existing.stripeSubscriptionId === (metadataSubscriptionId ?? null)) {
     return { unlocked: true, alreadyUnlocked: true, unlockedAt: existing.unlockedAt, creditAmountPence: existing.creditInvoiceItemId ? existing.amountPence : 0 };
   }
+
+  if (standaloneTrial) {
+    const unlockedAt = new Date().toISOString();
+    await putReceiptJsonObject(recordKey(organisationId), {
+      version: 1, organisationId, status: 'unlocked', checkoutSessionId: session.id,
+      stripeCustomerId: customerId, stripeSubscriptionId: null, paymentIntentId,
+      creditInvoiceItemId: null, amountPence: ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE,
+      createdAt: existing?.createdAt ?? unlockedAt, unlockedAt, creditVoidedAt: null,
+    } satisfies AccountingIntegrationUnlockRecord);
+    return { unlocked: true, alreadyUnlocked: false, unlockedAt, creditAmountPence: ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE };
+  }
+  if (!metadataSubscriptionId) throw unlockError(400, 'invalid_unlock_metadata', 'The subscription reference is missing.');
 
   if (session.metadata?.soleTraderXeroUpgrade === 'true') {
     const subscription = await stripe.subscriptions.retrieve(metadataSubscriptionId);

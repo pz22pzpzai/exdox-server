@@ -17,6 +17,8 @@ export async function handler(event: APIGatewayProxyEventV2) {
       user,
       planId: body.planId,
       billingCycle: body.billingCycle,
+      monthlyDocumentLimit: body.monthlyDocumentLimit,
+      includedUsers: body.includedUsers,
     });
 
     return jsonResponse(200, {

@@ -108,7 +108,7 @@ export type UkVatTreatment =
   | 'reverse_charge_required'
   | 'import_vat'
   | 'accountant_review';
-export type BillingPlanId = 'capture' | 'control' | 'operations' | 'enterprise' | 'legacy';
+export type BillingPlanId = 'trial' | 'capture' | 'control' | 'operations' | 'enterprise' | 'legacy';
 export type BillingStatus = 'trialing' | 'active' | 'past_due' | 'paused' | 'canceled' | 'inactive' | 'legacy';
 export type BillingCycle = 'monthly' | 'annual' | 'custom';
 

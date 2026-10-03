@@ -1,8 +1,7 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { hashPassword, signUserToken } from '../shared/auth.js';
-import { canInviteUser, getPlanLimitMessage, normalizeBillingCycle, normalizePlanId, resolveSelfServeSubscriptionSelection } from '../shared/billing.js';
-import { buildSignupCheckoutReturnUrl, createSelfServeCheckoutSession } from '../shared/billingCheckout.js';
+import { canInviteUser, getPlanLimitMessage } from '../shared/billing.js';
 import { sendRegistrationConfirmationEmailWithRetry } from '../shared/confirmationMail.js';
 import {
   activateInvitedUser,
@@ -174,11 +173,6 @@ export async function handler(event: APIGatewayProxyEventV2) {
       });
     }
 
-    const billingSelection = resolveSelfServeSubscriptionSelection({
-      planId: normalizePlanId(body.billingPlan),
-      monthlyDocumentLimit: typeof body.monthlyDocumentLimit === 'number' ? body.monthlyDocumentLimit : null,
-      includedUsers: typeof body.includedUsers === 'number' ? body.includedUsers : null,
-    });
     const workspaceName = organisationName || `${fullName || email.split('@')[0]} Workspace`;
 
     const user = await createUser({
@@ -187,10 +181,11 @@ export async function handler(event: APIGatewayProxyEventV2) {
       fullName,
       organisationName: workspaceName,
       country,
-      billingPlan: billingSelection.planId,
-      billingCycle: normalizeBillingCycle(body.billingCycle),
-      monthlyDocumentLimit: billingSelection.monthlyDocumentLimit,
-      includedUsers: billingSelection.includedUsers,
+      billingPlan: 'trial',
+      billingCycle: 'monthly',
+      monthlyDocumentLimit: null,
+      includedUsers: null,
+      startPlanFreeTrial: true,
     });
 
     try {
@@ -199,9 +194,9 @@ export async function handler(event: APIGatewayProxyEventV2) {
         organisationName: workspaceName,
         ownerName: user.fullName,
         ownerEmail: user.email,
-        planId: billingSelection.planId,
-        includedUsers: billingSelection.includedUsers,
-        monthlyDocuments: billingSelection.monthlyDocumentLimit,
+        planId: 'trial',
+        includedUsers: 'Trial',
+        monthlyDocuments: 'Trial',
         source: 'registration',
       });
     } catch (error) {
@@ -230,35 +225,12 @@ export async function handler(event: APIGatewayProxyEventV2) {
       }
     }
 
-    let checkoutUrl: string | null = null;
-    try {
-      const successUrl = buildSignupCheckoutReturnUrl(user.email, 'success');
-      const cancelUrl = buildSignupCheckoutReturnUrl(user.email, 'cancelled');
-      const checkout = await createSelfServeCheckoutSession({
-        user,
-        planId: billingSelection.planId,
-        billingCycle: normalizeBillingCycle(body.billingCycle),
-        successUrl,
-        cancelUrl,
-      });
-      checkoutUrl = checkout.checkoutUrl;
-    } catch (error) {
-      console.warn('Could not start registration checkout.', {
-        email: user.email,
-        message: error instanceof Error ? error.message : 'Unknown checkout error',
-      });
-    }
-
     return jsonResponse(201, {
       success: true,
       requiresEmailConfirmation: true,
-      checkoutUrl,
+      checkoutUrl: null,
       message: buildRegistrationMessage({
         confirmationDelivered,
-        country,
-        checkoutReady: Boolean(checkoutUrl),
-        packageLabel: billingSelection.label,
-        monthlyAmountPence: billingSelection.monthlyAmountPence,
         termsVersion,
       }),
       user: {
@@ -289,27 +261,12 @@ export async function handler(event: APIGatewayProxyEventV2) {
   }
 }
 
-function formatGbp(amountPence: number) {
-  return new Intl.NumberFormat('en-GB', {
-    style: 'currency',
-    currency: 'GBP',
-  }).format(amountPence / 100);
-}
-
 function buildRegistrationMessage(input: {
   confirmationDelivered: boolean;
-  country: WorkspaceCountry;
-  checkoutReady: boolean;
-  packageLabel: string;
-  monthlyAmountPence: number;
   termsVersion: string;
 }) {
-  const packageSummary = `${input.packageLabel} package (${formatGbp(input.monthlyAmountPence)} per month${input.country === 'GB' ? ', VAT included' : ', billed in GBP'})`;
   const confirmationSummary = input.confirmationDelivered
     ? 'We have sent your confirmation email.'
     : 'We could not send the confirmation email right now; contact contact@exdox.co.uk so we can activate access.';
-  const checkoutSummary = input.checkoutReady
-    ? 'Continue to Stripe to start your 14-day trial without payment details.'
-    : 'Trial setup is temporarily unavailable; confirm your email and log in to try again.';
-  return `${checkoutSummary} ${confirmationSummary} Your ${packageSummary} is reserved. After starting the trial, you can use the workspace immediately and have three days to confirm your email. The trial ends unless you choose and pay for monthly billing; billing then starts on your payment date. Terms version ${input.termsVersion} was accepted during registration.`;
+  return `Your 14-day free trial has started. ${confirmationSummary} You can use the workspace now and have three days to confirm your email. Choose a paid plan only when you are ready to continue after the trial; no payment happens automatically. Terms version ${input.termsVersion} was accepted during registration.`;
 }

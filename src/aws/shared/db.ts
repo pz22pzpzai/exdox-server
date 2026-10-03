@@ -1172,13 +1172,14 @@ export async function createUser(input: {
   monthlyDocumentLimit?: number | null;
   includedUsers?: number | null;
   country?: WorkspaceCountry;
+  startPlanFreeTrial?: boolean;
 }): Promise<UserRecord> {
   const email = normalizeEmail(input.email);
   const fullName = normalizeName(input.fullName);
   const organisationName = normalizeName(input.organisationName) || `${fullName || 'exdox'} Workspace`;
   const billingPlan = normalizePlanId(input.billingPlan);
   const billingCycle = normalizeBillingCycle(input.billingCycle);
-  const initialBillingStatus = billingPlan === 'legacy' ? 'legacy' : 'inactive';
+  const initialBillingStatus = input.startPlanFreeTrial ? 'trialing' : billingPlan === 'legacy' ? 'legacy' : 'inactive';
   const confirmationToken = crypto.randomBytes(24).toString('hex');
   const country = workspaceCountry(input.country);
   const regionalDefaults = workspaceCountryDefaults(country);
@@ -1196,6 +1197,7 @@ export async function createUser(input: {
       input.monthlyDocumentLimit,
       input.includedUsers,
       country,
+      input.startPlanFreeTrial,
     );
     const user = buildStoredUser({
       id: Date.now(),
@@ -2179,7 +2181,7 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
       billingCycle: normalizeBillingCycle(organisation.billingCycle),
       trialEndsAt:
         organisation.trialEndsAt
-        ?? (normalizeBillingStatus(organisation.billingStatus, billingPlan) === 'trialing' ? defaultTrialEndsAt(billingPlan) : null),
+        ?? (billingPlan !== 'trial' && normalizeBillingStatus(organisation.billingStatus, billingPlan) === 'trialing' ? defaultTrialEndsAt(billingPlan) : null),
       billingPeriodStartedAt,
       billingPeriodEndsAt: organisation.billingPeriodEndsAt ?? null,
       monthlyDocumentLimit: normalizeNullableNumber(organisation.monthlyDocumentLimit) ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
@@ -2234,7 +2236,7 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
     planId: billingPlan,
     status,
     billingCycle: normalizeBillingCycle(row.billing_cycle),
-    trialEndsAt: row.trial_ends_at ? new Date(row.trial_ends_at).toISOString() : (status === 'trialing' ? defaultTrialEndsAt(billingPlan) : null),
+    trialEndsAt: row.trial_ends_at ? new Date(row.trial_ends_at).toISOString() : (status === 'trialing' && billingPlan !== 'trial' ? defaultTrialEndsAt(billingPlan) : null),
     billingPeriodStartedAt: row.billing_period_started_at ? new Date(row.billing_period_started_at).toISOString() : defaultUsagePeriodStart(),
     billingPeriodEndsAt: row.billing_period_ends_at ? new Date(row.billing_period_ends_at).toISOString() : null,
     monthlyDocumentLimit: normalizeNullableNumber(row.monthly_document_limit) ?? defaultMonthlyDocumentLimitForPlan(billingPlan),
@@ -4468,8 +4470,9 @@ async function createS3Organisation(
   monthlyDocumentLimit?: number | null,
   includedUsers?: number | null,
   country: WorkspaceCountry = 'GB',
+  startPlanFreeTrial = false,
 ): Promise<StoredOrganisation> {
-  const initialBillingStatus = (billingPlan === 'legacy' ? 'legacy' : 'inactive') as BillingStatus;
+  const initialBillingStatus = (startPlanFreeTrial ? 'trialing' : billingPlan === 'legacy' ? 'legacy' : 'inactive') as BillingStatus;
   const organisation = {
     id: Date.now(),
     name,

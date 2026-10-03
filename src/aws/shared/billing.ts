@@ -30,6 +30,16 @@ export type SelfServeSubscriptionSelection = {
 const ACTIVE_BILLING_STATUSES = new Set<BillingStatus>(['trialing', 'active', 'legacy']);
 
 const PLAN_DEFINITIONS: Record<BillingPlanId, PlanDefinition> = {
+  trial: {
+    id: 'trial',
+    label: 'Free trial',
+    monthlyDocumentLimit: null,
+    includedUsers: null,
+    routes: ['/overview', '/costs', '/sales', '/vault', '/claims', '/rules', '/company-cards', '/recycle-bin', '/settings', '/billing'],
+    features: ['mobile_capture', 'web_upload', 'cost_review', 'sales_review', 'employee_dropbox', 'expense_claims', 'approval_workflows', 'queue_exports', 'tax_editing', 'data_health', 'supplier_rules', 'vault', 'archive_access'],
+    trialDays: 14,
+    highlight: '14 days of core Exdox access before choosing a paid plan',
+  },
   capture: {
     id: 'capture',
     label: 'Capture',
@@ -193,7 +203,7 @@ export function getPlanDefinition(planId: BillingPlanId) {
 }
 
 export function normalizePlanId(value: unknown): BillingPlanId {
-  return value === 'capture' || value === 'control' || value === 'operations' || value === 'enterprise'
+  return value === 'trial' || value === 'capture' || value === 'control' || value === 'operations' || value === 'enterprise'
     ? value
     : 'legacy';
 }
@@ -247,7 +257,7 @@ export function resolveAllowedWebRoutes(summary: OrganisationBillingSummary, rol
 export function isBillingActive(summary: OrganisationBillingSummary) {
   // Do not extend an unpaid trial just because Stripe's end-of-trial webhook
   // has not arrived yet. Paid subscriptions are reconciled independently.
-  if (summary.status === 'trialing' && summary.trialEndsAt && Date.parse(summary.trialEndsAt) <= Date.now()) {
+  if (summary.status === 'trialing' && (!summary.trialEndsAt || Date.parse(summary.trialEndsAt) <= Date.now())) {
     return false;
   }
   return ACTIVE_BILLING_STATUSES.has(summary.status);
@@ -319,7 +329,7 @@ export function assertFeatureAccess(summary: OrganisationBillingSummary, feature
 }
 
 export function listPlanDefinitions() {
-  return Object.values(PLAN_DEFINITIONS);
+  return Object.values(PLAN_DEFINITIONS).filter((plan) => plan.id !== 'trial');
 }
 
 function getAllPlanRoutes() {

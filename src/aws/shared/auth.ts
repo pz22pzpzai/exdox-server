@@ -126,7 +126,10 @@ export function requireAuthenticatedUser(event: APIGatewayProxyEventV2): Authent
     const emailConfirmationDueAt =
       typeof decoded.emailConfirmationDueAt === 'string' ? decoded.emailConfirmationDueAt : null;
     const trialEndsAt = typeof decoded.trialEndsAt === 'string' ? decoded.trialEndsAt : null;
-    if (trialEndsAt && Date.parse(trialEndsAt) <= Date.now()) {
+    const route = (event.rawPath || event.requestContext?.http?.path || '').replace(/^\/prod(?=\/)/, '');
+    const billingRecoveryRoute = (event.requestContext?.http?.method === 'GET' && (route === '/session' || route === '/settings' || route === '/xero/status'))
+      || (event.requestContext?.http?.method === 'POST' && route === '/billing/checkout-session');
+    if (trialEndsAt && Date.parse(trialEndsAt) <= Date.now() && !billingRecoveryRoute) {
       throw unauthorized('The free trial has ended. Sign in to continue with a paid monthly subscription.');
     }
     if (status === 'pending_confirmation') {
