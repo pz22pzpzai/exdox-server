@@ -2,14 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { validVatDate, validateVatCode, type VatCode } from './accountingVat.js';
 
 export type AccountType = 'asset' | 'liability' | 'equity' | 'income' | 'expense';
-export type LedgerAccount = { id: string; code: string; name: string; type: AccountType; system?: boolean };
+export type LedgerAccount = { id: string; code: string; name: string; type: AccountType; system?: boolean; bank?: boolean };
 export type JournalLine = { accountId: string; debitPence: number; creditPence: number };
 export type JournalEntry = { id: string; date: string; reference: string; description: string; lines: JournalLine[]; createdAt: string; createdBy: string };
 export type AccountingDocument = { id: string; draftId?: string; contactId?: string; kind: 'invoice' | 'bill'; number: string; contactName: string; issuerName: string; issuerAddress: string; contactAddress: string; vatNumber: string; paymentInstructions: string; date: string; taxDate?: string; dueDate: string; items: Array<{ description: string; quantity: number; unitPricePence: number; vatRate: 0 | 5 | 20; vatCode?: VatCode }>; netPence: number; vatPence: number; totalPence: number; createdAt: string; createdBy: string };
-export type AccountingPayment = { id: string; documentId: string; date: string; amountPence: number; reference: string; createdAt: string; createdBy: string };
+export type AccountingPayment = { id: string; documentId: string; bankAccountId?: string; date: string; amountPence: number; reference: string; createdAt: string; createdBy: string };
 
 export const defaultAccounts: LedgerAccount[] = [
-  { id: '1000', code: '1000', name: 'Bank', type: 'asset', system: true },
+  { id: '1000', code: '1000', name: 'Bank', type: 'asset', system: true, bank: true },
   { id: '1100', code: '1100', name: 'Accounts receivable', type: 'asset', system: true },
   { id: '1200', code: '1200', name: 'VAT receivable', type: 'asset', system: true },
   { id: '2000', code: '2000', name: 'Accounts payable', type: 'liability', system: true },
@@ -30,7 +30,8 @@ export function createAccount(input: unknown, existing: LedgerAccount[]): Ledger
     throw new Error('Enter a 4–6 digit code, a name, and a valid account type.');
   }
   if (existing.some((account) => account.code === code)) throw new Error('That account code already exists.');
-  return { id: randomUUID(), code, name, type: type as AccountType };
+  if (data.bank === true && type !== 'asset') throw new Error('Bank accounts must be asset accounts.');
+  return { id: randomUUID(), code, name, type: type as AccountType, ...(data.bank === true ? { bank: true } : {}) };
 }
 
 export function createJournal(input: unknown, accounts: LedgerAccount[], createdBy: string): JournalEntry {
@@ -114,20 +115,23 @@ export function createPayment(input: unknown, document: AccountingDocument, exis
   const date = String(data?.date ?? '');
   const amountPence = Number(data?.amountPence);
   const reference = String(data?.reference ?? '').trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date || date < document.date || !Number.isSafeInteger(amountPence) || amountPence <= 0 || reference.length > 80) throw new Error('Enter a valid payment date and positive amount.');
+  const bankAccountId = String(data?.bankAccountId ?? '1000');
+  const requestId = String(data?.requestId ?? '');
+  if (requestId && !/^[0-9a-f-]{36}$/.test(requestId)) throw new Error('Invalid payment request ID.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date || date < document.date || !Number.isSafeInteger(amountPence) || amountPence <= 0 || reference.length > 80 || !/^(1000|[0-9a-f-]{36})$/.test(bankAccountId)) throw new Error('Enter a valid payment date, bank account, and positive amount.');
   const remaining = document.totalPence - creditedPence - existing.reduce((sum, payment) => sum + payment.amountPence, 0);
   if (amountPence > remaining) throw new Error('Payment exceeds the amount due.');
-  return { id: randomUUID(), documentId: document.id, date, amountPence, reference, createdAt: new Date().toISOString(), createdBy };
+  return { id: requestId || randomUUID(), documentId: document.id, bankAccountId, date, amountPence, reference, createdAt: new Date().toISOString(), createdBy };
 }
 
 export function paymentJournal(payment: AccountingPayment, document: AccountingDocument): JournalEntry {
   const invoice = document.kind === 'invoice';
   return { id: `payment-${payment.id}`, date: payment.date, reference: payment.reference || document.number, description: `${invoice ? 'Received payment for' : 'Paid'} ${document.number}`, lines: invoice ? [
-    { accountId: '1000', debitPence: payment.amountPence, creditPence: 0 },
+    { accountId: payment.bankAccountId ?? '1000', debitPence: payment.amountPence, creditPence: 0 },
     { accountId: '1100', debitPence: 0, creditPence: payment.amountPence },
   ] : [
     { accountId: '2000', debitPence: payment.amountPence, creditPence: 0 },
-    { accountId: '1000', debitPence: 0, creditPence: payment.amountPence },
+    { accountId: payment.bankAccountId ?? '1000', debitPence: 0, creditPence: payment.amountPence },
   ], createdAt: payment.createdAt, createdBy: payment.createdBy };
 }
 

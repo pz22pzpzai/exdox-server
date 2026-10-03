@@ -31,6 +31,8 @@ test('one settlement allocates a single balanced bank movement to multiple invoi
   assert.equal(entry.lines.filter((line) => line.accountId === '1000').length, 1);
   assert.equal(entry.lines.reduce((sum, line) => sum + line.debitPence - line.creditPence, 0), 0);
   assert.throws(() => createSettlement({ kind: 'invoice', date: '2026-10-03', allocations: [{ documentId: first.id, amountPence: 13000 }] }, [first], () => 12000, owner), /unpaid document/);
+  const stable = createSettlement({ kind: 'invoice', date: '2026-10-03', requestId: '33333333-3333-4333-8333-333333333333', allocations: [{ documentId: first.id, amountPence: 4000 }] }, [first], () => 12000, owner);
+  assert.equal(stable.id, '33333333-3333-4333-8333-333333333333');
 });
 
 test('paid invoice can be credited and refunded with opposite bank posting, without a new VAT issue', () => {
@@ -39,6 +41,7 @@ test('paid invoice can be credited and refunded with opposite bank posting, with
   const credit = createCreditNote({ number: 'CN-101', date: '2026-10-03', reason: 'Service cancelled', items: [{ itemIndex: 0, quantity: 1 }] }, invoice, [], [payment], null, owner);
   assert.equal(credit.totalPence, invoice.totalPence);
   const refund = createRefund({ creditId: credit.id, date: '2026-10-04', amountPence: credit.totalPence, reference: 'BANK-REFUND' }, credit.totalPence, owner);
+  assert.equal(createRefund({ creditId: credit.id, date: '2026-10-04', amountPence: credit.totalPence, requestId: '44444444-4444-4444-8444-444444444444' }, credit.totalPence, owner).id, '44444444-4444-4444-8444-444444444444');
   const entries = [documentJournal(invoice), paymentJournal(payment, invoice), creditJournal(credit, invoice), refundJournal(refund, true)];
   assert.equal(entries.flatMap((entry) => entry.lines).reduce((sum, line) => sum + line.debitPence - line.creditPence, 0), 0);
   const report = buildVatReport({ fromDate: '2026-10-01', toDate: '2026-10-31', entries, documents: [invoice], creditNotes: [credit], sourcePostings: [], reversals: [], classifications: [] });

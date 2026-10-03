@@ -5,8 +5,8 @@ import { validBookDate } from './accountingSafeguards.js';
 export type AccountingContact = { id: string; version: number; role: 'customer' | 'supplier' | 'both'; name: string; email: string; address: string; updatedAt: string; updatedBy: string };
 export type AccountingDraft = { id: string; version: number; contactId: string; document: Omit<AccountingDocument, 'id' | 'createdAt' | 'createdBy'>; updatedAt: string; updatedBy: string };
 export type AccountingAudit = { id: string; action: string; subjectId: string; detail: string; at: string; by: string };
-export type AccountingSettlement = { id: string; kind: 'invoice' | 'bill'; date: string; reference: string; allocations: Array<{ documentId: string; amountPence: number }>; totalPence: number; createdAt: string; createdBy: string };
-export type AccountingRefund = { id: string; creditId: string; date: string; reference: string; amountPence: number; createdAt: string; createdBy: string };
+export type AccountingSettlement = { id: string; kind: 'invoice' | 'bill'; bankAccountId?: string; date: string; reference: string; allocations: Array<{ documentId: string; amountPence: number }>; totalPence: number; createdAt: string; createdBy: string };
+export type AccountingRefund = { id: string; creditId: string; bankAccountId?: string; date: string; reference: string; amountPence: number; createdAt: string; createdBy: string };
 
 export function accountingInvoiceText(document: AccountingDocument) {
   const pounds = (pence: number) => `GBP ${(pence / 100).toFixed(2)}`;
@@ -54,7 +54,10 @@ export function createSettlement(input: unknown, documents: AccountingDocument[]
   const kind = data.kind;
   const date = String(data.date ?? '');
   const reference = String(data.reference ?? '').trim();
-  if (!['invoice', 'bill'].includes(String(kind)) || !validBookDate(date) || reference.length > 80 || !Array.isArray(data.allocations) || !data.allocations.length || data.allocations.length > 50) throw new Error('Enter a valid settlement type, date, and allocations.');
+  const bankAccountId = String(data.bankAccountId ?? '1000');
+  const requestId = String(data.requestId ?? '');
+  if (requestId && !/^[0-9a-f-]{36}$/.test(requestId)) throw new Error('Invalid settlement request ID.');
+  if (!['invoice', 'bill'].includes(String(kind)) || !validBookDate(date) || reference.length > 80 || !/^(1000|[0-9a-f-]{36})$/.test(bankAccountId) || !Array.isArray(data.allocations) || !data.allocations.length || data.allocations.length > 50) throw new Error('Enter a valid settlement type, bank account, date, and allocations.');
   const seen = new Set<string>();
   const allocations = data.allocations.map((raw: unknown) => {
     const row = raw as Record<string, unknown>;
@@ -67,25 +70,28 @@ export function createSettlement(input: unknown, documents: AccountingDocument[]
   });
   const totalPence = allocations.reduce((sum, item) => sum + item.amountPence, 0);
   if (!Number.isSafeInteger(totalPence) || totalPence <= 0) throw new Error('Settlement total must be positive.');
-  return { id: randomUUID(), kind: kind as AccountingSettlement['kind'], date, reference, allocations, totalPence, createdAt: new Date().toISOString(), createdBy: by };
+  return { id: requestId || randomUUID(), kind: kind as AccountingSettlement['kind'], bankAccountId, date, reference, allocations, totalPence, createdAt: new Date().toISOString(), createdBy: by };
 }
 export function settlementJournal(item: AccountingSettlement): JournalEntry {
   const invoice = item.kind === 'invoice';
   return { id: `settlement-${item.id}`, date: item.date, reference: item.reference, description: `${invoice ? 'Receipt' : 'Payment'} allocated to ${item.allocations.length} document(s)`, lines: invoice ? [
-    { accountId: '1000', debitPence: item.totalPence, creditPence: 0 }, { accountId: '1100', debitPence: 0, creditPence: item.totalPence },
-  ] : [{ accountId: '2000', debitPence: item.totalPence, creditPence: 0 }, { accountId: '1000', debitPence: 0, creditPence: item.totalPence }], createdAt: item.createdAt, createdBy: item.createdBy };
+    { accountId: item.bankAccountId ?? '1000', debitPence: item.totalPence, creditPence: 0 }, { accountId: '1100', debitPence: 0, creditPence: item.totalPence },
+  ] : [{ accountId: '2000', debitPence: item.totalPence, creditPence: 0 }, { accountId: item.bankAccountId ?? '1000', debitPence: 0, creditPence: item.totalPence }], createdAt: item.createdAt, createdBy: item.createdBy };
 }
 export function createRefund(input: unknown, maxPence: number, by: string): AccountingRefund {
   const data = input as Record<string, unknown>;
   const creditId = String(data.creditId ?? '');
   const date = String(data.date ?? '');
   const reference = String(data.reference ?? '').trim();
+  const bankAccountId = String(data.bankAccountId ?? '1000');
+  const requestId = String(data.requestId ?? '');
+  if (requestId && !/^[0-9a-f-]{36}$/.test(requestId)) throw new Error('Invalid refund request ID.');
   const amountPence = Number(data.amountPence);
-  if (!/^[0-9a-f-]{36}$/.test(creditId) || !validBookDate(date) || !Number.isSafeInteger(amountPence) || amountPence <= 0 || amountPence > maxPence || reference.length > 80) throw new Error('Enter a valid refund date and amount within the refundable balance.');
-  return { id: randomUUID(), creditId, date, reference, amountPence, createdAt: new Date().toISOString(), createdBy: by };
+  if (!/^[0-9a-f-]{36}$/.test(creditId) || !validBookDate(date) || !Number.isSafeInteger(amountPence) || amountPence <= 0 || amountPence > maxPence || reference.length > 80 || !/^(1000|[0-9a-f-]{36})$/.test(bankAccountId)) throw new Error('Enter a valid refund date, bank account, and amount within the refundable balance.');
+  return { id: requestId || randomUUID(), creditId, bankAccountId, date, reference, amountPence, createdAt: new Date().toISOString(), createdBy: by };
 }
 export function refundJournal(refund: AccountingRefund, invoice: boolean): JournalEntry {
   return { id: `refund-${refund.id}`, date: refund.date, reference: refund.reference, description: `${invoice ? 'Customer' : 'Supplier'} refund for credit note`, lines: invoice ? [
-    { accountId: '1100', debitPence: refund.amountPence, creditPence: 0 }, { accountId: '1000', debitPence: 0, creditPence: refund.amountPence },
-  ] : [{ accountId: '1000', debitPence: refund.amountPence, creditPence: 0 }, { accountId: '2000', debitPence: 0, creditPence: refund.amountPence }], createdAt: refund.createdAt, createdBy: refund.createdBy };
+    { accountId: '1100', debitPence: refund.amountPence, creditPence: 0 }, { accountId: refund.bankAccountId ?? '1000', debitPence: 0, creditPence: refund.amountPence },
+  ] : [{ accountId: refund.bankAccountId ?? '1000', debitPence: refund.amountPence, creditPence: 0 }, { accountId: '2000', debitPence: 0, creditPence: refund.amountPence }], createdAt: refund.createdAt, createdBy: refund.createdBy };
 }

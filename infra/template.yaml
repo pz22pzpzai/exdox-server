@@ -1477,6 +1477,51 @@ Resources:
             Path: /accounting/bank-statements
             Method: POST
 
+  AccountingBankRuleFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.bankRuleHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingBankRuleRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/bank-rules
+            Method: POST
+
+  AccountingBankRulePostFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.bankRulePostHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingBankRulePostRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/bank-rules/post
+            Method: POST
+
+  AccountingBankTransferFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.bankTransferHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingBankTransferRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/bank-transfers
+            Method: POST
+
   AccountingBankMatchFunction:
     Type: AWS::Serverless::Function
     Properties:

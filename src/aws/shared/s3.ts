@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   DeleteObjectCommand,
   DeleteObjectsCommand,
@@ -128,6 +129,55 @@ export async function putReceiptJsonObjectIfAbsent(key: string, value: unknown) 
     ServerSideEncryption: RECEIPT_BUCKET_SSE,
     IfNoneMatch: '*',
   }));
+}
+
+/** Serialises accounting writes whose validation depends on other S3 objects. */
+export async function withReceiptObjectLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const leaseMs = 90_000; // Longer than the 60-second accounting Lambda timeout.
+  const leaseId = randomUUID();
+  const body = () => JSON.stringify({ leaseId, expiresAt: Date.now() + leaseMs });
+  let etag: string | undefined;
+  for (let attempt = 0; attempt < 2 && !etag; attempt += 1) {
+    try {
+      const response = await s3.send(new PutObjectCommand({ Bucket: awsEnv.receiptBucketName, Key: key, Body: body(), ContentType: 'application/json', ServerSideEncryption: RECEIPT_BUCKET_SSE, IfNoneMatch: '*' }));
+      etag = response.ETag;
+    } catch (error) {
+      const status = typeof error === 'object' && error !== null && '$metadata' in error ? Number((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode) : 0;
+      if (status === 409) {
+        const busy = new Error('Another accounting change is being saved. Please retry.') as Error & { statusCode: number };
+        busy.statusCode = 409;
+        throw busy;
+      }
+      if (status !== 412) throw error;
+      let held;
+      try { held = await s3.send(new GetObjectCommand({ Bucket: awsEnv.receiptBucketName, Key: key })); }
+      catch (readError) {
+        if (typeof readError === 'object' && readError !== null && 'name' in readError && ['NoSuchKey', 'NotFound'].includes(String((readError as { name?: string }).name))) continue;
+        throw readError;
+      }
+      const lease = JSON.parse(await held.Body!.transformToString()) as { expiresAt?: number };
+      if (!Number.isFinite(lease.expiresAt) || Number(lease.expiresAt) > Date.now()) {
+        const busy = new Error('Another accounting change is being saved. Please retry.') as Error & { statusCode: number };
+        busy.statusCode = 409;
+        throw busy;
+      }
+      try { await s3.send(new DeleteObjectCommand({ Bucket: awsEnv.receiptBucketName, Key: key, IfMatch: held.ETag })); }
+      catch (deleteError) {
+        const statusCode = typeof deleteError === 'object' && deleteError !== null && '$metadata' in deleteError ? Number((deleteError as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode) : 0;
+        if (statusCode !== 412 && statusCode !== 404) throw deleteError;
+      }
+    }
+  }
+  if (!etag) {
+    const busy = new Error('Another accounting change is being saved. Please retry.') as Error & { statusCode: number };
+    busy.statusCode = 409;
+    throw busy;
+  }
+  try { return await operation(); }
+  finally {
+    try { await s3.send(new DeleteObjectCommand({ Bucket: awsEnv.receiptBucketName, Key: key, IfMatch: etag })); }
+    catch { /* The lease expires after a crashed invocation; never mask the accounting result. */ }
+  }
 }
 
 export async function deleteReceiptObject(key: string) {
