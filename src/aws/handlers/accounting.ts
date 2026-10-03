@@ -1,9 +1,10 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { createAccount, createDocument, createJournal, createPayment, defaultAccounts, documentJournal, ledgerReport, paymentJournal, type AccountingDocument, type AccountingPayment, type JournalEntry, type LedgerAccount } from '../shared/accounting.js';
+import { bankEntries, createBankMatch, createBankStatement, type BankMatch, type BankStatement } from '../shared/accountingReconciliation.js';
 import { forbidden, requireAuthenticatedUser } from '../shared/auth.js';
 import { findUserByEmail } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
-import { getReceiptJsonObject, listAllReceiptJsonKeys, putReceiptJsonObject } from '../shared/s3.js';
+import { deleteReceiptObject, getReceiptJsonObject, listAllReceiptJsonKeys, putReceiptJsonObject } from '../shared/s3.js';
 
 const pilotEmail = 'terryreedbfv@outlook.com';
 async function scope(event: APIGatewayProxyEventV2) {
@@ -20,6 +21,17 @@ async function load<T>(prefix: string): Promise<T[]> {
 async function accounts(prefix: string) {
   return [...defaultAccounts, ...await load<LedgerAccount>(`${prefix}accounts/`)];
 }
+async function ledger(prefix: string) {
+  const [manualEntries, documents, payments] = await Promise.all([load<JournalEntry>(`${prefix}journals/`), load<AccountingDocument>(`${prefix}documents/`), load<AccountingPayment>(`${prefix}payments/`)]);
+  const documentMap = new Map(documents.map((document) => [document.id, document]));
+  const entries = [...manualEntries, ...documents.map(documentJournal), ...payments.flatMap((payment) => {
+    const document = documentMap.get(payment.documentId);
+    return document ? [paymentJournal(payment, document)] : [];
+  })];
+  entries.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+  documents.sort((a, b) => b.date.localeCompare(a.date));
+  return { entries, documents, payments };
+}
 function badRequest(message: string) {
   const error = new Error(message) as Error & { statusCode: number };
   error.statusCode = 400;
@@ -32,15 +44,9 @@ function failure(error: unknown) {
 export async function getHandler(event: APIGatewayProxyEventV2) {
   try {
     const { prefix } = await scope(event);
-    const [chart, manualEntries, documents, payments] = await Promise.all([accounts(prefix), load<JournalEntry>(`${prefix}journals/`), load<AccountingDocument>(`${prefix}documents/`), load<AccountingPayment>(`${prefix}payments/`)]);
-    const documentMap = new Map(documents.map((document) => [document.id, document]));
-    const entries = [...manualEntries, ...documents.map(documentJournal), ...payments.flatMap((payment) => {
-      const document = documentMap.get(payment.documentId);
-      return document ? [paymentJournal(payment, document)] : [];
-    })];
-    entries.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
-    documents.sort((a, b) => b.date.localeCompare(a.date));
-    return jsonResponse(200, { success: true, accounts: chart, entries, documents, payments, report: ledgerReport(chart, entries) });
+    const [chart, books, bankStatements, bankMatches] = await Promise.all([accounts(prefix), ledger(prefix), load<BankStatement>(`${prefix}bank-statements/`), load<BankMatch>(`${prefix}bank-matches/`)]);
+    bankStatements.sort((a, b) => b.toDate.localeCompare(a.toDate));
+    return jsonResponse(200, { success: true, accounts: chart, ...books, bankStatements, bankMatches, report: ledgerReport(chart, books.entries) });
   } catch (error) { return failure(error); }
 }
 export async function accountHandler(event: APIGatewayProxyEventV2) {
@@ -89,5 +95,42 @@ export async function paymentHandler(event: APIGatewayProxyEventV2) {
     try { payment = createPayment(data, document, existing, user.email); } catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid payment.'); }
     await putReceiptJsonObject(`${prefix}payments/${payment.id}.json`, payment);
     return jsonResponse(201, { success: true, payment });
+  } catch (error) { return failure(error); }
+}
+export async function bankStatementHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix, user } = await scope(event);
+    const data = event.body ? JSON.parse(event.body) : {};
+    let statement: BankStatement;
+    try { statement = createBankStatement(data, user.email); } catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid statement.'); }
+    const existing = await load<BankStatement>(`${prefix}bank-statements/`);
+    const duplicate = existing.find((item) => item.id === statement.id);
+    if (duplicate) return jsonResponse(200, { success: true, statement: duplicate, alreadyImported: true });
+    await putReceiptJsonObject(`${prefix}bank-statements/${statement.id}.json`, statement);
+    return jsonResponse(201, { success: true, statement, alreadyImported: false });
+  } catch (error) { return failure(error); }
+}
+export async function bankMatchHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix, user } = await scope(event);
+    const data = event.body ? JSON.parse(event.body) : {};
+    const [statements, matches, books] = await Promise.all([load<BankStatement>(`${prefix}bank-statements/`), load<BankMatch>(`${prefix}bank-matches/`), ledger(prefix)]);
+    let match: BankMatch;
+    try { match = createBankMatch(data, statements, bankEntries(books.entries), matches, user.email); } catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid match.'); }
+    await putReceiptJsonObject(`${prefix}bank-matches/${match.statementId}-${match.lineIndex}.json`, match);
+    return jsonResponse(201, { success: true, match });
+  } catch (error) { return failure(error); }
+}
+export async function bankUnmatchHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix } = await scope(event);
+    const data = event.body ? JSON.parse(event.body) as Record<string, unknown> : {};
+    const statementId = String(data.statementId ?? '');
+    const lineIndex = Number(data.lineIndex);
+    if (!/^[0-9a-f]{64}$/.test(statementId) || !Number.isSafeInteger(lineIndex) || lineIndex < 0) throw badRequest('Choose a valid matched statement line.');
+    const key = `${prefix}bank-matches/${statementId}-${lineIndex}.json`;
+    try { await getReceiptJsonObject<BankMatch>(key); } catch { throw badRequest('That statement line is not matched.'); }
+    await deleteReceiptObject(key);
+    return jsonResponse(200, { success: true });
   } catch (error) { return failure(error); }
 }
