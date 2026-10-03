@@ -1337,6 +1337,36 @@ Resources:
             Path: /accounting/journals
             Method: POST
 
+  AccountingDocumentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.documentHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingDocumentRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/documents
+            Method: POST
+
+  AccountingPaymentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.paymentHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingPaymentRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/payments
+            Method: POST
+
   CompanyCardsFunction:
     Type: AWS::Serverless::Function
     Properties:

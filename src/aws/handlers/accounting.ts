@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
-import { createAccount, createJournal, defaultAccounts, ledgerReport, type JournalEntry, type LedgerAccount } from '../shared/accounting.js';
+import { createAccount, createDocument, createJournal, createPayment, defaultAccounts, documentJournal, ledgerReport, paymentJournal, type AccountingDocument, type AccountingPayment, type JournalEntry, type LedgerAccount } from '../shared/accounting.js';
 import { forbidden, requireAuthenticatedUser } from '../shared/auth.js';
 import { findUserByEmail } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
@@ -32,9 +32,15 @@ function failure(error: unknown) {
 export async function getHandler(event: APIGatewayProxyEventV2) {
   try {
     const { prefix } = await scope(event);
-    const [chart, entries] = await Promise.all([accounts(prefix), load<JournalEntry>(`${prefix}journals/`)]);
+    const [chart, manualEntries, documents, payments] = await Promise.all([accounts(prefix), load<JournalEntry>(`${prefix}journals/`), load<AccountingDocument>(`${prefix}documents/`), load<AccountingPayment>(`${prefix}payments/`)]);
+    const documentMap = new Map(documents.map((document) => [document.id, document]));
+    const entries = [...manualEntries, ...documents.map(documentJournal), ...payments.flatMap((payment) => {
+      const document = documentMap.get(payment.documentId);
+      return document ? [paymentJournal(payment, document)] : [];
+    })];
     entries.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
-    return jsonResponse(200, { success: true, accounts: chart, entries, report: ledgerReport(chart, entries) });
+    documents.sort((a, b) => b.date.localeCompare(a.date));
+    return jsonResponse(200, { success: true, accounts: chart, entries, documents, payments, report: ledgerReport(chart, entries) });
   } catch (error) { return failure(error); }
 }
 export async function accountHandler(event: APIGatewayProxyEventV2) {
@@ -55,5 +61,33 @@ export async function journalHandler(event: APIGatewayProxyEventV2) {
     try { entry = createJournal(data, await accounts(prefix), user.email); } catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid journal.'); }
     await putReceiptJsonObject(`${prefix}journals/${entry.id}.json`, entry);
     return jsonResponse(201, { success: true, entry });
+  } catch (error) { return failure(error); }
+}
+export async function documentHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix, user } = await scope(event);
+    const data = event.body ? JSON.parse(event.body) : {};
+    let document: AccountingDocument;
+    try { document = createDocument(data, user.email); } catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid document.'); }
+    const existing = await load<AccountingDocument>(`${prefix}documents/`);
+    if (existing.some((item) => item.kind === document.kind && item.number.toLowerCase() === document.number.toLowerCase())) throw badRequest('That document number already exists.');
+    await putReceiptJsonObject(`${prefix}documents/${document.id}.json`, document);
+    return jsonResponse(201, { success: true, document });
+  } catch (error) { return failure(error); }
+}
+export async function paymentHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix, user } = await scope(event);
+    const data = event.body ? JSON.parse(event.body) as Record<string, unknown> : {};
+    const documentId = String(data.documentId ?? '');
+    if (!/^[0-9a-f-]{36}$/.test(documentId)) throw badRequest('Choose a valid invoice or bill.');
+    let document: AccountingDocument;
+    try { document = await getReceiptJsonObject<AccountingDocument>(`${prefix}documents/${documentId}.json`); }
+    catch { throw badRequest('Invoice or bill not found.'); }
+    const existing = (await load<AccountingPayment>(`${prefix}payments/`)).filter((item) => item.documentId === documentId);
+    let payment: AccountingPayment;
+    try { payment = createPayment(data, document, existing, user.email); } catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid payment.'); }
+    await putReceiptJsonObject(`${prefix}payments/${payment.id}.json`, payment);
+    return jsonResponse(201, { success: true, payment });
   } catch (error) { return failure(error); }
 }

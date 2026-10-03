@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createAccount, createJournal, defaultAccounts, ledgerReport } from '../src/aws/shared/accounting.js';
+import { createAccount, createDocument, createJournal, createPayment, defaultAccounts, documentJournal, ledgerReport, paymentJournal } from '../src/aws/shared/accounting.js';
 
 test('balanced journals produce a balanced trial balance and accounting equation', () => {
   const opening = createJournal({ date: '2026-10-03', description: 'Owner funds bank', reference: 'OPEN', lines: [
@@ -33,4 +33,17 @@ test('posting rejects unbalanced, negative and unknown-account lines', () => {
 test('custom account codes are unique', () => {
   assert.throws(() => createAccount({ code: '1000', name: 'Second bank', type: 'asset' }, defaultAccounts), /already exists/);
   assert.equal(createAccount({ code: '6100', name: 'Office costs', type: 'expense' }, defaultAccounts).code, '6100');
+});
+
+test('invoice and bill posting and part payments update receivables, payables and bank', () => {
+  const invoice = createDocument({ kind: 'invoice', number: 'INV-1', contactName: 'Customer Ltd', issuerName: 'My Business', issuerAddress: '1 High Street', contactAddress: '2 Market Street', vatNumber: 'GB123', date: '2026-10-03', dueDate: '2026-10-17', items: [{ description: 'Work', quantity: 1, unitPricePence: 10000, vatRate: 20 }] }, 'owner@example.com');
+  const bill = createDocument({ kind: 'bill', number: 'B-1', contactName: 'Supplier Ltd', date: '2026-10-03', dueDate: '2026-10-17', items: [{ description: 'Supplies', quantity: 1, unitPricePence: 4000, vatRate: 20 }] }, 'owner@example.com');
+  const receipt = createPayment({ date: '2026-10-04', amountPence: 6000 }, invoice, [], 'owner@example.com');
+  const payout = createPayment({ date: '2026-10-04', amountPence: 4800 }, bill, [], 'owner@example.com');
+  const report = ledgerReport(defaultAccounts, [documentJournal(invoice), documentJournal(bill), paymentJournal(receipt, invoice), paymentJournal(payout, bill)]);
+  assert.equal(report.balances.find((item) => item.code === '1100')?.balancePence, 6000);
+  assert.equal(report.balances.find((item) => item.code === '2000')?.balancePence, 0);
+  assert.equal(report.balances.find((item) => item.code === '1000')?.balancePence, 1200);
+  assert.equal(report.profitPence, 6000);
+  assert.throws(() => createPayment({ date: '2026-10-05', amountPence: 7000 }, invoice, [receipt], 'owner@example.com'), /exceeds/);
 });
