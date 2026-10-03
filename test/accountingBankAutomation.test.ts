@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAccount, createDocument, createPayment, defaultAccounts, paymentJournal } from '../src/aws/shared/accounting.js';
 import { createBankRule, createBankTransfer, matchingBankRules, ruleJournal } from '../src/aws/shared/accountingBankAutomation.js';
-import { bankEntries, createBankMatch, createBankStatement, duplicateStatementLines, suggestBankMatches, validateStatementSequence } from '../src/aws/shared/accountingReconciliation.js';
+import { bankEntries, createBankMatch, createBankStatement, duplicateStatementLines, likelyExistingBankMovement, suggestBankMatches, validateStatementSequence } from '../src/aws/shared/accountingReconciliation.js';
 
 const owner = 'terryreedbfv@outlook.com';
 const secondBank = createAccount({ code: '1010', name: 'Savings', type: 'asset', bank: true }, defaultAccounts);
@@ -43,6 +43,17 @@ test('bank rules post balanced reviewed entries and never use receivable or VAT 
   assert.equal(bankEntries([journal])[0].amountPence, -150);
   assert.throws(() => createBankRule({ accountId: '1000', contains: 'client', direction: 'in', counterAccountId: '1100' }, chart, owner), /non-control/);
   assert.throws(() => createAccount({ code: '1011', name: 'Not a bank', type: 'liability', bank: true }, chart), /asset/);
+});
+
+test('rule posting only blocks a similar unmatched movement, not a repeated amount', () => {
+  const line = { index: 0, date: '2026-10-03', description: 'Monthly bank fee', reference: 'OCT-FEE', amountPence: -150 };
+  const unrelated = { id: 'other:0', accountId: '1000', date: '2026-10-02', reference: 'COFFEE', description: 'Coffee', amountPence: -150 };
+  const same = { ...unrelated, id: 'same:0', reference: 'OCT-FEE', description: 'Monthly bank fee' };
+  assert.equal(likelyExistingBankMovement(line, '1000', [unrelated], []), false);
+  assert.equal(likelyExistingBankMovement(line, '1000', [same], []), true);
+  assert.equal(likelyExistingBankMovement(line, '1000', [same], [], same.id), false);
+  assert.equal(likelyExistingBankMovement(line, '1000', [same], [{ statementId: 'prior', lineIndex: 0, bankEntryId: same.id, amountPence: -150, matchedAt: '', matchedBy: owner }]), false);
+  assert.equal(likelyExistingBankMovement(line, '1000', [{ ...same, date: '2026-09-20' }], []), false);
 });
 
 test('invoice receipts can use a second bank account with a stable retry ID', () => {

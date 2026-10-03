@@ -1,6 +1,6 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { createAccount, createDocument, createJournal, createPayment, defaultAccounts, documentJournal, ledgerReport, paymentJournal, type AccountingDocument, type AccountingPayment, type JournalEntry, type LedgerAccount } from '../shared/accounting.js';
-import { bankEntries, createBankMatch, createBankStatement, duplicateStatementLines, suggestBankMatches, validateStatementSequence, type BankMatch, type BankStatement } from '../shared/accountingReconciliation.js';
+import { bankEntries, createBankMatch, createBankStatement, duplicateStatementLines, likelyExistingBankMovement, suggestBankMatches, validateStatementSequence, type BankMatch, type BankStatement } from '../shared/accountingReconciliation.js';
 import { createBankRule, createBankTransfer, matchingBankRules, ruleJournal, type BankRule } from '../shared/accountingBankAutomation.js';
 import { assertOpenPeriod, createCreditNote, createPeriodLock, createReversal, creditJournal, lockedThrough, reversalJournal, type CreditNote, type PeriodLock, type Reversal } from '../shared/accountingSafeguards.js';
 import { createSourcePosting, sourceJournal, type SourcePosting } from '../shared/accountingSourcePosting.js';
@@ -542,14 +542,20 @@ export async function bankRulePostHandler(event: APIGatewayProxyEventV2) {
       const rule = latestVersions(rules).find((item) => item.id === ruleId);
       if (!line || !rule || !matchingBankRules(statement, line, [rule]).length) throw badRequest('Choose a valid rule for this unmatched statement line.');
       const journal = ruleJournal(statement, line, rule, user.email);
+      const samePosting = (entry: JournalEntry) => entry.date === journal.date && entry.reference === journal.reference && entry.description === journal.description && JSON.stringify(entry.lines) === JSON.stringify(journal.lines);
       const existingMatch = existingMatches.find((item) => item.statementId === statement.id && item.lineIndex === line.index);
       if (existingMatch) {
-        if (existingMatch.bankEntryId === `${journal.id}:0` || existingMatch.bankEntryId === `${journal.id}:1`) return jsonResponse(200, { success: true, entry: await getReceiptJsonObject<JournalEntry>(`${prefix}journals/${journal.id}.json`), match: existingMatch, alreadyPosted: true });
+        if (existingMatch.bankEntryId === `${journal.id}:0` || existingMatch.bankEntryId === `${journal.id}:1`) {
+          const posted = await getReceiptJsonObject<JournalEntry>(`${prefix}journals/${journal.id}.json`);
+          if (!samePosting(posted)) throw badRequest('This line was posted with a different bank rule. Refresh before continuing.');
+          return jsonResponse(200, { success: true, entry: posted, match: existingMatch, alreadyPosted: true });
+        }
         throw badRequest('This statement line is already matched.');
       }
+      if (books.reversals.some((item) => item.targetEntryId === journal.id)) throw badRequest('This rule journal was reversed. Review the statement line before posting again.');
       const bankMovement = bankEntries(books.entries, chart.filter((item) => item.bank).map((item) => item.id));
-      const usedBankEntries = new Set(existingMatches.map((item) => item.bankEntryId));
-      if (bankMovement.some((item) => item.accountId === (statement.accountId ?? '1000') && item.amountPence === line.amountPence && !usedBankEntries.has(item.id) && Math.abs(Date.parse(`${item.date}T00:00:00Z`) - Date.parse(`${line.date}T00:00:00Z`)) <= 30 * 86400000 && item.id !== `${journal.id}:0` && item.id !== `${journal.id}:1`)) throw badRequest('A bank ledger movement with this amount already exists nearby. Review and match it before posting a rule journal.');
+      const ruleBankEntryId = bankEntries([journal], [statement.accountId ?? '1000'])[0]?.id;
+      if (likelyExistingBankMovement(line, statement.accountId ?? '1000', bankMovement, existingMatches, ruleBankEntryId)) throw badRequest('A similar unmatched bank ledger movement already exists. Review and match it before posting a rule journal.');
       try { assertOpenPeriod(journal.date, await currentLock(prefix)); assertVatOpen(journal.date, await vatCloses(prefix)); }
       catch (error) { throw badRequest(error instanceof Error ? error.message : 'Period is locked.'); }
       const journalKey = `${prefix}journals/${journal.id}.json`;
@@ -559,6 +565,7 @@ export async function bankRulePostHandler(event: APIGatewayProxyEventV2) {
         const status = typeof error === 'object' && error !== null && '$metadata' in error ? Number((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode) : 0;
         if (status !== 412) throw error;
         posted = await getReceiptJsonObject<JournalEntry>(journalKey);
+        if (!samePosting(posted)) throw badRequest('This line was already posted with a different bank rule. Refresh before continuing.');
       }
       const movement = bankEntries([posted], chart.filter((item) => item.bank).map((item) => item.id));
       const match = createBankMatch({ statementId, lineIndex, bankEntryId: movement[0]?.id }, [statement], movement, existingMatches, user.email);

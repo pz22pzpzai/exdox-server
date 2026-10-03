@@ -70,6 +70,17 @@ export function bankBalanceThrough(entries: JournalEntry[], through: string, acc
 }
 
 const normal = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+export function likelyExistingBankMovement(line: StatementLine, accountId: string, entries: BankEntry[], matches: BankMatch[], excludedEntryId?: string) {
+  const used = new Set(matches.map((item) => item.bankEntryId));
+  return entries.some((entry) => {
+    if (entry.accountId !== accountId || entry.amountPence !== line.amountPence || entry.id === excludedEntryId || used.has(entry.id)) return false;
+    const days = Math.abs(Date.parse(`${entry.date}T00:00:00Z`) - Date.parse(`${line.date}T00:00:00Z`)) / 86400000;
+    if (days > 7) return false;
+    const reference = normal(line.reference);
+    const description = normal(line.description);
+    return Boolean((reference && reference === normal(entry.reference)) || (description.length >= 4 && description === normal(entry.description)));
+  });
+}
 export function duplicateStatementLines(candidate: BankStatement, existing: BankStatement[]) {
   const prior = existing.filter((item) => (item.accountId ?? '1000') === (candidate.accountId ?? '1000'));
   const exact = new Set(prior.flatMap((item) => item.lines.map((line) => `${line.date}|${line.amountPence}|${normal(line.reference)}|${normal(line.description)}`)));
