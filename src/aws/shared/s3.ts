@@ -119,6 +119,17 @@ export async function putReceiptJsonObject(key: string, value: unknown) {
   );
 }
 
+export async function putReceiptJsonObjectIfAbsent(key: string, value: unknown) {
+  await s3.send(new PutObjectCommand({
+    Bucket: awsEnv.receiptBucketName,
+    Key: key,
+    Body: JSON.stringify(value),
+    ContentType: 'application/json',
+    ServerSideEncryption: RECEIPT_BUCKET_SSE,
+    IfNoneMatch: '*',
+  }));
+}
+
 export async function deleteReceiptObject(key: string) {
   await s3.send(
     new DeleteObjectCommand({

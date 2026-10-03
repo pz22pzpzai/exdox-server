@@ -106,13 +106,13 @@ export function documentJournal(document: AccountingDocument): JournalEntry {
   return { id: `document-${document.id}`, date: document.date, reference: document.number, description: `${invoice ? 'Invoice to' : 'Bill from'} ${document.contactName}`, lines, createdAt: document.createdAt, createdBy: document.createdBy };
 }
 
-export function createPayment(input: unknown, document: AccountingDocument, existing: AccountingPayment[], createdBy: string): AccountingPayment {
+export function createPayment(input: unknown, document: AccountingDocument, existing: AccountingPayment[], createdBy: string, creditedPence = 0): AccountingPayment {
   const data = input as Record<string, unknown>;
   const date = String(data?.date ?? '');
   const amountPence = Number(data?.amountPence);
   const reference = String(data?.reference ?? '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date || date < document.date || !Number.isSafeInteger(amountPence) || amountPence <= 0 || reference.length > 80) throw new Error('Enter a valid payment date and positive amount.');
-  const remaining = document.totalPence - existing.reduce((sum, payment) => sum + payment.amountPence, 0);
+  const remaining = document.totalPence - creditedPence - existing.reduce((sum, payment) => sum + payment.amountPence, 0);
   if (amountPence > remaining) throw new Error('Payment exceeds the amount due.');
   return { id: randomUUID(), documentId: document.id, date, amountPence, reference, createdAt: new Date().toISOString(), createdBy };
 }
