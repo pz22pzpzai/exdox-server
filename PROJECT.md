@@ -2,7 +2,7 @@
 
 ## Private accounting pilot (2026-10-03)
 
-- `GET /accounting`, `POST /accounting/accounts`, and `POST /accounting/journals` are independent SAM routes. Each requires a valid session and a fresh user lookup for active business admin `terryreedbfv@outlook.com`. No other user can read or write this data.
+- `GET /accounting`, `POST /accounting/accounts`, and `POST /accounting/journals` are independent SAM routes. Each requires a valid session and a fresh user lookup for active account `terryreedbfv@outlook.com`. No other user can read or write this data.
 - Data is stored as AES256 encrypted S3 JSON objects under `accounting/org-{id}/`, separate from all existing Exdox records. Journals are posted as individual immutable objects, use integer GBP pence, validate account IDs and exact debit/credit balance, and drive the website's trial balance, profit and loss, and balance sheet. Workspace deletion purges this prefix.
 - `POST /accounting/documents` posts immutable GBP invoices and bills with item quantities, 0/5/20% VAT, due dates, and unique document numbers. Sales invoices require issuer and customer address information and a VAT number when VAT is charged. `POST /accounting/payments` records partial or full payments; document and payment postings feed receivables, payables, VAT, bank, and profit reports without changing existing Sales or Costs records.
 - This is a private double-entry foundation. Bank feeds, tax returns, payroll, period locks, automated Exdox posting, email sending, and production accounting assurance remain future work. Deploy the server routes before the website UI. Never delete or move signing keystores or details; the owner checks deployment and live behaviour.

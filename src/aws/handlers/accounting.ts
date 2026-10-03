@@ -8,9 +8,9 @@ import { getReceiptJsonObject, listAllReceiptJsonKeys, putReceiptJsonObject } fr
 const pilotEmail = 'terryreedbfv@outlook.com';
 async function scope(event: APIGatewayProxyEventV2) {
   const user = requireAuthenticatedUser(event);
-  if (user.email.trim().toLowerCase() !== pilotEmail || user.role !== 'Business_Admin' || user.status !== 'active') throw forbidden('Accounting is locked for this account.');
+  if (user.email.trim().toLowerCase() !== pilotEmail || user.status !== 'active') throw forbidden('Accounting is locked for this account.');
   const current = await findUserByEmail(pilotEmail);
-  if (!current || current.id !== user.id || current.organisationId !== user.organisationId || current.role !== 'Business_Admin' || current.status !== 'active') throw forbidden('Accounting is locked for this account.');
+  if (!current || current.id !== user.id || current.organisationId !== user.organisationId || current.status !== 'active') throw forbidden('Accounting is locked for this account.');
   return { user, prefix: `accounting/org-${user.organisationId}/` };
 }
 async function load<T>(prefix: string): Promise<T[]> {
