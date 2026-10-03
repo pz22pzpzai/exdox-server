@@ -3,6 +3,8 @@ import { createAccount, createDocument, createJournal, createPayment, defaultAcc
 import { bankEntries, createBankMatch, createBankStatement, type BankMatch, type BankStatement } from '../shared/accountingReconciliation.js';
 import { assertOpenPeriod, createCreditNote, createPeriodLock, createReversal, creditJournal, lockedThrough, reversalJournal, type CreditNote, type PeriodLock, type Reversal } from '../shared/accountingSafeguards.js';
 import { createSourcePosting, sourceJournal, type SourcePosting } from '../shared/accountingSourcePosting.js';
+import { approveDraft, createAudit, createContact, createDraft, createRefund, createSettlement, latestVersions, refundJournal, settlementJournal, type AccountingAudit, type AccountingContact, type AccountingDraft, type AccountingRefund, type AccountingSettlement } from '../shared/accountingLifecycle.js';
+import { sendAccountingInvoice } from '../shared/accountingInvoiceMail.js';
 import { assertVatOpen, buildVatReport, createVatClassification, createVatClose, type VatClassification, type VatClose, type VatCode } from '../shared/accountingVat.js';
 import { forbidden, requireAuthenticatedUser } from '../shared/auth.js';
 import { findUserByEmail, getOrganisationSettings, getReceiptById, listReceipts } from '../shared/db.js';
@@ -28,9 +30,14 @@ async function periodLocks(prefix: string) { return load<PeriodLock>(`${prefix}p
 async function currentLock(prefix: string) { return lockedThrough(await periodLocks(prefix)); }
 async function vatCloses(prefix: string) { return load<VatClose>(`${prefix}vat-closes/`); }
 async function ledger(prefix: string) {
-  const [manualEntries, documents, payments, creditNotes, reversals, sourcePostings] = await Promise.all([load<JournalEntry>(`${prefix}journals/`), load<AccountingDocument>(`${prefix}documents/`), load<AccountingPayment>(`${prefix}payments/`), load<CreditNote>(`${prefix}credit-notes/`), load<Reversal>(`${prefix}reversals/`), load<SourcePosting>(`${prefix}source-postings/`)]);
+  const [manualEntries, documents, payments, creditNotes, reversals, sourcePostings, settlements, refunds] = await Promise.all([load<JournalEntry>(`${prefix}journals/`), load<AccountingDocument>(`${prefix}documents/`), load<AccountingPayment>(`${prefix}payments/`), load<CreditNote>(`${prefix}credit-notes/`), load<Reversal>(`${prefix}reversals/`), load<SourcePosting>(`${prefix}source-postings/`), load<AccountingSettlement>(`${prefix}settlements/`), load<AccountingRefund>(`${prefix}refunds/`)]);
   const documentMap = new Map(documents.map((document) => [document.id, document]));
-  const baseEntries = [...manualEntries, ...documents.map(documentJournal), ...sourcePostings.map(sourceJournal), ...payments.flatMap((payment) => {
+  const creditMap = new Map(creditNotes.map((credit) => [credit.id, credit]));
+  const baseEntries = [...manualEntries, ...documents.map(documentJournal), ...sourcePostings.map(sourceJournal), ...settlements.map(settlementJournal), ...refunds.flatMap((refund) => {
+    const credit = creditMap.get(refund.creditId);
+    const document = credit && documentMap.get(credit.documentId);
+    return document ? [refundJournal(refund, document.kind === 'invoice')] : [];
+  }), ...payments.flatMap((payment) => {
     const document = documentMap.get(payment.documentId);
     return document ? [paymentJournal(payment, document)] : [];
   }), ...creditNotes.flatMap((credit) => {
@@ -44,7 +51,7 @@ async function ledger(prefix: string) {
   })];
   entries.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
   documents.sort((a, b) => b.date.localeCompare(a.date));
-  return { entries, documents, payments, creditNotes, reversals, sourcePostings };
+  return { entries, documents, payments, creditNotes, reversals, sourcePostings, settlements, refunds };
 }
 async function vatReport(prefix: string, fromDate: string, toDate: string) {
   const [books, classifications] = await Promise.all([ledger(prefix), load<VatClassification>(`${prefix}vat-classifications/`)]);
@@ -62,9 +69,9 @@ function failure(error: unknown) {
 export async function getHandler(event: APIGatewayProxyEventV2) {
   try {
     const { prefix } = await scope(event);
-    const [chart, books, bankStatements, bankMatches, locks] = await Promise.all([accounts(prefix), ledger(prefix), load<BankStatement>(`${prefix}bank-statements/`), load<BankMatch>(`${prefix}bank-matches/`), periodLocks(prefix)]);
+    const [chart, books, bankStatements, bankMatches, locks, drafts, contacts, audit] = await Promise.all([accounts(prefix), ledger(prefix), load<BankStatement>(`${prefix}bank-statements/`), load<BankMatch>(`${prefix}bank-matches/`), periodLocks(prefix), load<AccountingDraft>(`${prefix}draft-versions/`), load<AccountingContact>(`${prefix}contact-versions/`), load<AccountingAudit>(`${prefix}audit/`)]);
     bankStatements.sort((a, b) => b.toDate.localeCompare(a.toDate));
-    return jsonResponse(200, { success: true, accounts: chart, ...books, bankStatements, bankMatches, periodLocks: locks, lockedThrough: lockedThrough(locks), report: ledgerReport(chart, books.entries) });
+    return jsonResponse(200, { success: true, accounts: chart, ...books, drafts: latestVersions(drafts), contacts: latestVersions(contacts), audit: audit.sort((a, b) => b.at.localeCompare(a.at)), bankStatements, bankMatches, periodLocks: locks, lockedThrough: lockedThrough(locks), report: ledgerReport(chart, books.entries) });
   } catch (error) { return failure(error); }
 }
 export async function vatReportHandler(event: APIGatewayProxyEventV2) {
@@ -162,6 +169,122 @@ export async function documentHandler(event: APIGatewayProxyEventV2) {
     return jsonResponse(201, { success: true, document });
   } catch (error) { return failure(error); }
 }
+export async function contactHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix, user } = await scope(event);
+    const data = event.body ? JSON.parse(event.body) as Record<string, unknown> : {};
+    const contacts = latestVersions(await load<AccountingContact>(`${prefix}contact-versions/`));
+    const id = String(data.id ?? '');
+    const prior = id ? contacts.find((item) => item.id === id) : undefined;
+    if (id && (!prior || Number(data.version) !== prior.version)) throw badRequest('Contact changed. Refresh before editing.');
+    let contact: AccountingContact;
+    try { contact = createContact(data, user.email, prior); } catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid contact.'); }
+    if (contacts.some((item) => item.id !== contact.id && item.name.toLowerCase() === contact.name.toLowerCase())) throw badRequest('A contact with this name already exists.');
+    await putReceiptJsonObjectIfAbsent(`${prefix}contact-versions/${contact.id}-${contact.version}.json`, contact);
+    await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit(prior ? 'contact.updated' : 'contact.created', contact.id, contact.name, user.email));
+    return jsonResponse(prior ? 200 : 201, { success: true, contact });
+  } catch (error) { return failure(error); }
+}
+export async function draftHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix, user } = await scope(event);
+    const data = event.body ? JSON.parse(event.body) as Record<string, unknown> : {};
+    const drafts = latestVersions(await load<AccountingDraft>(`${prefix}draft-versions/`));
+    const id = String(data.id ?? '');
+    const prior = id ? drafts.find((item) => item.id === id) : undefined;
+    if (id && (!prior || Number(data.version) !== prior.version)) throw badRequest('Draft changed. Refresh before editing.');
+    if (prior) {
+      try { await getReceiptJsonObject<AccountingDocument>(`${prefix}documents/${id}.json`); throw badRequest('Approved documents cannot be edited.'); }
+      catch (error) { if (error instanceof Error && 'statusCode' in error) throw error; }
+    }
+    const contactId = String(data.contactId ?? '');
+    if (contactId) {
+      const contact = latestVersions(await load<AccountingContact>(`${prefix}contact-versions/`)).find((item) => item.id === contactId);
+      if (!contact || (data.kind === 'invoice' && contact.role === 'supplier') || (data.kind === 'bill' && contact.role === 'customer')) throw badRequest('Choose a contact of the matching type.');
+      data.contactName = contact.name;
+      if (data.kind === 'invoice') data.contactAddress = contact.address;
+    }
+    let draft: AccountingDraft;
+    try { draft = createDraft(data, user.email, prior); } catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid draft.'); }
+    try { await putReceiptJsonObjectIfAbsent(`${prefix}draft-versions/${draft.id}-${draft.version}.json`, draft); }
+    catch { throw badRequest('Draft changed. Refresh before editing.'); }
+    await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit(prior ? 'draft.updated' : 'draft.created', draft.id, `${draft.document.kind} ${draft.document.number} version ${draft.version}`, user.email));
+    return jsonResponse(prior ? 200 : 201, { success: true, draft });
+  } catch (error) { return failure(error); }
+}
+export async function approveDraftHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix, user } = await scope(event);
+    const data = event.body ? JSON.parse(event.body) as Record<string, unknown> : {};
+    const draft = latestVersions(await load<AccountingDraft>(`${prefix}draft-versions/`)).find((item) => item.id === data.draftId);
+    if (!draft || draft.version !== Number(data.version)) throw badRequest('Draft changed. Refresh before approving.');
+    const document = approveDraft(draft, user.email);
+    try { assertOpenPeriod(document.date, await currentLock(prefix)); const closes = await vatCloses(prefix); assertVatOpen(document.date, closes); assertVatOpen(document.taxDate || document.date, closes); }
+    catch (error) { throw badRequest(error instanceof Error ? error.message : 'Period is locked.'); }
+    const existing = await load<AccountingDocument>(`${prefix}documents/`);
+    if (existing.some((item) => item.kind === document.kind && item.number.toLowerCase() === document.number.toLowerCase())) throw badRequest('That document number already exists or this draft is already approved.');
+    try { await putReceiptJsonObjectIfAbsent(`${prefix}documents/${document.id}.json`, document); }
+    catch { throw badRequest('This draft is already approved. Refresh the document list.'); }
+    await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit('draft.approved', document.id, `${document.kind} ${document.number} posted to ledger`, user.email));
+    return jsonResponse(201, { success: true, document });
+  } catch (error) { return failure(error); }
+}
+export async function sendInvoiceHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix, user } = await scope(event);
+    const data = event.body ? JSON.parse(event.body) as Record<string, unknown> : {};
+    if (data.confirm !== true) throw badRequest('Confirm the invoice recipient before sending.');
+    const books = await ledger(prefix);
+    const document = books.documents.find((item) => item.id === data.documentId && item.kind === 'invoice');
+    if (!document || books.reversals.some((item) => item.targetEntryId === `document-${document.id}`)) throw badRequest('Choose an active posted invoice.');
+    const recipient = String(data.recipient ?? '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient) || recipient.length > 254) throw badRequest('Enter a valid recipient email.');
+    const messageId = await sendAccountingInvoice(document, recipient);
+    await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit('invoice.sent', document.id, `Sent ${document.number} to ${recipient}; SES message ${messageId ?? 'unknown'}`, user.email));
+    return jsonResponse(200, { success: true, messageId });
+  } catch (error) { return failure(error); }
+}
+function dueFor(document: AccountingDocument, books: Awaited<ReturnType<typeof ledger>>) {
+  const reversed = new Set(books.reversals.map((item) => item.targetEntryId));
+  if (reversed.has(`document-${document.id}`)) return 0;
+  return document.totalPence
+    - books.creditNotes.filter((item) => item.documentId === document.id && !reversed.has(`credit-${item.id}`)).reduce((sum, item) => sum + item.totalPence, 0)
+    - books.payments.filter((item) => item.documentId === document.id && !reversed.has(`payment-${item.id}`)).reduce((sum, item) => sum + item.amountPence, 0)
+    - books.settlements.filter((item) => !reversed.has(`settlement-${item.id}`)).flatMap((item) => item.allocations).filter((item) => item.documentId === document.id).reduce((sum, item) => sum + item.amountPence, 0)
+    + books.refunds.filter((item) => !reversed.has(`refund-${item.id}`) && books.creditNotes.some((credit) => credit.id === item.creditId && credit.documentId === document.id)).reduce((sum, item) => sum + item.amountPence, 0);
+}
+export async function settlementHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix, user } = await scope(event);
+    const data = event.body ? JSON.parse(event.body) as Record<string, unknown> : {};
+    const books = await ledger(prefix);
+    let settlement: AccountingSettlement;
+    try { settlement = createSettlement(data, books.documents, (id) => dueFor(books.documents.find((item) => item.id === id)!, books), user.email); assertOpenPeriod(settlement.date, await currentLock(prefix)); }
+    catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid settlement.'); }
+    await putReceiptJsonObject(`${prefix}settlements/${settlement.id}.json`, settlement);
+    await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit('settlement.posted', settlement.id, `${settlement.kind} ${settlement.reference}: ${settlement.totalPence} pence across ${settlement.allocations.length} documents`, user.email));
+    return jsonResponse(201, { success: true, settlement });
+  } catch (error) { return failure(error); }
+}
+export async function refundHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix, user } = await scope(event);
+    const data = event.body ? JSON.parse(event.body) as Record<string, unknown> : {};
+    const books = await ledger(prefix);
+    const credit = books.creditNotes.find((item) => item.id === data.creditId);
+    const document = credit && books.documents.find((item) => item.id === credit.documentId);
+    const reversed = new Set(books.reversals.map((item) => item.targetEntryId));
+    if (!credit || !document || reversed.has(`credit-${credit.id}`) || reversed.has(`document-${document.id}`)) throw badRequest('Choose an active credit note.');
+    const refunds = books.refunds.filter((item) => books.creditNotes.some((candidate) => candidate.id === item.creditId && candidate.documentId === document.id) && !reversed.has(`refund-${item.id}`));
+    const maxPence = Math.min(credit.totalPence - refunds.filter((item) => item.creditId === credit.id).reduce((sum, item) => sum + item.amountPence, 0), Math.max(0, -dueFor(document, books)));
+    let refund: AccountingRefund;
+    try { refund = createRefund(data, maxPence, user.email); if (refund.date < credit.date) throw new Error('Refund date cannot precede the credit note.'); assertOpenPeriod(refund.date, await currentLock(prefix)); }
+    catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid refund.'); }
+    await putReceiptJsonObject(`${prefix}refunds/${refund.id}.json`, refund);
+    await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit('refund.posted', refund.id, `${credit.number}: ${refund.amountPence} pence`, user.email));
+    return jsonResponse(201, { success: true, refund });
+  } catch (error) { return failure(error); }
+}
 export async function paymentHandler(event: APIGatewayProxyEventV2) {
   try {
     const { prefix, user } = await scope(event);
@@ -175,10 +298,12 @@ export async function paymentHandler(event: APIGatewayProxyEventV2) {
     if (books.reversals.some((item) => item.targetEntryId === `document-${documentId}`)) throw badRequest('This document has been voided.');
     const reversed = new Set(books.reversals.map((item) => item.targetEntryId));
     const existing = books.payments.filter((item) => item.documentId === documentId && !reversed.has(`payment-${item.id}`));
-    const creditedPence = books.creditNotes.filter((item) => item.documentId === documentId && !reversed.has(`credit-${item.id}`)).reduce((sum, item) => sum + item.totalPence, 0);
+    const creditedPence = books.creditNotes.filter((item) => item.documentId === documentId && !reversed.has(`credit-${item.id}`)).reduce((sum, item) => sum + item.totalPence, 0)
+      + books.settlements.filter((item) => !reversed.has(`settlement-${item.id}`)).flatMap((item) => item.allocations).filter((item) => item.documentId === documentId).reduce((sum, item) => sum + item.amountPence, 0);
     let payment: AccountingPayment;
     try { payment = createPayment(data, document, existing, user.email, creditedPence); assertOpenPeriod(payment.date, await currentLock(prefix)); } catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid payment.'); }
     await putReceiptJsonObject(`${prefix}payments/${payment.id}.json`, payment);
+    await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit('payment.posted', payment.id, `${document.number}: ${payment.amountPence} pence`, user.email));
     return jsonResponse(201, { success: true, payment });
   } catch (error) { return failure(error); }
 }
@@ -213,11 +338,13 @@ export async function reverseHandler(event: APIGatewayProxyEventV2) {
     const reversed = new Set(books.reversals.map((item) => item.targetEntryId));
     if (entryId.startsWith('document-')) {
       const documentId = entryId.slice('document-'.length);
-      if (books.payments.some((item) => item.documentId === documentId && !reversed.has(`payment-${item.id}`)) || books.creditNotes.some((item) => item.documentId === documentId && !reversed.has(`credit-${item.id}`))) throw badRequest('Reverse related payments and credit notes before voiding this document.');
+      if (books.payments.some((item) => item.documentId === documentId && !reversed.has(`payment-${item.id}`)) || books.creditNotes.some((item) => item.documentId === documentId && !reversed.has(`credit-${item.id}`)) || books.settlements.some((item) => item.allocations.some((allocation) => allocation.documentId === documentId) && !reversed.has(`settlement-${item.id}`))) throw badRequest('Reverse related payments, settlements and credit notes before voiding this document.');
     }
+    if (entryId.startsWith('credit-') && books.refunds.some((item) => item.creditId === entryId.slice(7) && !reversed.has(`refund-${item.id}`))) throw badRequest('Reverse related refunds before reversing this credit note.');
     let reversal: Reversal;
     try { reversal = createReversal(data, original, books.reversals, await currentLock(prefix), user.email); assertVatOpen(reversal.date, await vatCloses(prefix)); } catch (error) { throw badRequest(error instanceof Error ? error.message : 'Could not reverse entry.'); }
     await putReceiptJsonObject(`${prefix}reversals/${entryId}.json`, reversal);
+    await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit('entry.reversed', entryId, reversal.reason, user.email));
     return jsonResponse(201, { success: true, reversal });
   } catch (error) { return failure(error); }
 }
@@ -237,6 +364,7 @@ export async function creditNoteHandler(event: APIGatewayProxyEventV2) {
     try { credit = createCreditNote(data, document, credits, payments, await currentLock(prefix), user.email); assertVatOpen(credit.date, await vatCloses(prefix)); } catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid credit note.'); }
     if (books.creditNotes.some((item) => item.number.toLowerCase() === credit.number.toLowerCase())) throw badRequest('That credit note number already exists.');
     await putReceiptJsonObject(`${prefix}credit-notes/${credit.id}.json`, credit);
+    await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit('credit.posted', credit.id, `${credit.number} against ${document.number}: ${credit.totalPence} pence`, user.email));
     return jsonResponse(201, { success: true, credit });
   } catch (error) { return failure(error); }
 }

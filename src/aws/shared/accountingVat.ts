@@ -108,7 +108,7 @@ export function buildVatReport(input: { fromDate: string; toDate: string; entrie
   const classifiedIds = new Set(allRows.map((row) => row.entryId));
   const issueIds = new Set(issues.map((item) => item.entryId));
   for (const entry of entries) {
-    if (entry.id.startsWith('reversal-') || entry.id.startsWith('payment-') || classifiedIds.has(entry.id) || issueIds.has(entry.id)) continue;
+    if (entry.id.startsWith('reversal-') || entry.id.startsWith('payment-') || entry.id.startsWith('settlement-') || entry.id.startsWith('refund-') || classifiedIds.has(entry.id) || issueIds.has(entry.id)) continue;
     issues.push({ entryId: entry.id, date: entry.date, reference: entry.reference, description: entry.description, reason: 'Classify this posting or mark it as excluded from VAT.' });
   }
   const rows = allRows.filter((row) => row.taxDate >= fromDate && row.taxDate <= toDate).sort((a, b) => a.taxDate.localeCompare(b.taxDate) || a.id.localeCompare(b.id));

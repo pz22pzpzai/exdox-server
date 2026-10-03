@@ -5,7 +5,7 @@ export type AccountType = 'asset' | 'liability' | 'equity' | 'income' | 'expense
 export type LedgerAccount = { id: string; code: string; name: string; type: AccountType; system?: boolean };
 export type JournalLine = { accountId: string; debitPence: number; creditPence: number };
 export type JournalEntry = { id: string; date: string; reference: string; description: string; lines: JournalLine[]; createdAt: string; createdBy: string };
-export type AccountingDocument = { id: string; kind: 'invoice' | 'bill'; number: string; contactName: string; issuerName: string; issuerAddress: string; contactAddress: string; vatNumber: string; paymentInstructions: string; date: string; taxDate?: string; dueDate: string; items: Array<{ description: string; quantity: number; unitPricePence: number; vatRate: 0 | 5 | 20; vatCode?: VatCode }>; netPence: number; vatPence: number; totalPence: number; createdAt: string; createdBy: string };
+export type AccountingDocument = { id: string; draftId?: string; contactId?: string; kind: 'invoice' | 'bill'; number: string; contactName: string; issuerName: string; issuerAddress: string; contactAddress: string; vatNumber: string; paymentInstructions: string; date: string; taxDate?: string; dueDate: string; items: Array<{ description: string; quantity: number; unitPricePence: number; vatRate: 0 | 5 | 20; vatCode?: VatCode }>; netPence: number; vatPence: number; totalPence: number; createdAt: string; createdBy: string };
 export type AccountingPayment = { id: string; documentId: string; date: string; amountPence: number; reference: string; createdAt: string; createdBy: string };
 
 export const defaultAccounts: LedgerAccount[] = [

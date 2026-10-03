@@ -67,9 +67,8 @@ export function createCreditNote(input: unknown, document: AccountingDocument, e
     return sum + vatAt(previousQuantity + item.quantity) - vatAt(previousQuantity);
   }, 0);
   const totalPence = netPence + vatPence;
-  const paidPence = payments.reduce((sum, payment) => sum + payment.amountPence, 0);
   const creditedPence = existing.reduce((sum, credit) => sum + credit.totalPence, 0);
-  if (!Number.isSafeInteger(totalPence) || totalPence <= 0 || totalPence > document.totalPence - paidPence - creditedPence) throw new Error('Credit exceeds the unpaid balance. Record any refund separately before crediting a paid document.');
+  if (!Number.isSafeInteger(totalPence) || totalPence <= 0 || totalPence > document.totalPence - creditedPence) throw new Error('Credit exceeds the original uncredited document value.');
   return { id: randomUUID(), documentId: document.id, number, date, reason, items, netPence, vatPence, totalPence, createdAt: new Date().toISOString(), createdBy };
 }
 export function creditJournal(credit: CreditNote, document: AccountingDocument): JournalEntry {
