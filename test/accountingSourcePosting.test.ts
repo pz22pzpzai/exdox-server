@@ -20,3 +20,11 @@ test('sales map to receivables and unreviewed or foreign records are rejected', 
   assert.throws(() => createSourcePosting(receipt, 'US', 'owner'), /Only UK workspaces/);
   assert.throws(() => createSourcePosting({ ...receipt, totalAmount: 119 }, 'GB', 'owner'), /net plus VAT/);
 });
+
+test('VAT code is checked against the source amounts and records the chosen tax date', () => {
+  const posting = createSourcePosting(receipt, 'GB', 'owner', 'P20', '2026-09-03');
+  assert.equal(posting.vatCode, 'P20');
+  assert.equal(posting.taxDate, '2026-09-03');
+  assert.throws(() => createSourcePosting(receipt, 'GB', 'owner', 'P5'), /mixed or unsupported/);
+  assert.throws(() => createSourcePosting({ ...receipt, vatAmount: 19, netAmount: 101 }, 'GB', 'owner', 'P20'), /mixed or unsupported/);
+});

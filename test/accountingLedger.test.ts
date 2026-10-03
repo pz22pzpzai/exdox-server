@@ -36,8 +36,8 @@ test('custom account codes are unique', () => {
 });
 
 test('invoice and bill posting and part payments update receivables, payables and bank', () => {
-  const invoice = createDocument({ kind: 'invoice', number: 'INV-1', contactName: 'Customer Ltd', issuerName: 'My Business', issuerAddress: '1 High Street', contactAddress: '2 Market Street', vatNumber: 'GB123', date: '2026-10-03', dueDate: '2026-10-17', items: [{ description: 'Work', quantity: 1, unitPricePence: 10000, vatRate: 20 }] }, 'owner@example.com');
-  const bill = createDocument({ kind: 'bill', number: 'B-1', contactName: 'Supplier Ltd', date: '2026-10-03', dueDate: '2026-10-17', items: [{ description: 'Supplies', quantity: 1, unitPricePence: 4000, vatRate: 20 }] }, 'owner@example.com');
+  const invoice = createDocument({ kind: 'invoice', number: 'INV-1', contactName: 'Customer Ltd', issuerName: 'My Business', issuerAddress: '1 High Street', contactAddress: '2 Market Street', vatNumber: 'GB123', date: '2026-10-03', dueDate: '2026-10-17', items: [{ description: 'Work', quantity: 1, unitPricePence: 10000, vatRate: 20, vatCode: 'S20' }] }, 'owner@example.com');
+  const bill = createDocument({ kind: 'bill', number: 'B-1', contactName: 'Supplier Ltd', date: '2026-10-03', dueDate: '2026-10-17', items: [{ description: 'Supplies', quantity: 1, unitPricePence: 4000, vatRate: 20, vatCode: 'P20' }] }, 'owner@example.com');
   const receipt = createPayment({ date: '2026-10-04', amountPence: 6000 }, invoice, [], 'owner@example.com');
   const payout = createPayment({ date: '2026-10-04', amountPence: 4800 }, bill, [], 'owner@example.com');
   const report = ledgerReport(defaultAccounts, [documentJournal(invoice), documentJournal(bill), paymentJournal(receipt, invoice), paymentJournal(payout, bill)]);

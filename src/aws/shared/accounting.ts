@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { validVatDate, validateVatCode, type VatCode } from './accountingVat.js';
 
 export type AccountType = 'asset' | 'liability' | 'equity' | 'income' | 'expense';
 export type LedgerAccount = { id: string; code: string; name: string; type: AccountType; system?: boolean };
 export type JournalLine = { accountId: string; debitPence: number; creditPence: number };
 export type JournalEntry = { id: string; date: string; reference: string; description: string; lines: JournalLine[]; createdAt: string; createdBy: string };
-export type AccountingDocument = { id: string; kind: 'invoice' | 'bill'; number: string; contactName: string; issuerName: string; issuerAddress: string; contactAddress: string; vatNumber: string; paymentInstructions: string; date: string; dueDate: string; items: Array<{ description: string; quantity: number; unitPricePence: number; vatRate: 0 | 5 | 20 }>; netPence: number; vatPence: number; totalPence: number; createdAt: string; createdBy: string };
+export type AccountingDocument = { id: string; kind: 'invoice' | 'bill'; number: string; contactName: string; issuerName: string; issuerAddress: string; contactAddress: string; vatNumber: string; paymentInstructions: string; date: string; taxDate?: string; dueDate: string; items: Array<{ description: string; quantity: number; unitPricePence: number; vatRate: 0 | 5 | 20; vatCode?: VatCode }>; netPence: number; vatPence: number; totalPence: number; createdAt: string; createdBy: string };
 export type AccountingPayment = { id: string; documentId: string; date: string; amountPence: number; reference: string; createdAt: string; createdBy: string };
 
 export const defaultAccounts: LedgerAccount[] = [
@@ -69,9 +70,10 @@ export function createDocument(input: unknown, createdBy: string): AccountingDoc
   const vatNumber = String(data?.vatNumber ?? '').trim();
   const paymentInstructions = String(data?.paymentInstructions ?? '').trim();
   const date = String(data?.date ?? '');
+  const taxDate = String(data?.taxDate ?? date);
   const dueDate = String(data?.dueDate ?? '');
   const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
-  if ((kind !== 'invoice' && kind !== 'bill') || !number || number.length > 80 || contactName.length < 2 || contactName.length > 120 || !validDate(date) || !validDate(dueDate) || dueDate < date) throw new Error('Enter a document type, number, contact, issue date, and valid due date.');
+  if ((kind !== 'invoice' && kind !== 'bill') || !number || number.length > 80 || contactName.length < 2 || contactName.length > 120 || !validDate(date) || !validDate(dueDate) || !validVatDate(taxDate) || dueDate < date) throw new Error('Enter a document type, number, contact, issue date, VAT tax date, and valid due date.');
   if (kind === 'invoice' && (!issuerName || !issuerAddress || !contactAddress)) throw new Error('A printable invoice needs your business name and address and the customer address.');
   if ([issuerName, issuerAddress, contactAddress, vatNumber, paymentInstructions].some((value) => value.length > 500)) throw new Error('Invoice details must be 500 characters or fewer.');
   if (!Array.isArray(data.items) || data.items.length < 1 || data.items.length > 50) throw new Error('Add 1–50 line items.');
@@ -82,14 +84,15 @@ export function createDocument(input: unknown, createdBy: string): AccountingDoc
     const unitPricePence = Number(line?.unitPricePence);
     const vatRate = Number(line?.vatRate);
     if (!description || description.length > 200 || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 100000 || !Number.isSafeInteger(unitPricePence) || unitPricePence < 0 || unitPricePence > 100000000 || ![0, 5, 20].includes(vatRate)) throw new Error('Line items need a description, whole quantity, price, and 0%, 5%, or 20% VAT.');
-    return { description, quantity, unitPricePence, vatRate: vatRate as 0 | 5 | 20 };
+    const vatCode = validateVatCode(line?.vatCode, kind as 'invoice' | 'bill', vatRate as 0 | 5 | 20);
+    return { description, quantity, unitPricePence, vatRate: vatRate as 0 | 5 | 20, vatCode };
   });
   const netPence = items.reduce((sum, item) => sum + item.quantity * item.unitPricePence, 0);
   const vatPence = items.reduce((sum, item) => sum + Math.round(item.quantity * item.unitPricePence * item.vatRate / 100), 0);
   const totalPence = netPence + vatPence;
   if (kind === 'invoice' && vatPence > 0 && !vatNumber) throw new Error('Enter your VAT number before charging VAT on an invoice.');
   if (!Number.isSafeInteger(totalPence) || totalPence <= 0) throw new Error('Document total must be positive.');
-  return { id: randomUUID(), kind, number, contactName, issuerName, issuerAddress, contactAddress, vatNumber, paymentInstructions, date, dueDate, items, netPence, vatPence, totalPence, createdAt: new Date().toISOString(), createdBy };
+  return { id: randomUUID(), kind, number, contactName, issuerName, issuerAddress, contactAddress, vatNumber, paymentInstructions, date, taxDate, dueDate, items, netPence, vatPence, totalPence, createdAt: new Date().toISOString(), createdBy };
 }
 
 export function documentJournal(document: AccountingDocument): JournalEntry {

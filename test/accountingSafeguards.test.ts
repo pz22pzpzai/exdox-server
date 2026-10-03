@@ -4,7 +4,7 @@ import { createDocument, createPayment, documentJournal } from '../src/aws/share
 import { assertOpenPeriod, createCreditNote, createPeriodLock, createReversal, creditJournal, lockedThrough, reversalJournal } from '../src/aws/shared/accountingSafeguards.js';
 
 const owner = 'terryreedbfv@outlook.com';
-const bill = () => createDocument({ kind: 'bill', number: 'B-100', contactName: 'Supplier', date: '2026-09-01', dueDate: '2026-09-30', items: [{ description: 'Service', quantity: 2, unitPricePence: 1, vatRate: 20 }] }, owner);
+const bill = () => createDocument({ kind: 'bill', number: 'B-100', contactName: 'Supplier', date: '2026-09-01', dueDate: '2026-09-30', items: [{ description: 'Service', quantity: 2, unitPricePence: 1, vatRate: 20, vatCode: 'P20' }] }, owner);
 
 test('period close is monotonic and rejects backdated posting', () => {
   const first = createPeriodLock({ lockedThrough: '2026-09-30', reason: 'September close' }, [], owner);
