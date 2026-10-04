@@ -1,17 +1,17 @@
-import { createCipheriv, createHash, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import jwt from 'jsonwebtoken';
 import { forbidden, requireAuthenticatedUser } from '../shared/auth.js';
 import { findUserByEmail } from '../shared/db.js';
 import { awsEnv } from '../shared/env.js';
 import { jsonResponse } from '../shared/http.js';
-import { getReceiptJsonObject, putReceiptJsonObject } from '../shared/s3.js';
+import { getReceiptJsonObject, putReceiptJsonObject, withReceiptObjectLock } from '../shared/s3.js';
 
 const ownerEmail = 'terryreedbfv@outlook.com';
 const redirectUri = 'https://hz2zkm6jkf.execute-api.eu-west-2.amazonaws.com/prod/accounting/hmrc/callback';
 const authorizeUrl = 'https://test-www.tax.service.gov.uk/oauth/authorize';
 const tokenUrl = 'https://test-api.service.hmrc.gov.uk/oauth/token';
-type Tokens = { access_token: string; refresh_token: string; expires_in: number; scope: string; token_type: string };
+type Tokens = { access_token: string; refresh_token: string; expires_in: number; scope?: string; token_type: string };
 type Connection = { version: 1; connectedAt: string; connectedBy: number; accessTokenExpiresAt: string; encryptedTokens: { iv: string; tag: string; ciphertext: string } };
 type ConnectState = { purpose: 'accounting_hmrc_sandbox'; userId: number; organisationId: number };
 
@@ -23,6 +23,11 @@ function encrypt(tokens: Tokens) {
   const cipher = createCipheriv('aes-256-gcm', cryptoKey(), iv);
   const ciphertext = Buffer.concat([cipher.update(JSON.stringify(tokens), 'utf8'), cipher.final()]);
   return { iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64') };
+}
+function decrypt(connection: Connection): Tokens {
+  const decipher = createDecipheriv('aes-256-gcm', cryptoKey(), Buffer.from(connection.encryptedTokens.iv, 'base64'));
+  decipher.setAuthTag(Buffer.from(connection.encryptedTokens.tag, 'base64'));
+  return JSON.parse(Buffer.concat([decipher.update(Buffer.from(connection.encryptedTokens.ciphertext, 'base64')), decipher.final()]).toString('utf8')) as Tokens;
 }
 async function owner(event: APIGatewayProxyEventV2) {
   const user = requireAuthenticatedUser(event);
@@ -39,6 +44,32 @@ async function connectionFor(organisationId: number): Promise<Connection | null>
     throw error;
   }
 }
+/** HMRC refresh tokens are single-use, so all refreshes for one organisation share a lease. */
+async function connectionReady(organisationId: number, connection: Connection): Promise<boolean> {
+  if (Date.parse(connection.accessTokenExpiresAt) > Date.now() + 60_000) return true;
+  if (!configured()) return false;
+  return withReceiptObjectLock(`accounting/org-${organisationId}/hmrc/refresh-lease.json`, async () => {
+    const latest = await connectionFor(organisationId);
+    if (!latest) return false;
+    if (Date.parse(latest.accessTokenExpiresAt) > Date.now() + 60_000) return true;
+    const previous = decrypt(latest);
+    if (!previous.refresh_token) return false;
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: awsEnv.hmrcVatSandboxClientId!, client_secret: awsEnv.hmrcVatSandboxClientSecret!, grant_type: 'refresh_token', refresh_token: previous.refresh_token }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) {
+      if (response.status === 400 || response.status === 401 || response.status === 403) return false;
+      throw new Error('HMRC sandbox token service is temporarily unavailable.');
+    }
+    const refreshed = await response.json() as Tokens;
+    if (!refreshed.access_token || !refreshed.refresh_token || !Number.isFinite(refreshed.expires_in) || refreshed.expires_in <= 0) throw new Error('HMRC returned an incomplete token refresh.');
+    await putReceiptJsonObject(key(organisationId), { ...latest, accessTokenExpiresAt: new Date(Date.now() + refreshed.expires_in * 1000).toISOString(), encryptedTokens: encrypt({ ...refreshed, scope: refreshed.scope ?? previous.scope }) } satisfies Connection);
+    return true;
+  });
+}
 function failure(error: unknown) {
   const status = typeof error === 'object' && error !== null && 'statusCode' in error ? Number((error as { statusCode?: number }).statusCode) : 500;
   return jsonResponse(status, { success: false, message: status === 500 ? 'Could not connect to HMRC sandbox.' : error instanceof Error ? error.message : 'Request failed.' });
@@ -51,7 +82,12 @@ export async function statusHandler(event: APIGatewayProxyEventV2) {
   try {
     const user = await owner(event);
     const connection = await connectionFor(user.organisationId);
-    return jsonResponse(200, { success: true, environment: 'sandbox', configured: configured(), connected: Boolean(connection), connectedAt: connection?.connectedAt ?? null, redirectUri, obligationsAvailable: false, submissionAvailable: false });
+    let connectionState: 'not_connected' | 'connected' | 'reconnect_required' | 'temporarily_unavailable' = 'not_connected';
+    if (connection) {
+      try { connectionState = await connectionReady(user.organisationId, connection) ? 'connected' : 'reconnect_required'; }
+      catch { connectionState = 'temporarily_unavailable'; }
+    }
+    return jsonResponse(200, { success: true, environment: 'sandbox', configured: configured(), connected: connectionState === 'connected', connectionState, connectedAt: connection?.connectedAt ?? null, redirectUri, obligationsAvailable: false, submissionAvailable: false });
   } catch (error) { return failure(error); }
 }
 
