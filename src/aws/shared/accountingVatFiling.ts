@@ -41,6 +41,6 @@ export function buildVatFilingPreview(report: VatReport, closes: VatClose[]) {
     blockers,
     fields,
     submissionAvailable: false,
-    connectionMessage: 'The sandbox connection does not enable filing. An open HMRC obligation, its period key, compliant fraud prevention headers, and production approval are required before submission.',
+    connectionMessage: 'The sandbox connection does not enable filing. A sandbox submission requires an open HMRC obligation, its period key, and compliant fraud prevention headers. Live filing additionally requires HMRC production approval.',
   };
 }
