@@ -26,6 +26,7 @@
     "multer": "^2.0.2",
     "mysql2": "^3.14.3",
     "openai": "^6.6.0",
+    "pdf-lib": "^1.17.1",
     "stripe": "^22.3.1"
   },
   "devDependencies": {

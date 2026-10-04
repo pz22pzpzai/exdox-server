@@ -8,6 +8,7 @@ import { awsEnv } from '../shared/env.js';
 import { sendFreeTrialStartedNotification } from '../shared/freeTrialNotification.js';
 import { jsonResponse } from '../shared/http.js';
 import { syncStripeSubscription } from '../shared/stripeSubscription.js';
+import { flagAccountingInvoiceCharge, fulfillAccountingInvoiceCheckout } from './accountingInvoicePortal.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
@@ -39,6 +40,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       switch (stripeEvent.type) {
         case 'checkout.session.completed': {
           const session = stripeEvent.data.object as Stripe.Checkout.Session;
+          if (await fulfillAccountingInvoiceCheckout(session, stripe)) break;
           if (isAccountingIntegrationUnlockSession(session)) {
             if (session.payment_status === 'paid') {
               await fulfillAccountingIntegrationUnlock(session, stripe);
@@ -55,6 +57,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
         }
         case 'checkout.session.async_payment_succeeded': {
           const session = stripeEvent.data.object as Stripe.Checkout.Session;
+          if (await fulfillAccountingInvoiceCheckout(session, stripe)) break;
           if (isAccountingIntegrationUnlockSession(session)) {
             await fulfillAccountingIntegrationUnlock(session, stripe);
           } else {
@@ -65,6 +68,16 @@ export async function handler(event: APIGatewayProxyEventV2) {
               await finishPaidContinuation(session, stripe);
             }
           }
+          break;
+        }
+        case 'charge.refunded': {
+          await flagAccountingInvoiceCharge(stripeEvent.data.object as Stripe.Charge, 'refund', stripe);
+          break;
+        }
+        case 'charge.dispute.created': {
+          const dispute = stripeEvent.data.object as Stripe.Dispute;
+          const chargeId = typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id;
+          if (chargeId) await flagAccountingInvoiceCharge(await stripe.charges.retrieve(chargeId), 'dispute', stripe);
           break;
         }
         case 'customer.subscription.created': {
@@ -106,6 +119,12 @@ export async function handler(event: APIGatewayProxyEventV2) {
       const session = stripeEvent.type === 'checkout.session.completed' || stripeEvent.type === 'checkout.session.async_payment_succeeded'
         ? stripeEvent.data.object as Stripe.Checkout.Session
         : null;
+      if (session?.metadata?.checkoutPurpose === 'accounting_invoice') {
+        return jsonResponse(500, { success: false, error: 'accounting_invoice_payment_sync_failed', message: 'Stripe will retry invoice payment recording.' });
+      }
+      if (stripeEvent.type === 'charge.refunded' || stripeEvent.type === 'charge.dispute.created') {
+        return jsonResponse(500, { success: false, error: 'accounting_invoice_payment_review_failed', message: 'Stripe will retry payment review recording.' });
+      }
       if (session && isAccountingIntegrationUnlockSession(session)) {
         return jsonResponse(500, { success: false, error: 'accounting_integration_fulfillment_failed', message: 'Stripe will retry the accounting integration payment fulfilment.' });
       }

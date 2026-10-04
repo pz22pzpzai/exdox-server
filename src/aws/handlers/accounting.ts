@@ -6,6 +6,7 @@ import { assertOpenPeriod, createCreditNote, createPeriodLock, createReversal, c
 import { createSourcePosting, sourceJournal, type SourcePosting } from '../shared/accountingSourcePosting.js';
 import { approveDraft, createAudit, createContact, createDraft, createRefund, createSettlement, latestVersions, refundJournal, settlementJournal, type AccountingAudit, type AccountingContact, type AccountingDraft, type AccountingRefund, type AccountingSettlement } from '../shared/accountingLifecycle.js';
 import { sendAccountingInvoice, sendAccountingReminder } from '../shared/accountingInvoiceMail.js';
+import { currentInvoiceLink, ensureInvoiceLink, invoiceUrl, type InvoiceLink } from '../shared/accountingInvoicePresentation.js';
 import { defaultReminderSettings, reminderCandidate, type AccountingEmailRecord, type AccountingReminderSettings } from '../shared/accountingReminders.js';
 import { advanceRecurrence, createRecurrence, recurringDraft, type AccountingRecurrence } from '../shared/accountingRecurring.js';
 import { buildAgingReport } from '../shared/accountingAging.js';
@@ -50,7 +51,7 @@ async function assertBankAccount(prefix: string, accountId: string) {
 async function periodLocks(prefix: string) { return load<PeriodLock>(`${prefix}period-locks/`); }
 async function currentLock(prefix: string) { return lockedThrough(await periodLocks(prefix)); }
 async function vatCloses(prefix: string) { return load<VatClose>(`${prefix}vat-closes/`); }
-async function ledger(prefix: string) {
+export async function ledger(prefix: string) {
   const [manualEntries, documents, payments, creditNotes, reversals, sourcePostings, settlements, refunds] = await Promise.all([load<JournalEntry>(`${prefix}journals/`), load<AccountingDocument>(`${prefix}documents/`), load<AccountingPayment>(`${prefix}payments/`), load<CreditNote>(`${prefix}credit-notes/`), load<Reversal>(`${prefix}reversals/`), load<SourcePosting>(`${prefix}source-postings/`), load<AccountingSettlement>(`${prefix}settlements/`), load<AccountingRefund>(`${prefix}refunds/`)]);
   const documentMap = new Map(documents.map((document) => [document.id, document]));
   const creditMap = new Map(creditNotes.map((credit) => [credit.id, credit]));
@@ -120,16 +121,16 @@ function failure(error: unknown) {
 }
 export async function getHandler(event: APIGatewayProxyEventV2) {
   try {
-    const { prefix } = await scope(event);
+    const { prefix, user } = await scope(event);
     try { await materializeRecurrences(prefix, new Date().toISOString().slice(0, 10)); }
     catch (error) { if (!(typeof error === 'object' && error !== null && 'statusCode' in error && Number((error as { statusCode: number }).statusCode) === 409)) throw error; }
-    const [chart, books, bankStatements, bankMatches, locks, drafts, contacts, audit, ruleVersions, feedTransactions, feedMatches, recurrences, emailRecords, reminderSettings] = await Promise.all([accounts(prefix), ledger(prefix), load<BankStatement>(`${prefix}bank-statements/`), load<BankMatch>(`${prefix}bank-matches/`), periodLocks(prefix), load<AccountingDraft>(`${prefix}draft-versions/`), load<AccountingContact>(`${prefix}contact-versions/`), load<AccountingAudit>(`${prefix}audit/`), load<BankRule>(`${prefix}bank-rule-versions/`), load<BankFeedTransaction>(`${prefix}bank-feed/transactions/`), load<BankFeedMatch>(`${prefix}bank-feed/matches/`), load<AccountingRecurrence>(`${prefix}recurrences/`), load<AccountingEmailRecord>(`${prefix}invoice-emails/`), optionalObject<AccountingReminderSettings>(`${prefix}reminder-settings.json`)]);
+    const [chart, books, bankStatements, bankMatches, locks, drafts, contacts, audit, ruleVersions, feedTransactions, feedMatches, recurrences, emailRecords, reminderSettings, invoiceLinks, invoicePaymentExceptions] = await Promise.all([accounts(prefix), ledger(prefix), load<BankStatement>(`${prefix}bank-statements/`), load<BankMatch>(`${prefix}bank-matches/`), periodLocks(prefix), load<AccountingDraft>(`${prefix}draft-versions/`), load<AccountingContact>(`${prefix}contact-versions/`), load<AccountingAudit>(`${prefix}audit/`), load<BankRule>(`${prefix}bank-rule-versions/`), load<BankFeedTransaction>(`${prefix}bank-feed/transactions/`), load<BankFeedMatch>(`${prefix}bank-feed/matches/`), load<AccountingRecurrence>(`${prefix}recurrences/`), load<AccountingEmailRecord>(`${prefix}invoice-emails/`), optionalObject<AccountingReminderSettings>(`${prefix}reminder-settings.json`), load<InvoiceLink>(`${prefix}invoice-links/`), load<{ documentId: string; receivedPence: number; duePence: number; reason: string }>(`${prefix}invoice-payment-exceptions/`)]);
     bankStatements.sort((a, b) => b.toDate.localeCompare(a.toDate));
     const bankRules = latestVersions(ruleVersions);
     const movements = bankEntries(books.entries, chart.filter((item) => item.bank).map((item) => item.id));
     const bankSuggestions = bankStatements.flatMap((statement) => suggestBankMatches(statement, movements, bankMatches));
     const ruleSuggestions = bankStatements.flatMap((statement) => statement.lines.flatMap((line) => bankMatches.some((match) => match.statementId === statement.id && match.lineIndex === line.index) ? [] : matchingBankRules(statement, line, bankRules).slice(0, 1).map((rule) => ({ statementId: statement.id, lineIndex: line.index, ruleId: rule.id, counterAccountId: rule.counterAccountId }))));
-    return jsonResponse(200, { success: true, accounts: chart, ...books, drafts: latestVersions(drafts), contacts: latestVersions(contacts), recurrences, emailRecords, reminderSettings: reminderSettings ?? defaultReminderSettings, audit: audit.sort((a, b) => b.at.localeCompare(a.at)), bankStatements, bankMatches, feedTransactions: feedTransactions.sort((a, b) => b.date.localeCompare(a.date)), feedMatches, bankRules, bankSuggestions, ruleSuggestions, periodLocks: locks, lockedThrough: lockedThrough(locks), report: ledgerReport(chart, books.entries) });
+    return jsonResponse(200, { success: true, accounts: chart, ...books, drafts: latestVersions(drafts), contacts: latestVersions(contacts), recurrences, emailRecords, reminderSettings: reminderSettings ?? defaultReminderSettings, invoiceLinks: invoiceLinks.filter((item) => item.active).map((item) => ({ documentId: item.documentId, url: invoiceUrl(user.organisationId, item) })), invoicePaymentExceptions: invoicePaymentExceptions.filter((item) => !('resolvedAt' in item)), audit: audit.sort((a, b) => b.at.localeCompare(a.at)), bankStatements, bankMatches, feedTransactions: feedTransactions.sort((a, b) => b.date.localeCompare(a.date)), feedMatches, bankRules, bankSuggestions, ruleSuggestions, periodLocks: locks, lockedThrough: lockedThrough(locks), report: ledgerReport(chart, books.entries) });
   } catch (error) { return failure(error); }
 }
 export async function agingReportHandler(event: APIGatewayProxyEventV2) {
@@ -368,7 +369,11 @@ export async function sendInvoiceHandler(event: APIGatewayProxyEventV2) {
     try { await putReceiptJsonObjectIfAbsent(key, record); }
     catch { throw badRequest('An email with this request ID is already being sent. Refresh before retrying.'); }
     let messageId: string | null;
-    try { const settings = await optionalObject<AccountingReminderSettings>(`${prefix}reminder-settings.json`); messageId = await sendAccountingInvoice(document, recipient, { organisationId: user.organisationId, mailId: record.id }, settings?.replyToEmail); }
+    try {
+      const [settings, existingLink] = await Promise.all([optionalObject<AccountingReminderSettings>(`${prefix}reminder-settings.json`), currentInvoiceLink(prefix, document.id)]);
+      const link = existingLink ?? await ensureInvoiceLink(prefix, document.id);
+      messageId = await sendAccountingInvoice(document, recipient, { organisationId: user.organisationId, mailId: record.id }, settings?.replyToEmail, link.active ? invoiceUrl(user.organisationId, link) : undefined);
+    }
     catch (error) { await putReceiptJsonObject(key, { ...record, status: 'uncertain' }); throw error; }
     await withAccountingLock(prefix, async () => {
       const current = await getReceiptJsonObject<AccountingEmailRecord>(key);
@@ -428,7 +433,7 @@ export async function reminderDailyHandler() {
         const key = `${prefix}invoice-emails/${record.id}.json`;
         await putReceiptJsonObjectIfAbsent(key, record);
         let messageId: string | null;
-        try { messageId = await sendAccountingReminder(current, record.recipient, { organisationId: user.organisationId, mailId: record.id }, candidate.amountPence, freshSettings.replyToEmail); }
+        try { const link = await currentInvoiceLink(prefix, current.id); messageId = await sendAccountingReminder(current, record.recipient, { organisationId: user.organisationId, mailId: record.id }, candidate.amountPence, freshSettings.replyToEmail, link?.active ? invoiceUrl(user.organisationId, link) : undefined); }
         catch (error) {
           await putReceiptJsonObject(key, { ...record, status: 'uncertain' });
           throw error;
@@ -463,7 +468,7 @@ export async function accountingEmailEventHandler(event: SesAccountingEvent) {
     await putReceiptJsonObject(key, { ...current, status, messageId: current.messageId ?? event.detail?.mail?.messageId, ...(status === 'delivered' ? { deliveredAt: new Date().toISOString() } : {}) });
   });
 }
-function dueFor(document: AccountingDocument, books: Awaited<ReturnType<typeof ledger>>) {
+export function dueFor(document: AccountingDocument, books: Awaited<ReturnType<typeof ledger>>) {
   const reversed = new Set(books.reversals.map((item) => item.targetEntryId));
   if (reversed.has(`document-${document.id}`)) return 0;
   return document.totalPence

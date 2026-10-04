@@ -1521,6 +1521,93 @@ Resources:
             Path: /accounting/reminder-settings
             Method: POST
 
+  AccountingInvoiceLinkFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accountingInvoicePortal.invoiceLinkHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingInvoiceLinkRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/invoice-links
+            Method: POST
+
+  AccountingInvoicePaymentConnectionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accountingInvoicePortal.invoicePaymentConnectionHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingInvoicePaymentConnectionGet:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/invoice-payment-connection
+            Method: GET
+        AccountingInvoicePaymentConnectionPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/invoice-payment-connection
+            Method: POST
+
+  AccountingPublicInvoiceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accountingInvoicePortal.publicInvoiceHandler
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingPublicInvoiceGet:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/invoice/{token}
+            Method: GET
+        AccountingPublicInvoicePdf:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/invoice/{token}/pdf
+            Method: GET
+
+  AccountingPublicInvoiceCheckoutFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accountingInvoicePortal.publicInvoiceCheckoutHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingPublicInvoiceCheckout:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/invoice/{token}/checkout
+            Method: POST
+
+  AccountingInvoicePaymentReviewFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accountingInvoicePortal.invoicePaymentReviewHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingInvoicePaymentReview:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/invoice-payment-reviews
+            Method: POST
+
   AccountingReminderDailyFunction:
     Type: AWS::Serverless::Function
     Properties:

@@ -10,6 +10,7 @@ export type AccountingPayment = { id: string; documentId: string; bankAccountId?
 
 export const defaultAccounts: LedgerAccount[] = [
   { id: '1000', code: '1000', name: 'Bank', type: 'asset', system: true, bank: true },
+  { id: '1050', code: '1050', name: 'Stripe clearing', type: 'asset', system: true },
   { id: '1100', code: '1100', name: 'Accounts receivable', type: 'asset', system: true },
   { id: '1200', code: '1200', name: 'VAT receivable', type: 'asset', system: true },
   { id: '2000', code: '2000', name: 'Accounts payable', type: 'liability', system: true },
