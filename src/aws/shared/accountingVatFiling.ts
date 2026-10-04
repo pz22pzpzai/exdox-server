@@ -41,6 +41,6 @@ export function buildVatFilingPreview(report: VatReport, closes: VatClose[]) {
     blockers,
     fields,
     submissionAvailable: false,
-    connectionMessage: 'HMRC VAT (MTD) is not connected. An open HMRC obligation, its period key, user authorisation, compliant fraud prevention headers, and production approval are required before submission.',
+    connectionMessage: 'The sandbox connection does not enable filing. An open HMRC obligation, its period key, compliant fraud prevention headers, and production approval are required before submission.',
   };
 }
