@@ -8,6 +8,8 @@ import { approveDraft, createAudit, createContact, createDraft, createRefund, cr
 import { sendAccountingInvoice } from '../shared/accountingInvoiceMail.js';
 import { assertVatOpen, buildVatReport, createVatClassification, createVatClose, type VatClassification, type VatClose, type VatCode } from '../shared/accountingVat.js';
 import { buildVatFilingPreview } from '../shared/accountingVatFiling.js';
+import { normalizeFeedTransaction, type BankFeedConnection, type BankFeedMatch, type BankFeedTransaction } from '../shared/accountingBankFeed.js';
+import { bankFeedConfigured, bankFeedEnvironment, connectedAccounts, createDataConnection, readTransactions, startTransactions } from '../shared/truelayerBankFeed.js';
 import { forbidden, requireAuthenticatedUser } from '../shared/auth.js';
 import { findUserByEmail, getOrganisationSettings, getReceiptById, listReceipts } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
@@ -25,6 +27,16 @@ async function load<T>(prefix: string): Promise<T[]> {
   const keys = await listAllReceiptJsonKeys(prefix);
   return Promise.all(keys.filter((key) => key.endsWith('.json')).map((key) => getReceiptJsonObject<T>(key)));
 }
+async function optionalObject<T>(key: string): Promise<T | null> {
+  try { return await getReceiptJsonObject<T>(key); }
+  catch (error) {
+    const value = error as { name?: string; $metadata?: { httpStatusCode?: number } };
+    if (value.name === 'NoSuchKey' || value.name === 'NotFound' || value.$metadata?.httpStatusCode === 404) return null;
+    throw error;
+  }
+}
+const feedConnectionKey = (prefix: string) => `${prefix}bank-feed/connection.json`;
+const sourceIp = (event: APIGatewayProxyEventV2) => event.requestContext?.http?.sourceIp ?? (event as APIGatewayProxyEventV2 & { requestContext?: { identity?: { sourceIp?: string } } }).requestContext?.identity?.sourceIp;
 async function withAccountingLock<T>(prefix: string, operation: () => Promise<T>) { return withReceiptObjectLock(`${prefix}write-lease.json`, operation); }
 async function accounts(prefix: string) {
   return [...defaultAccounts, ...await load<LedgerAccount>(`${prefix}accounts/`)];
@@ -75,13 +87,13 @@ function failure(error: unknown) {
 export async function getHandler(event: APIGatewayProxyEventV2) {
   try {
     const { prefix } = await scope(event);
-    const [chart, books, bankStatements, bankMatches, locks, drafts, contacts, audit, ruleVersions] = await Promise.all([accounts(prefix), ledger(prefix), load<BankStatement>(`${prefix}bank-statements/`), load<BankMatch>(`${prefix}bank-matches/`), periodLocks(prefix), load<AccountingDraft>(`${prefix}draft-versions/`), load<AccountingContact>(`${prefix}contact-versions/`), load<AccountingAudit>(`${prefix}audit/`), load<BankRule>(`${prefix}bank-rule-versions/`)]);
+    const [chart, books, bankStatements, bankMatches, locks, drafts, contacts, audit, ruleVersions, feedTransactions, feedMatches] = await Promise.all([accounts(prefix), ledger(prefix), load<BankStatement>(`${prefix}bank-statements/`), load<BankMatch>(`${prefix}bank-matches/`), periodLocks(prefix), load<AccountingDraft>(`${prefix}draft-versions/`), load<AccountingContact>(`${prefix}contact-versions/`), load<AccountingAudit>(`${prefix}audit/`), load<BankRule>(`${prefix}bank-rule-versions/`), load<BankFeedTransaction>(`${prefix}bank-feed/transactions/`), load<BankFeedMatch>(`${prefix}bank-feed/matches/`)]);
     bankStatements.sort((a, b) => b.toDate.localeCompare(a.toDate));
     const bankRules = latestVersions(ruleVersions);
     const movements = bankEntries(books.entries, chart.filter((item) => item.bank).map((item) => item.id));
     const bankSuggestions = bankStatements.flatMap((statement) => suggestBankMatches(statement, movements, bankMatches));
     const ruleSuggestions = bankStatements.flatMap((statement) => statement.lines.flatMap((line) => bankMatches.some((match) => match.statementId === statement.id && match.lineIndex === line.index) ? [] : matchingBankRules(statement, line, bankRules).slice(0, 1).map((rule) => ({ statementId: statement.id, lineIndex: line.index, ruleId: rule.id, counterAccountId: rule.counterAccountId }))));
-    return jsonResponse(200, { success: true, accounts: chart, ...books, drafts: latestVersions(drafts), contacts: latestVersions(contacts), audit: audit.sort((a, b) => b.at.localeCompare(a.at)), bankStatements, bankMatches, bankRules, bankSuggestions, ruleSuggestions, periodLocks: locks, lockedThrough: lockedThrough(locks), report: ledgerReport(chart, books.entries) });
+    return jsonResponse(200, { success: true, accounts: chart, ...books, drafts: latestVersions(drafts), contacts: latestVersions(contacts), audit: audit.sort((a, b) => b.at.localeCompare(a.at)), bankStatements, bankMatches, feedTransactions: feedTransactions.sort((a, b) => b.date.localeCompare(a.date)), feedMatches, bankRules, bankSuggestions, ruleSuggestions, periodLocks: locks, lockedThrough: lockedThrough(locks), report: ledgerReport(chart, books.entries) });
   } catch (error) { return failure(error); }
 }
 export async function vatReportHandler(event: APIGatewayProxyEventV2) {
@@ -353,7 +365,7 @@ export async function periodLockHandler(event: APIGatewayProxyEventV2) {
     const events = await periodLocks(prefix);
     let lock: PeriodLock;
     try { lock = createPeriodLock(data, events, user.email); } catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid close date.'); }
-    const [statements, matches, books, chart] = await Promise.all([load<BankStatement>(`${prefix}bank-statements/`), load<BankMatch>(`${prefix}bank-matches/`), ledger(prefix), accounts(prefix)]);
+    const [statements, matches, books, chart, feedTransactions, feedMatches, feedConnection] = await Promise.all([load<BankStatement>(`${prefix}bank-statements/`), load<BankMatch>(`${prefix}bank-matches/`), ledger(prefix), accounts(prefix), load<BankFeedTransaction>(`${prefix}bank-feed/transactions/`), load<BankFeedMatch>(`${prefix}bank-feed/matches/`), optionalObject<BankFeedConnection>(feedConnectionKey(prefix))]);
     if (statements.some((item) => item.fromDate <= lock.lockedThrough && item.toDate > lock.lockedThrough)) throw badRequest('Close after the end of any imported statement that overlaps this date.');
     for (const statement of statements.filter((item) => item.toDate <= lock.lockedThrough)) {
       const matchedLines = matches.filter((item) => item.statementId === statement.id);
@@ -362,6 +374,8 @@ export async function periodLockHandler(event: APIGatewayProxyEventV2) {
       const periodMovements = movements.filter((item) => item.date >= statement.fromDate && item.date <= statement.toDate);
       if (matchedLines.length !== statement.lines.length || periodMovements.some((item) => !matchedLines.some((match) => match.bankEntryId === item.id)) || bankBalance !== statement.closingPence) throw badRequest(`Reconcile ${statement.name} before closing this period.`);
     }
+    if (feedTransactions.some((item) => item.date <= lock.lockedThrough && !feedMatches.some((match) => match.transactionId === item.id))) throw badRequest('Match all bank feed transactions through the closing date before locking this period.');
+    if (feedConnection?.pending && feedConnection.pending.from <= lock.lockedThrough) throw badRequest('Finish the bank feed sync before locking this period.');
     await putReceiptJsonObject(`${prefix}period-locks/${lock.id}.json`, lock);
     return jsonResponse(201, { success: true, lock });
     });
@@ -376,9 +390,10 @@ export async function reverseHandler(event: APIGatewayProxyEventV2) {
     const books = await ledger(prefix);
     const original = books.entries.find((entry) => entry.id === entryId);
     if (!original) throw badRequest('Choose a posted entry to reverse.');
-    const [matches, chart] = await Promise.all([load<BankMatch>(`${prefix}bank-matches/`), accounts(prefix)]);
+    const [matches, chart, feedMatches] = await Promise.all([load<BankMatch>(`${prefix}bank-matches/`), accounts(prefix), load<BankFeedMatch>(`${prefix}bank-feed/matches/`)]);
     const movementIds = new Set(bankEntries([original], chart.filter((item) => item.bank).map((item) => item.id)).map((item) => item.id));
     if (matches.some((item) => movementIds.has(item.bankEntryId))) throw badRequest('Unmatch this bank movement before reversing its entry.');
+    if (feedMatches.some((item) => movementIds.has(item.bankEntryId))) throw badRequest('Unmatch this bank feed movement before reversing its entry.');
     const reversed = new Set(books.reversals.map((item) => item.targetEntryId));
     if (entryId.startsWith('document-')) {
       const documentId = entryId.slice('document-'.length);
@@ -483,6 +498,7 @@ export async function bankStatementHandler(event: APIGatewayProxyEventV2) {
     const existing = await load<BankStatement>(`${prefix}bank-statements/`);
     const duplicate = existing.find((item) => item.id === statement.id || ((item.accountId ?? '1000') === (statement.accountId ?? '1000') && item.openingPence === statement.openingPence && item.closingPence === statement.closingPence && JSON.stringify(item.lines) === JSON.stringify(statement.lines)));
     if (duplicate) return jsonResponse(200, { success: true, statement: duplicate, alreadyImported: true });
+    if ((await load<BankFeedTransaction>(`${prefix}bank-feed/transactions/`)).some((row) => row.localAccountId === (statement.accountId ?? '1000') && row.date >= statement.fromDate && row.date <= statement.toDate)) throw badRequest('This date range contains bank feed transactions. Use the feed for these dates to avoid duplicate reconciliation lines.');
     try { assertOpenPeriod(statement.fromDate, await currentLock(prefix)); } catch (error) { throw badRequest(error instanceof Error ? error.message : 'Period is locked.'); }
     const duplicateLines = duplicateStatementLines(statement, existing);
     if (duplicateLines.length) throw badRequest(`${duplicateLines.length} line(s) resemble transactions already imported for this bank account. Import a non-overlapping statement export instead.`);
@@ -491,6 +507,133 @@ export async function bankStatementHandler(event: APIGatewayProxyEventV2) {
     await putReceiptJsonObjectIfAbsent(`${prefix}bank-statements/${statement.id}.json`, statement);
     await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit('bank.statement_imported', statement.id, `${statement.name}: ${statement.lines.length} lines`, user.email));
     return jsonResponse(201, { success: true, statement, alreadyImported: false });
+    });
+  } catch (error) { return failure(error); }
+}
+
+export async function bankFeedStatusHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix } = await scope(event);
+    let connection = await optionalObject<BankFeedConnection>(feedConnectionKey(prefix));
+    if (bankFeedConfigured() && connection?.authorization) {
+      try {
+        const authorizedAccounts = await connectedAccounts(connection.authorization.id, sourceIp(event));
+        if (!authorizedAccounts.length) throw new Error('Bank authorisation is not complete.');
+        connection = await withAccountingLock(prefix, async () => {
+          const latest = await optionalObject<BankFeedConnection>(feedConnectionKey(prefix));
+          if (!latest?.authorization || latest.authorization.id !== connection?.authorization?.id) return latest;
+          const promoted = { ...latest, id: latest.authorization.id, connectedAt: new Date().toISOString(), accounts: [], pending: undefined, authorization: undefined };
+          await putReceiptJsonObject(feedConnectionKey(prefix), promoted);
+          return promoted;
+        });
+      } catch { /* Consent is still in progress or was declined; retain the previous connection. */ }
+    }
+    if (!bankFeedConfigured() || !connection || connection.environment !== bankFeedEnvironment() || !connection.id) return jsonResponse(200, { success: true, configured: bankFeedConfigured(), environment: bankFeedEnvironment(), connectionState: connection?.authorization ? 'authorization_pending' : connection ? 'reconnect_required' : 'not_connected', accounts: [], mappings: connection?.accounts ?? [], pending: Boolean(connection?.pending), pendingRequest: connection?.pending });
+    try {
+      const available = await connectedAccounts(connection.id, sourceIp(event));
+      return jsonResponse(200, { success: true, configured: true, environment: bankFeedEnvironment(), connectionState: 'connected', accounts: available.filter((item) => item.currency === 'GBP'), mappings: connection.accounts, pending: Boolean(connection.pending), pendingRequest: connection.pending });
+    } catch (error) {
+      const status = (error as { providerStatus?: number }).providerStatus;
+      return jsonResponse(200, { success: true, configured: true, environment: bankFeedEnvironment(), connectionState: status === 401 || status === 403 ? 'reconnect_required' : 'temporarily_unavailable', accounts: [], mappings: connection.accounts, pending: Boolean(connection.pending), pendingRequest: connection.pending });
+    }
+  } catch (error) { return failure(error); }
+}
+
+export async function bankFeedConnectHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix, user } = await scope(event);
+    if (!bankFeedConfigured()) throw badRequest('Bank feed provider credentials are not configured.');
+    const connection = await createDataConnection(user.fullName || 'Exdox owner', user.email, sourceIp(event));
+    await withAccountingLock(prefix, async () => {
+      const existing = await optionalObject<BankFeedConnection>(feedConnectionKey(prefix));
+      await putReceiptJsonObject(feedConnectionKey(prefix), { provider: 'truelayer', environment: bankFeedEnvironment(), id: existing?.id ?? '', connectedAt: existing?.connectedAt ?? '', connectedBy: user.id, accounts: existing?.accounts ?? [], pending: existing?.pending, authorization: { id: connection.id, createdAt: new Date().toISOString() } } satisfies BankFeedConnection);
+    });
+    return jsonResponse(200, { success: true, authorizationUrl: connection.url });
+  } catch (error) { return failure(error); }
+}
+
+export async function bankFeedSyncHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix, user } = await scope(event);
+    return await withAccountingLock(prefix, async () => {
+      const data = event.body ? JSON.parse(event.body) as Record<string, unknown> : {};
+      const remoteId = String(data.remoteAccountId ?? '');
+      const localId = String(data.localAccountId ?? '');
+      const from = String(data.from ?? '');
+      const to = String(data.to ?? '');
+      if (!/^[0-9a-f-]{32,36}$/i.test(remoteId) || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || Number.isNaN(Date.parse(`${from}T00:00:00Z`)) || Number.isNaN(Date.parse(`${to}T00:00:00Z`)) || from > to || to > new Date().toISOString().slice(0, 10) || Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`) > 90 * 86400000) throw badRequest('Choose a bank account and a date range of up to 90 days.');
+      await assertBankAccount(prefix, localId);
+      const connection = await optionalObject<BankFeedConnection>(feedConnectionKey(prefix));
+      if (!connection || connection.environment !== bankFeedEnvironment()) throw badRequest('Connect a bank feed first.');
+      const remoteAccounts = await connectedAccounts(connection.id, sourceIp(event));
+      if (!remoteAccounts.some((item) => item.id === remoteId && item.currency === 'GBP')) throw badRequest('Choose a connected GBP bank account.');
+      if (connection.accounts.some((item) => item.remoteId === remoteId && item.localId !== localId)) throw badRequest('This bank is already linked to a different accounting bank account.');
+      if (connection.accounts.some((item) => item.localId === localId && item.remoteId !== remoteId)) throw badRequest('This accounting bank account is already linked to a different connected bank.');
+      const statements = await load<BankStatement>(`${prefix}bank-statements/`);
+      if (statements.some((item) => (item.accountId ?? '1000') === localId && from <= item.toDate && to >= item.fromDate)) throw badRequest('This date range overlaps a manually imported statement. Start after the last CSV statement to avoid duplicates.');
+      const existing = await load<BankFeedTransaction>(`${prefix}bank-feed/transactions/`);
+      if (existing.some((item) => item.localAccountId === localId && item.connectionId !== connection.id && item.date >= from && item.date <= to)) throw badRequest('This range overlaps transactions from an earlier bank connection. Start after those transactions to avoid duplicates.');
+      const pending = connection.pending;
+      if (pending && (pending.remoteId !== remoteId || pending.localId !== localId || pending.from !== from || pending.to !== to)) throw badRequest('Finish the current bank feed request before starting another.');
+      if (!pending) {
+        const requestId = await startTransactions(connection.id, remoteId, from, to, undefined, sourceIp(event));
+        connection.pending = { remoteId, localId, from, to, requestId };
+        await putReceiptJsonObject(feedConnectionKey(prefix), connection);
+        return jsonResponse(202, { success: true, status: 'pending', imported: 0 });
+      }
+      const result = await readTransactions(connection.id, remoteId, pending.requestId, sourceIp(event));
+      if (result.status === 'pending') return jsonResponse(202, { success: true, status: 'pending', imported: 0 });
+      if (result.status === 'failed') { delete connection.pending; await putReceiptJsonObject(feedConnectionKey(prefix), connection); throw badRequest('The bank could not return transactions. Try the sync again.'); }
+      const normalized = result.items.map((item) => normalizeFeedTransaction(item, connection.id, remoteId, localId)).filter((item): item is BankFeedTransaction => item !== null);
+      if (new Set(normalized.map((item) => item.id)).size !== normalized.length) throw badRequest('Bank feed returned duplicate transaction identifiers. No rows were imported.');
+      if (normalized.some((item) => item.date < from || item.date > to)) throw badRequest('Bank feed returned a transaction outside the requested dates. No rows were imported.');
+      if (existing.some((item) => item.remoteAccountId === remoteId && item.localAccountId !== localId)) throw badRequest('This connected bank already belongs to another accounting bank account.');
+      const known = new Set(existing.map((item) => item.id));
+      const newRows = normalized.filter((row) => !known.has(row.id));
+      for (const item of newRows) await putReceiptJsonObjectIfAbsent(`${prefix}bank-feed/transactions/${item.id}.json`, item);
+      if (newRows.length) await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit('bank.feed_imported', remoteId, `${newRows.length} settled GBP transactions imported for ${from} to ${to}`, user.email));
+      const mapping = connection.accounts.find((item) => item.remoteId === remoteId);
+      if (mapping) mapping.lastSyncedAt = new Date().toISOString();
+      else connection.accounts.push({ remoteId, localId, label: remoteAccounts.find((item) => item.id === remoteId)?.label ?? 'Connected bank', lastSyncedAt: new Date().toISOString() });
+      if (result.nextCursor) {
+        connection.pending = { remoteId, localId, from, to, cursor: result.nextCursor, requestId: await startTransactions(connection.id, remoteId, from, to, result.nextCursor, sourceIp(event)) };
+      } else delete connection.pending;
+      await putReceiptJsonObject(feedConnectionKey(prefix), connection);
+      return jsonResponse(result.nextCursor ? 202 : 200, { success: true, status: result.nextCursor ? 'pending' : 'complete', imported: newRows.length });
+    });
+  } catch (error) { return failure(error); }
+}
+
+export async function bankFeedMatchHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix, user } = await scope(event);
+    return await withAccountingLock(prefix, async () => {
+      const data = event.body ? JSON.parse(event.body) as Record<string, unknown> : {};
+      const transactionId = String(data.transactionId ?? '');
+      const bankEntryId = String(data.bankEntryId ?? '');
+      if (!/^[0-9a-f]{64}$/.test(transactionId)) throw badRequest('Choose a bank feed transaction.');
+      const transaction = await optionalObject<BankFeedTransaction>(`${prefix}bank-feed/transactions/${transactionId}.json`);
+      if (!transaction) throw badRequest('Bank feed transaction not found.');
+      const matchKey = `${prefix}bank-feed/matches/${transactionId}.json`;
+      const existing = await optionalObject<BankFeedMatch>(matchKey);
+      if ((event.requestContext?.http?.method ?? (event as APIGatewayProxyEventV2 & { httpMethod?: string }).httpMethod ?? 'POST').toUpperCase() === 'DELETE') {
+        if (!existing) throw badRequest('This bank feed transaction is not matched.');
+        assertOpenPeriod(transaction.date, await currentLock(prefix));
+        await deleteReceiptObject(matchKey);
+        await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit('bank.feed_unmatched', transactionId, existing.bankEntryId, user.email));
+        return jsonResponse(200, { success: true });
+      }
+      if (existing) throw badRequest('This bank feed transaction is already matched.');
+      const [books, chart, statementMatches, feedMatches] = await Promise.all([ledger(prefix), accounts(prefix), load<BankMatch>(`${prefix}bank-matches/`), load<BankFeedMatch>(`${prefix}bank-feed/matches/`)]);
+      const movement = bankEntries(books.entries, chart.filter((item) => item.bank).map((item) => item.id)).find((item) => item.id === bankEntryId);
+      if (!movement || movement.accountId !== transaction.localAccountId || movement.amountPence !== transaction.amountPence) throw badRequest('Choose a ledger movement in the same bank account for the exact amount.');
+      if (statementMatches.some((item) => item.bankEntryId === bankEntryId) || feedMatches.some((item) => item.bankEntryId === bankEntryId)) throw badRequest('That ledger movement is already matched.');
+      assertOpenPeriod(transaction.date, await currentLock(prefix));
+      assertOpenPeriod(movement.date, await currentLock(prefix));
+      const match = { transactionId, bankEntryId, matchedAt: new Date().toISOString(), matchedBy: user.email } satisfies BankFeedMatch;
+      await putReceiptJsonObjectIfAbsent(matchKey, match);
+      await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit('bank.feed_matched', transactionId, bankEntryId, user.email));
+      return jsonResponse(201, { success: true, match });
     });
   } catch (error) { return failure(error); }
 }
@@ -598,10 +741,11 @@ export async function bankMatchHandler(event: APIGatewayProxyEventV2) {
     const { prefix, user } = await scope(event);
     return await withAccountingLock(prefix, async () => {
     const data = event.body ? JSON.parse(event.body) : {};
-    const [statements, matches, books, chart] = await Promise.all([load<BankStatement>(`${prefix}bank-statements/`), load<BankMatch>(`${prefix}bank-matches/`), ledger(prefix), accounts(prefix)]);
+    const [statements, matches, books, chart, feedMatches] = await Promise.all([load<BankStatement>(`${prefix}bank-statements/`), load<BankMatch>(`${prefix}bank-matches/`), ledger(prefix), accounts(prefix), load<BankFeedMatch>(`${prefix}bank-feed/matches/`)]);
     const movements = bankEntries(books.entries, chart.filter((item) => item.bank).map((item) => item.id));
     let match: BankMatch;
     try { match = createBankMatch(data, statements, movements, matches, user.email); } catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid match.'); }
+    if (feedMatches.some((item) => item.bankEntryId === match.bankEntryId)) throw badRequest('This ledger movement is already matched to a bank feed transaction.');
     const statement = statements.find((item) => item.id === match.statementId);
     const line = statement?.lines.find((item) => item.index === match.lineIndex);
     if (!line) throw badRequest('Statement line not found.');

@@ -87,6 +87,18 @@ Parameters:
     Type: String
     Default: ''
     NoEcho: true
+  TrueLayerDataClientId:
+    Type: String
+    Default: ''
+    NoEcho: true
+  TrueLayerDataClientSecret:
+    Type: String
+    Default: ''
+    NoEcho: true
+  TrueLayerDataEnvironment:
+    Type: String
+    Default: sandbox
+    AllowedValues: [sandbox, production]
   MapboxAccessToken:
     Type: String
     Default: ''
@@ -159,6 +171,9 @@ Globals:
         XERO_CLIENT_SECRET: !Ref XeroClientSecret
         HMRC_VAT_SANDBOX_CLIENT_ID: !Ref HmrcVatSandboxClientId
         HMRC_VAT_SANDBOX_CLIENT_SECRET: !Ref HmrcVatSandboxClientSecret
+        TRUELAYER_DATA_CLIENT_ID: !Ref TrueLayerDataClientId
+        TRUELAYER_DATA_CLIENT_SECRET: !Ref TrueLayerDataClientSecret
+        TRUELAYER_DATA_ENVIRONMENT: !Ref TrueLayerDataEnvironment
         MAPBOX_ACCESS_TOKEN: !Ref MapboxAccessToken
         STRIPE_CHECKOUT_SUCCESS_URL: !Ref StripeCheckoutSuccessUrl
         STRIPE_CHECKOUT_CANCEL_URL: !Ref StripeCheckoutCancelUrl
@@ -1486,6 +1501,72 @@ Resources:
             RestApiId: !Ref ReceiptApi
             Path: /accounting/bank-statements
             Method: POST
+
+  AccountingBankFeedStatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.bankFeedStatusHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingBankFeedStatusRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/bank-feed
+            Method: GET
+
+  AccountingBankFeedConnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.bankFeedConnectHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingBankFeedConnectRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/bank-feed/connect
+            Method: POST
+
+  AccountingBankFeedSyncFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.bankFeedSyncHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingBankFeedSyncRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/bank-feed/sync
+            Method: POST
+
+  AccountingBankFeedMatchFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.bankFeedMatchHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingBankFeedMatchRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/bank-feed/matches
+            Method: POST
+        AccountingBankFeedUnmatchRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/bank-feed/matches
+            Method: DELETE
 
   AccountingBankRuleFunction:
     Type: AWS::Serverless::Function
