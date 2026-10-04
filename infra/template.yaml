@@ -79,6 +79,14 @@ Parameters:
     Type: String
     Default: ''
     NoEcho: true
+  HmrcVatSandboxClientId:
+    Type: String
+    Default: ''
+    NoEcho: true
+  HmrcVatSandboxClientSecret:
+    Type: String
+    Default: ''
+    NoEcho: true
   MapboxAccessToken:
     Type: String
     Default: ''
@@ -149,6 +157,8 @@ Globals:
         STRIPE_WEBHOOK_SECRET: !Ref StripeWebhookSecret
         XERO_CLIENT_ID: !Ref XeroClientId
         XERO_CLIENT_SECRET: !Ref XeroClientSecret
+        HMRC_VAT_SANDBOX_CLIENT_ID: !Ref HmrcVatSandboxClientId
+        HMRC_VAT_SANDBOX_CLIENT_SECRET: !Ref HmrcVatSandboxClientSecret
         MAPBOX_ACCESS_TOKEN: !Ref MapboxAccessToken
         STRIPE_CHECKOUT_SUCCESS_URL: !Ref StripeCheckoutSuccessUrl
         STRIPE_CHECKOUT_CANCEL_URL: !Ref StripeCheckoutCancelUrl
@@ -1640,6 +1650,51 @@ Resources:
           Properties:
             RestApiId: !Ref ReceiptApi
             Path: /accounting/vat
+            Method: GET
+
+  AccountingHmrcStatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accountingHmrc.statusHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingHmrcStatusRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/hmrc/status
+            Method: GET
+
+  AccountingHmrcConnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accountingHmrc.connectHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingHmrcConnectRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/hmrc/connect
+            Method: POST
+
+  AccountingHmrcCallbackFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accountingHmrc.callbackHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingHmrcCallbackRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/hmrc/callback
             Method: GET
 
   AccountingVatClassificationFunction:

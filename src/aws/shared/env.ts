@@ -49,6 +49,8 @@ export const awsEnv = {
   stripeWebhookSecret: optionalEnv('STRIPE_WEBHOOK_SECRET'),
   xeroClientId: optionalEnv('XERO_CLIENT_ID'),
   xeroClientSecret: optionalEnv('XERO_CLIENT_SECRET'),
+  hmrcVatSandboxClientId: optionalEnv('HMRC_VAT_SANDBOX_CLIENT_ID'),
+  hmrcVatSandboxClientSecret: optionalEnv('HMRC_VAT_SANDBOX_CLIENT_SECRET'),
   stripeCheckoutSuccessUrl:
     process.env.STRIPE_CHECKOUT_SUCCESS_URL?.trim() || 'https://exdox.co.uk/billing?checkout=success',
   stripeCheckoutCancelUrl:
