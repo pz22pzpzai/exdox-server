@@ -6,6 +6,7 @@ import { assertOpenPeriod, createCreditNote, createPeriodLock, createReversal, c
 import { createSourcePosting, sourceJournal, type SourcePosting } from '../shared/accountingSourcePosting.js';
 import { approveDraft, createAudit, createContact, createDraft, createRefund, createSettlement, latestVersions, refundJournal, settlementJournal, type AccountingAudit, type AccountingContact, type AccountingDraft, type AccountingRefund, type AccountingSettlement } from '../shared/accountingLifecycle.js';
 import { sendAccountingInvoice } from '../shared/accountingInvoiceMail.js';
+import { advanceRecurrence, createRecurrence, recurringDraft, type AccountingRecurrence } from '../shared/accountingRecurring.js';
 import { assertVatOpen, buildVatReport, createVatClassification, createVatClose, type VatClassification, type VatClose, type VatCode } from '../shared/accountingVat.js';
 import { buildVatFilingPreview } from '../shared/accountingVatFiling.js';
 import { normalizeFeedTransaction, type BankFeedConnection, type BankFeedMatch, type BankFeedTransaction } from '../shared/accountingBankFeed.js';
@@ -75,6 +76,37 @@ async function vatReport(prefix: string, fromDate: string, toDate: string) {
   const [books, classifications] = await Promise.all([ledger(prefix), load<VatClassification>(`${prefix}vat-classifications/`)]);
   return buildVatReport({ fromDate, toDate, ...books, classifications });
 }
+async function materializeRecurrences(prefix: string, today: string) {
+  await withAccountingLock(prefix, async () => {
+    const deadline = Date.now() + 20_000;
+    const schedules = await load<AccountingRecurrence>(`${prefix}recurrences/`);
+    for (const schedule of schedules.filter((item) => !item.paused)) {
+      if (Date.now() >= deadline) break;
+      let nextDate = schedule.nextDate;
+      let created = 0;
+      while (nextDate <= today && created < 12 && Date.now() < deadline) {
+        const draft = recurringDraft(schedule, nextDate);
+        const key = `${prefix}draft-versions/${draft.id}-1.json`;
+        if (!await optionalObject<AccountingDraft>(key)) {
+          const existing = latestVersions(await load<AccountingDraft>(`${prefix}draft-versions/`));
+          const posted = await load<AccountingDocument>(`${prefix}documents/`);
+          if (existing.some((item) => item.document.kind === schedule.kind && item.document.number.toLowerCase() === draft.document.number.toLowerCase()) || posted.some((item) => item.kind === schedule.kind && item.number.toLowerCase() === draft.document.number.toLowerCase())) {
+            await putReceiptJsonObject(`${prefix}recurrences/${schedule.id}.json`, { ...schedule, nextDate, paused: true, lastError: `Number ${draft.document.number} is already in use. Choose a different prefix in a new schedule.` });
+            break;
+          }
+          await putReceiptJsonObjectIfAbsent(key, draft);
+          await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit('recurrence.draft_created', draft.id, `${schedule.kind} ${draft.document.number} awaits approval`, 'Accounting schedule'));
+        }
+        nextDate = advanceRecurrence(schedule, nextDate);
+        created += 1;
+      }
+      if (nextDate !== schedule.nextDate) {
+        const current = await getReceiptJsonObject<AccountingRecurrence>(`${prefix}recurrences/${schedule.id}.json`);
+        await putReceiptJsonObject(`${prefix}recurrences/${schedule.id}.json`, { ...current, nextDate });
+      }
+    }
+  });
+}
 function badRequest(message: string) {
   const error = new Error(message) as Error & { statusCode: number };
   error.statusCode = 400;
@@ -87,14 +119,51 @@ function failure(error: unknown) {
 export async function getHandler(event: APIGatewayProxyEventV2) {
   try {
     const { prefix } = await scope(event);
-    const [chart, books, bankStatements, bankMatches, locks, drafts, contacts, audit, ruleVersions, feedTransactions, feedMatches] = await Promise.all([accounts(prefix), ledger(prefix), load<BankStatement>(`${prefix}bank-statements/`), load<BankMatch>(`${prefix}bank-matches/`), periodLocks(prefix), load<AccountingDraft>(`${prefix}draft-versions/`), load<AccountingContact>(`${prefix}contact-versions/`), load<AccountingAudit>(`${prefix}audit/`), load<BankRule>(`${prefix}bank-rule-versions/`), load<BankFeedTransaction>(`${prefix}bank-feed/transactions/`), load<BankFeedMatch>(`${prefix}bank-feed/matches/`)]);
+    try { await materializeRecurrences(prefix, new Date().toISOString().slice(0, 10)); }
+    catch (error) { if (!(typeof error === 'object' && error !== null && 'statusCode' in error && Number((error as { statusCode: number }).statusCode) === 409)) throw error; }
+    const [chart, books, bankStatements, bankMatches, locks, drafts, contacts, audit, ruleVersions, feedTransactions, feedMatches, recurrences] = await Promise.all([accounts(prefix), ledger(prefix), load<BankStatement>(`${prefix}bank-statements/`), load<BankMatch>(`${prefix}bank-matches/`), periodLocks(prefix), load<AccountingDraft>(`${prefix}draft-versions/`), load<AccountingContact>(`${prefix}contact-versions/`), load<AccountingAudit>(`${prefix}audit/`), load<BankRule>(`${prefix}bank-rule-versions/`), load<BankFeedTransaction>(`${prefix}bank-feed/transactions/`), load<BankFeedMatch>(`${prefix}bank-feed/matches/`), load<AccountingRecurrence>(`${prefix}recurrences/`)]);
     bankStatements.sort((a, b) => b.toDate.localeCompare(a.toDate));
     const bankRules = latestVersions(ruleVersions);
     const movements = bankEntries(books.entries, chart.filter((item) => item.bank).map((item) => item.id));
     const bankSuggestions = bankStatements.flatMap((statement) => suggestBankMatches(statement, movements, bankMatches));
     const ruleSuggestions = bankStatements.flatMap((statement) => statement.lines.flatMap((line) => bankMatches.some((match) => match.statementId === statement.id && match.lineIndex === line.index) ? [] : matchingBankRules(statement, line, bankRules).slice(0, 1).map((rule) => ({ statementId: statement.id, lineIndex: line.index, ruleId: rule.id, counterAccountId: rule.counterAccountId }))));
-    return jsonResponse(200, { success: true, accounts: chart, ...books, drafts: latestVersions(drafts), contacts: latestVersions(contacts), audit: audit.sort((a, b) => b.at.localeCompare(a.at)), bankStatements, bankMatches, feedTransactions: feedTransactions.sort((a, b) => b.date.localeCompare(a.date)), feedMatches, bankRules, bankSuggestions, ruleSuggestions, periodLocks: locks, lockedThrough: lockedThrough(locks), report: ledgerReport(chart, books.entries) });
+    return jsonResponse(200, { success: true, accounts: chart, ...books, drafts: latestVersions(drafts), contacts: latestVersions(contacts), recurrences, audit: audit.sort((a, b) => b.at.localeCompare(a.at)), bankStatements, bankMatches, feedTransactions: feedTransactions.sort((a, b) => b.date.localeCompare(a.date)), feedMatches, bankRules, bankSuggestions, ruleSuggestions, periodLocks: locks, lockedThrough: lockedThrough(locks), report: ledgerReport(chart, books.entries) });
   } catch (error) { return failure(error); }
+}
+export async function recurrenceHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix, user } = await scope(event);
+    return await withAccountingLock(prefix, async () => {
+      const data = event.body ? JSON.parse(event.body) as Record<string, unknown> : {};
+      const action = String(data.action ?? 'create');
+      if (action === 'create') {
+        const draft = latestVersions(await load<AccountingDraft>(`${prefix}draft-versions/`)).find((item) => item.id === data.draftId);
+        if (!draft) throw badRequest('Choose a saved invoice or bill draft.');
+        let schedule: AccountingRecurrence;
+        try { schedule = createRecurrence(data, draft, user.email, new Date().toISOString().slice(0, 10)); }
+        catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid schedule.'); }
+        const existing = await load<AccountingRecurrence>(`${prefix}recurrences/`);
+        if (existing.some((item) => item.kind === schedule.kind && item.numberPrefix.toLowerCase() === schedule.numberPrefix.toLowerCase())) throw badRequest('Use a different number prefix for this schedule.');
+        await putReceiptJsonObjectIfAbsent(`${prefix}recurrences/${schedule.id}.json`, schedule);
+        await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit('recurrence.created', schedule.id, `${schedule.label} starts ${schedule.nextDate}`, user.email));
+        return jsonResponse(201, { success: true, schedule });
+      }
+      if (action !== 'pause' && action !== 'resume') throw badRequest('Invalid schedule action.');
+      const id = String(data.id ?? '');
+      const schedule = await optionalObject<AccountingRecurrence>(`${prefix}recurrences/${id}.json`);
+      if (!schedule || schedule.id !== id) throw badRequest('Schedule was not found.');
+      if (action === 'resume' && schedule.lastError) throw badRequest('This schedule has a number conflict. Create a replacement with a new prefix.');
+      const updated = { ...schedule, paused: action === 'pause' };
+      await putReceiptJsonObject(`${prefix}recurrences/${id}.json`, updated);
+      await putReceiptJsonObject(`${prefix}audit/${crypto.randomUUID()}.json`, createAudit(`recurrence.${action}d`, id, schedule.label, user.email));
+      return jsonResponse(200, { success: true, schedule: updated });
+    });
+  } catch (error) { return failure(error); }
+}
+export async function recurrenceDailyHandler() {
+  const user = await findUserByEmail(pilotEmail);
+  if (!user || user.status !== 'active') return;
+  await materializeRecurrences(`accounting/org-${user.organisationId}/`, new Date().toISOString().slice(0, 10));
 }
 export async function vatReportHandler(event: APIGatewayProxyEventV2) {
   try {

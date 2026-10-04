@@ -1422,6 +1422,36 @@ Resources:
             Path: /accounting/drafts/approve
             Method: POST
 
+  AccountingRecurrenceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.recurrenceHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingRecurrenceRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/recurrences
+            Method: POST
+
+  AccountingRecurrenceDailyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.recurrenceDailyHandler
+      Timeout: 120
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingRecurrenceDailySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(15 5 * * ? *)
+            Enabled: true
+
   AccountingSendInvoiceFunction:
     Type: AWS::Serverless::Function
     Properties:
