@@ -1,5 +1,9 @@
 # Exdox server
 
+## Private Accounting aged balances (2026-10-04)
+
+`GET /accounting/aging?asOf=YYYY-MM-DD` uses the exact-email Accounting gate and returns posted invoice/bill aging by as-of date. It applies payment, settlement, credit, refund, and reversal dates, groups open balances into current/30/60/90/91+ and credit buckets, and compares document totals to the 1100/2000 ledger control balances. Manual journals and one-time Exdox source postings can produce a visible difference because they have no invoice/bill due date. The route is read-only and isolated to Accounting S3 data. Deploy before website; owner checks deployment/live. Never put secrets in project files or delete/move signing keystores or details.
+
 ## Private Accounting recurring drafts (2026-10-04)
 
 `POST /accounting/recurrences` creates a weekly/monthly schedule from a saved Accounting draft snapshot or pauses/resumes one. The exact-email gate applies. An EventBridge schedule invokes `accounting.recurrenceDailyHandler` at 05:15 UTC; `GET /accounting` also catches up. Due occurrences use deterministic draft IDs and conditional S3 creates under `accounting/org-{id}/draft-versions/`, then advance the saved next date. Each occurrence stays a draft until explicit approval, so it does not post to the ledger/VAT report or email customers automatically. A conflicting document number pauses the schedule with an error. Deploy this server before the website; owner checks the live deployment. Never put secrets in project files or delete/move signing keystores or details.

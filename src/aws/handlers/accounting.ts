@@ -7,6 +7,7 @@ import { createSourcePosting, sourceJournal, type SourcePosting } from '../share
 import { approveDraft, createAudit, createContact, createDraft, createRefund, createSettlement, latestVersions, refundJournal, settlementJournal, type AccountingAudit, type AccountingContact, type AccountingDraft, type AccountingRefund, type AccountingSettlement } from '../shared/accountingLifecycle.js';
 import { sendAccountingInvoice } from '../shared/accountingInvoiceMail.js';
 import { advanceRecurrence, createRecurrence, recurringDraft, type AccountingRecurrence } from '../shared/accountingRecurring.js';
+import { buildAgingReport } from '../shared/accountingAging.js';
 import { assertVatOpen, buildVatReport, createVatClassification, createVatClose, type VatClassification, type VatClose, type VatCode } from '../shared/accountingVat.js';
 import { buildVatFilingPreview } from '../shared/accountingVatFiling.js';
 import { normalizeFeedTransaction, type BankFeedConnection, type BankFeedMatch, type BankFeedTransaction } from '../shared/accountingBankFeed.js';
@@ -128,6 +129,16 @@ export async function getHandler(event: APIGatewayProxyEventV2) {
     const bankSuggestions = bankStatements.flatMap((statement) => suggestBankMatches(statement, movements, bankMatches));
     const ruleSuggestions = bankStatements.flatMap((statement) => statement.lines.flatMap((line) => bankMatches.some((match) => match.statementId === statement.id && match.lineIndex === line.index) ? [] : matchingBankRules(statement, line, bankRules).slice(0, 1).map((rule) => ({ statementId: statement.id, lineIndex: line.index, ruleId: rule.id, counterAccountId: rule.counterAccountId }))));
     return jsonResponse(200, { success: true, accounts: chart, ...books, drafts: latestVersions(drafts), contacts: latestVersions(contacts), recurrences, audit: audit.sort((a, b) => b.at.localeCompare(a.at)), bankStatements, bankMatches, feedTransactions: feedTransactions.sort((a, b) => b.date.localeCompare(a.date)), feedMatches, bankRules, bankSuggestions, ruleSuggestions, periodLocks: locks, lockedThrough: lockedThrough(locks), report: ledgerReport(chart, books.entries) });
+  } catch (error) { return failure(error); }
+}
+export async function agingReportHandler(event: APIGatewayProxyEventV2) {
+  try {
+    const { prefix } = await scope(event);
+    const asOf = String(event.queryStringParameters?.asOf ?? new Date().toISOString().slice(0, 10));
+    let report;
+    try { report = buildAgingReport(asOf, await ledger(prefix)); }
+    catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid report date.'); }
+    return jsonResponse(200, { success: true, report });
   } catch (error) { return failure(error); }
 }
 export async function recurrenceHandler(event: APIGatewayProxyEventV2) {

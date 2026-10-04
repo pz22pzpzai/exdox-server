@@ -1332,6 +1332,21 @@ Resources:
             Path: /accounting
             Method: GET
 
+  AccountingAgingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.agingReportHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingAgingRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/aging
+            Method: GET
+
   AccountingAccountFunction:
     Type: AWS::Serverless::Function
     Properties:
