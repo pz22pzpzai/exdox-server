@@ -189,6 +189,22 @@ Globals:
         AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
 
 Resources:
+  AccountingEmailConfigurationSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name: !Sub '${EnvironmentName}-exdox-accounting'
+
+  AccountingEmailEventDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    Properties:
+      ConfigurationSetName: !Ref AccountingEmailConfigurationSet
+      EventDestination:
+        Name: AccountingEmailEvents
+        Enabled: true
+        MatchingEventTypes: [DELIVERY, BOUNCE, COMPLAINT, REJECT, DELIVERY_DELAY]
+        EventBridgeDestination:
+          EventBusArn: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default'
+
   ReceiptApi:
     Type: AWS::Serverless::Api
     Properties:
@@ -1471,6 +1487,9 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: dist/aws/handlers/accounting.sendInvoiceHandler
+      Environment:
+        Variables:
+          ACCOUNTING_SES_CONFIGURATION_SET: !Ref AccountingEmailConfigurationSet
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref ReceiptBucketName
@@ -1486,6 +1505,62 @@ Resources:
             RestApiId: !Ref ReceiptApi
             Path: /accounting/documents/send
             Method: POST
+
+  AccountingReminderSettingsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.reminderSettingsHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingReminderSettingsRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /accounting/reminder-settings
+            Method: POST
+
+  AccountingReminderDailyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.reminderDailyHandler
+      Timeout: 120
+      Environment:
+        Variables:
+          ACCOUNTING_SES_CONFIGURATION_SET: !Ref AccountingEmailConfigurationSet
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+        - Statement:
+            - Effect: Allow
+              Action: [ses:SendEmail]
+              Resource: '*'
+      Events:
+        AccountingReminderSchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 9-17 * * ? *)
+            Enabled: true
+
+  AccountingEmailEventFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/accounting.accountingEmailEventHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        AccountingEmailStatusEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source: [aws.ses]
+              detail-type: [Email Delivered, Email Bounced, Email Complaint Received, Email Rejected, Email Delivery Delayed]
+              detail:
+                mail:
+                  tags:
+                    'ses:configuration-set': [!Ref AccountingEmailConfigurationSet]
 
   AccountingSettlementFunction:
     Type: AWS::Serverless::Function
