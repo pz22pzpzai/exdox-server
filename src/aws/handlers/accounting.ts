@@ -7,6 +7,7 @@ import { createSourcePosting, sourceJournal, type SourcePosting } from '../share
 import { approveDraft, createAudit, createContact, createDraft, createRefund, createSettlement, latestVersions, refundJournal, settlementJournal, type AccountingAudit, type AccountingContact, type AccountingDraft, type AccountingRefund, type AccountingSettlement } from '../shared/accountingLifecycle.js';
 import { sendAccountingInvoice } from '../shared/accountingInvoiceMail.js';
 import { assertVatOpen, buildVatReport, createVatClassification, createVatClose, type VatClassification, type VatClose, type VatCode } from '../shared/accountingVat.js';
+import { buildVatFilingPreview } from '../shared/accountingVatFiling.js';
 import { forbidden, requireAuthenticatedUser } from '../shared/auth.js';
 import { findUserByEmail, getOrganisationSettings, getReceiptById, listReceipts } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
@@ -92,7 +93,8 @@ export async function vatReportHandler(event: APIGatewayProxyEventV2) {
     const toDate = String(event.queryStringParameters?.to ?? '');
     let report: Awaited<ReturnType<typeof vatReport>>;
     try { report = await vatReport(prefix, fromDate, toDate); } catch (error) { throw badRequest(error instanceof Error ? error.message : 'Invalid VAT period.'); }
-    return jsonResponse(200, { success: true, report, closes: await vatCloses(prefix) });
+    const closes = await vatCloses(prefix);
+    return jsonResponse(200, { success: true, report, closes, filingPreview: buildVatFilingPreview(report, closes) });
   } catch (error) { return failure(error); }
 }
 export async function vatClassificationHandler(event: APIGatewayProxyEventV2) {
