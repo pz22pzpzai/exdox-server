@@ -4,7 +4,7 @@ type Result = Record<string, unknown>;
 
 const sandbox = () => awsEnv.trueLayerDataEnvironment !== 'production';
 export const bankFeedEnvironment = () => sandbox() ? 'sandbox' as const : 'production' as const;
-export const bankFeedConfigured = () => Boolean(awsEnv.trueLayerDataClientId && awsEnv.trueLayerDataClientSecret);
+export const bankFeedConfigured = () => bankFeedEnvironment() === 'production' && Boolean(awsEnv.trueLayerDataClientId && awsEnv.trueLayerDataClientSecret);
 const apiBase = () => sandbox() ? 'https://api.truelayer-sandbox.com' : 'https://api.truelayer.com';
 const tokenUrl = () => sandbox() ? 'https://auth.truelayer-sandbox.com/connect/token' : 'https://auth.truelayer.com/connect/token';
 

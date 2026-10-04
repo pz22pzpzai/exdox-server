@@ -53,7 +53,7 @@ export const awsEnv = {
   hmrcVatSandboxClientSecret: optionalEnv('HMRC_VAT_SANDBOX_CLIENT_SECRET'),
   trueLayerDataClientId: optionalEnv('TRUELAYER_DATA_CLIENT_ID'),
   trueLayerDataClientSecret: optionalEnv('TRUELAYER_DATA_CLIENT_SECRET'),
-  trueLayerDataEnvironment: optionalEnv('TRUELAYER_DATA_ENVIRONMENT') || 'sandbox',
+  trueLayerDataEnvironment: optionalEnv('TRUELAYER_DATA_ENVIRONMENT') || 'production',
   stripeCheckoutSuccessUrl:
     process.env.STRIPE_CHECKOUT_SUCCESS_URL?.trim() || 'https://exdox.co.uk/billing?checkout=success',
   stripeCheckoutCancelUrl:

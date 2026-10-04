@@ -97,7 +97,7 @@ Parameters:
     NoEcho: true
   TrueLayerDataEnvironment:
     Type: String
-    Default: sandbox
+    Default: production
     AllowedValues: [sandbox, production]
   MapboxAccessToken:
     Type: String
