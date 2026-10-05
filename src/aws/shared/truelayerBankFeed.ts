@@ -1,15 +1,16 @@
 import { awsEnv } from './env.js';
+import { liveBankFeedAllowed } from './liveBankFeedAccess.js';
 
 type Result = Record<string, unknown>;
 
 const sandbox = () => awsEnv.trueLayerDataEnvironment !== 'production';
 export const bankFeedEnvironment = () => sandbox() ? 'sandbox' as const : 'production' as const;
-export const bankFeedConfigured = () => bankFeedEnvironment() === 'production' && Boolean(awsEnv.trueLayerDataClientId && awsEnv.trueLayerDataClientSecret);
+export const bankFeedConfigured = () => liveBankFeedAllowed(bankFeedEnvironment(), awsEnv.trueLayerAisRegulatoryApproved, awsEnv.trueLayerDataClientId, awsEnv.trueLayerDataClientSecret);
 const apiBase = () => sandbox() ? 'https://api.truelayer-sandbox.com' : 'https://api.truelayer.com';
 const tokenUrl = () => sandbox() ? 'https://auth.truelayer-sandbox.com/connect/token' : 'https://auth.truelayer.com/connect/token';
 
 async function accessToken(): Promise<string> {
-  if (!bankFeedConfigured()) throw new Error('Bank feed provider credentials are not configured.');
+  if (!bankFeedConfigured()) throw new Error('Live bank feed provider and regulatory approval are not configured.');
   const response = await fetch(tokenUrl(), { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'client_credentials', client_id: awsEnv.trueLayerDataClientId!, client_secret: awsEnv.trueLayerDataClientSecret!, scope: 'data' }), signal: AbortSignal.timeout(8_000) });
   if (!response.ok) throw new Error('Bank feed provider authentication failed.');
   const payload = await response.json() as { access_token?: string };

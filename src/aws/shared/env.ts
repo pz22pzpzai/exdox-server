@@ -55,6 +55,7 @@ export const awsEnv = {
   trueLayerDataClientId: optionalEnv('TRUELAYER_DATA_CLIENT_ID'),
   trueLayerDataClientSecret: optionalEnv('TRUELAYER_DATA_CLIENT_SECRET'),
   trueLayerDataEnvironment: optionalEnv('TRUELAYER_DATA_ENVIRONMENT') || 'production',
+  trueLayerAisRegulatoryApproved: process.env.TRUELAYER_AIS_REGULATORY_APPROVED?.trim() === 'true',
   stripeCheckoutSuccessUrl:
     process.env.STRIPE_CHECKOUT_SUCCESS_URL?.trim() || 'https://exdox.co.uk/billing?checkout=success',
   stripeCheckoutCancelUrl:

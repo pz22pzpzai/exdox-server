@@ -1,0 +1,1 @@
+export const liveBankFeedAllowed = (environment: string, regulatoryApproved: boolean, clientId: string | null, clientSecret: string | null) => environment === 'production' && regulatoryApproved && Boolean(clientId && clientSecret);

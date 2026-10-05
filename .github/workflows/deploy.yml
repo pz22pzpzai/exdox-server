@@ -40,6 +40,7 @@ jobs:
       TRUELAYER_DATA_CLIENT_ID: ${{ secrets.TRUELAYER_DATA_CLIENT_ID }}
       TRUELAYER_DATA_CLIENT_SECRET: ${{ secrets.TRUELAYER_DATA_CLIENT_SECRET }}
       TRUELAYER_DATA_ENVIRONMENT: ${{ vars.TRUELAYER_DATA_ENVIRONMENT }}
+      TRUELAYER_AIS_REGULATORY_APPROVED: ${{ vars.TRUELAYER_AIS_REGULATORY_APPROVED }}
       MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
       STRIPE_CHECKOUT_SUCCESS_URL: ${{ secrets.STRIPE_CHECKOUT_SUCCESS_URL }}
       STRIPE_CHECKOUT_CANCEL_URL: ${{ secrets.STRIPE_CHECKOUT_CANCEL_URL }}
@@ -174,6 +175,7 @@ jobs:
           add_if_set "TrueLayerDataClientId" "$TRUELAYER_DATA_CLIENT_ID"
           add_if_set "TrueLayerDataClientSecret" "$TRUELAYER_DATA_CLIENT_SECRET"
           add_if_set "TrueLayerDataEnvironment" "$TRUELAYER_DATA_ENVIRONMENT"
+          add_if_set "TrueLayerAisRegulatoryApproved" "$TRUELAYER_AIS_REGULATORY_APPROVED"
           add_if_set "MapboxAccessToken" "$MAPBOX_ACCESS_TOKEN"
           add_if_set "StripePriceCaptureMonthly" "$STRIPE_PRICE_CAPTURE_MONTHLY"
           add_if_set "StripePriceCaptureAnnual" "$STRIPE_PRICE_CAPTURE_ANNUAL"

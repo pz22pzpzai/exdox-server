@@ -731,7 +731,7 @@ export async function bankFeedStatusHandler(event: APIGatewayProxyEventV2) {
 export async function bankFeedConnectHandler(event: APIGatewayProxyEventV2) {
   try {
     const { prefix, user } = await scope(event);
-    if (!bankFeedConfigured()) throw badRequest('Bank feed provider credentials are not configured.');
+    if (!bankFeedConfigured()) throw badRequest('Live bank feed provider and regulatory approval are not configured.');
     const connection = await createDataConnection(user.fullName || 'Exdox owner', user.email, sourceIp(event));
     await withAccountingLock(prefix, async () => {
       const existing = await optionalObject<BankFeedConnection>(feedConnectionKey(prefix));

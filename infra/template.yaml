@@ -103,6 +103,10 @@ Parameters:
     Type: String
     Default: production
     AllowedValues: [sandbox, production]
+  TrueLayerAisRegulatoryApproved:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
   MapboxAccessToken:
     Type: String
     Default: ''
@@ -179,6 +183,7 @@ Globals:
         TRUELAYER_DATA_CLIENT_ID: !Ref TrueLayerDataClientId
         TRUELAYER_DATA_CLIENT_SECRET: !Ref TrueLayerDataClientSecret
         TRUELAYER_DATA_ENVIRONMENT: !Ref TrueLayerDataEnvironment
+        TRUELAYER_AIS_REGULATORY_APPROVED: !Ref TrueLayerAisRegulatoryApproved
         MAPBOX_ACCESS_TOKEN: !Ref MapboxAccessToken
         STRIPE_CHECKOUT_SUCCESS_URL: !Ref StripeCheckoutSuccessUrl
         STRIPE_CHECKOUT_CANCEL_URL: !Ref StripeCheckoutCancelUrl

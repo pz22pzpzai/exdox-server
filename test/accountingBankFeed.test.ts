@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { normalizeFeedTransaction } from '../src/aws/shared/accountingBankFeed.js';
+import { liveBankFeedAllowed } from '../src/aws/shared/liveBankFeedAccess.js';
 
 const connection = '0a6273a0-0314-4db6-800a-e66225fbe9f7';
 const bank = '9b7383a0-0314-4db6-800a-e66225fbe8a6';
+
+test('live bank feeds need explicit regulatory approval as well as production provider credentials', () => {
+  assert.equal(liveBankFeedAllowed('production', false, 'live-id', 'live-secret'), false);
+  assert.equal(liveBankFeedAllowed('sandbox', true, 'live-id', 'live-secret'), false);
+  assert.equal(liveBankFeedAllowed('production', true, null, 'live-secret'), false);
+  assert.equal(liveBankFeedAllowed('production', true, 'live-id', 'live-secret'), true);
+});
 
 test('settled GBP feed transactions retain signed pence and stable import identity', () => {
   const row = { id: 'provider-transaction-1', timestamp: '2026-10-04T12:34:56Z', description: 'BANK FEE', currency: 'GBP', amount_in_minor: -4200, status: 'settled' };
