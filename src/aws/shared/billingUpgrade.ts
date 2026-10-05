@@ -57,6 +57,9 @@ export async function upgradeSubscriptionPlan(input: {
   if (!subscriptionItem) {
     throw billingUpgradeError(409, 'subscription_item_missing', 'This subscription does not contain a billable plan item.');
   }
+  if (subscriptionItem.price.currency !== 'gbp') {
+    throw billingUpgradeError(409, 'currency_change_requires_billing_support', 'This plan is billed in GBP. Contact billing support to move your subscription to a larger plan.');
+  }
 
   const productId = typeof subscriptionItem.price.product === 'string'
     ? subscriptionItem.price.product

@@ -77,7 +77,7 @@ test('plan-free trial has unlimited core use for 14 days, then locks workspace a
   assert.deepEqual(resolveAllowedWebRoutes(expired, 'Business_Admin'), ['/billing', '/settings']);
 });
 
-test('one-user Capture selection bills £5 monthly with 100 documents', () => {
+test('one-user Capture selection bills 3 currency units monthly with 100 documents', () => {
   assert.deepEqual(resolveSelfServeSubscriptionSelection({
     planId: 'capture',
     includedUsers: 1,
@@ -86,7 +86,7 @@ test('one-user Capture selection bills £5 monthly with 100 documents', () => {
     planId: 'capture',
     includedUsers: 1,
     monthlyDocumentLimit: 100,
-    monthlyAmountPence: 500,
+    monthlyAmountPence: 300,
     label: 'Capture - 1 user',
   });
 });

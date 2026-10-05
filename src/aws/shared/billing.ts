@@ -350,7 +350,7 @@ export function resolveSelfServeSubscriptionSelection(input: {
   // The entry-level Capture allowance is deliberately distinct from the
   // five-user increments used by every other published self-serve option.
   if (input.planId === 'capture' && includedUsers === 1 && monthlyDocumentLimit === 100) {
-    return buildSelfServeSelection('capture', 1, 100, 500);
+    return buildSelfServeSelection('capture', 1, 100, 300);
   }
   const isNewOperationsTier = input.planId === 'operations'
     && Number.isInteger(includedUsers)

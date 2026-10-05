@@ -9,9 +9,10 @@ import {
   normalizePlanId,
   resolveSelfServeSubscriptionSelection,
 } from './billing.js';
-import { getOrganisationBillingSummary, getOrganisationName, updateOrganisationBillingProfile } from './db.js';
+import { getOrganisationBillingSummary, getOrganisationName, getOrganisationSettings, updateOrganisationBillingProfile } from './db.js';
 import { awsEnv } from './env.js';
 import { reconcileStripeSubscription } from './stripeSubscription.js';
+import { workspaceCountryDefaults } from './workspaceCountry.js';
 
 type CheckoutError = Error & { statusCode?: number; code?: string };
 
@@ -42,6 +43,7 @@ export async function createSelfServeCheckoutSession(input: {
   });
   const storedBilling = await getOrganisationBillingSummary(input.user.organisationId);
   const billing = await reconcileStripeSubscription(input.user.organisationId, storedBilling, stripe);
+  const settings = await getOrganisationSettings(input.user.organisationId);
 
   if (billing.stripeSubscriptionId && billing.status !== 'paused') {
     throw checkoutError(
@@ -77,7 +79,16 @@ export async function createSelfServeCheckoutSession(input: {
   if (continuingSoleTraderXero || (trialXeroPurchased && selection.includedUsers === 1 && selection.monthlyDocumentLimit === 100)) {
     selection = { ...selection, monthlyAmountPence: 1000 };
   }
+  const priceCurrency = selection.includedUsers === 1
+    ? (previousSubscription?.items.data[0]?.price.currency ?? workspaceCountryDefaults(settings.country).baseCurrency.toLowerCase())
+    : 'gbp';
   let customerId = billing.stripeCustomerId;
+  if (customerId) {
+    const customer = await stripe.customers.retrieve(customerId);
+    if ('deleted' in customer || (customer.currency && customer.currency !== priceCurrency)) {
+      customerId = null;
+    }
+  }
   const priorSubscriptions = customerId && billing.status === 'inactive' && !billing.trialEndsAt
     ? await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 20 })
     : null;
@@ -110,6 +121,7 @@ export async function createSelfServeCheckoutSession(input: {
     && (candidate.metadata?.previousSubscriptionId ?? '') === (previousSubscriptionId ?? '')
     && candidate.metadata?.planId === selection.planId
     && candidate.metadata?.monthlyAmountPence === String(selection.monthlyAmountPence)
+    && candidate.metadata?.priceCurrency === priceCurrency
     && (!trialXeroPurchased || candidate.metadata?.accountingCreditApplied === 'true')
     && candidate.url);
   if (matchingOpenSession) {
@@ -122,13 +134,14 @@ export async function createSelfServeCheckoutSession(input: {
   const coupon = applyAccountingCredit
     ? await stripe.coupons.create({
       amount_off: ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE,
-      currency: 'gbp',
+      currency: priceCurrency,
       duration: 'once',
       name: 'Exdox trial accounting integration credit',
-    }, { idempotencyKey: `trial-accounting-credit-coupon-${previousSubscriptionId ?? `organisation-${input.user.organisationId}`}` })
+    }, { idempotencyKey: `trial-accounting-credit-coupon-${previousSubscriptionId ?? `organisation-${input.user.organisationId}`}-${priceCurrency}` })
     : null;
   const checkoutMetadata = {
     ...buildCheckoutMetadata(input.user.organisationId, selection, billingCycle),
+    priceCurrency,
     checkoutPurpose: startsTrial ? 'trial_start' : 'paid_continuation',
     ...(previousSubscriptionId ? { previousSubscriptionId } : {}),
     accountingCreditApplied: coupon ? 'true' : 'false',
@@ -143,7 +156,7 @@ export async function createSelfServeCheckoutSession(input: {
     ...(coupon ? { discounts: [{ coupon: coupon.id }] } : {}),
     line_items: [{
       price_data: {
-        currency: 'gbp',
+        currency: priceCurrency,
         product_data: {
           name: `Exdox ${selection.label}`,
           metadata: {
@@ -167,7 +180,7 @@ export async function createSelfServeCheckoutSession(input: {
       } } : {}),
       metadata: checkoutMetadata,
     },
-  }, { idempotencyKey: `exdox-checkout-${input.user.organisationId}-${startsTrial ? 'trial' : 'paid'}-${previousSubscriptionId ?? 'first'}-${selection.monthlyAmountPence}-${coupon ? 'credit' : 'no-credit'}-${Math.floor(Date.now() / 3_600_000)}` });
+  }, { idempotencyKey: `exdox-checkout-${input.user.organisationId}-${startsTrial ? 'trial' : 'paid'}-${previousSubscriptionId ?? 'first'}-${selection.monthlyAmountPence}-${priceCurrency}-${coupon ? 'credit' : 'no-credit'}-${Math.floor(Date.now() / 3_600_000)}` });
 
   return {
     checkoutUrl: session.url,

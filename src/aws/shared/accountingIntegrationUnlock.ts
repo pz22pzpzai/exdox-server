@@ -2,10 +2,11 @@ import Stripe from 'stripe';
 
 import type { AuthenticatedUser } from '../types.js';
 import { isStripeConfigured } from './billing.js';
-import { getOrganisationBillingAccessState, getOrganisationBillingSummary, updateOrganisationBillingProfile } from './db.js';
+import { getOrganisationBillingAccessState, getOrganisationBillingSummary, getOrganisationSettings, updateOrganisationBillingProfile } from './db.js';
 import { awsEnv } from './env.js';
 import { getReceiptJsonObject, putReceiptJsonObject } from './s3.js';
 import { reconcileStripeSubscription } from './stripeSubscription.js';
+import { workspaceCountryDefaults } from './workspaceCountry.js';
 
 export const ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE = 500;
 export const ACCOUNTING_INTEGRATION_UNLOCK_ACTION = 'accounting_integration_trial_unlock';
@@ -14,8 +15,8 @@ const SOLE_TRADER_XERO_MONTHLY_PENCE = 1000;
 function isSoleTraderBaseSubscription(subscription: Stripe.Subscription) {
   return subscription.metadata.includedUsers === '1'
     && subscription.metadata.monthlyDocumentLimit === '100'
-    && subscription.items.data[0]?.price.unit_amount === 500
-    && subscription.items.data[0]?.price.currency === 'gbp';
+    && (subscription.items.data[0]?.price.unit_amount === 300
+      || (subscription.items.data[0]?.price.unit_amount === 500 && subscription.items.data[0]?.price.currency === 'gbp'));
 }
 
 type AccountingIntegrationUnlockRecord = {
@@ -28,6 +29,7 @@ type AccountingIntegrationUnlockRecord = {
   paymentIntentId: string | null;
   creditInvoiceItemId: string | null;
   amountPence: number;
+  currency?: string;
   createdAt: string;
   unlockedAt: string | null;
   creditVoidedAt: string | null;
@@ -82,8 +84,11 @@ export async function getAccountingIntegrationAccess(organisationId: number) {
     && (billingStatus === 'active' || (trialOpen && subscription.metadata.xeroUpgrade === 'true'));
   const soleTraderXeroUpgradeEligible = soleTraderBase && (billingStatus === 'active' || trialOpen);
   const upgradedTrial = subscription?.metadata.xeroUpgrade === 'true' && !soleTraderBase;
+  const settings = await getOrganisationSettings(organisationId);
+  const priceCurrency = subscription?.items.data[0]?.price.currency ?? workspaceCountryDefaults(settings.country).baseCurrency.toLowerCase();
   return {
     billingStatus,
+    priceCurrency,
     available: (billingStatus === 'active' && !soleTraderBase) || (trialOpen && (upgradedTrial || (trialUnlockPurchased && !soleTraderBase))),
     trialUnlockEligible: trialOpen && !trialUnlockPurchased && !soleTraderBase,
     soleTraderXeroUpgradeEligible,
@@ -103,9 +108,11 @@ export async function createAccountingIntegrationUnlockCheckout(user: Authentica
   const subscription = billing.stripeSubscriptionId ? await stripe.subscriptions.retrieve(billing.stripeSubscriptionId) : null;
   const soleTraderBase = subscription ? isSoleTraderBaseSubscription(subscription) : false;
   const standaloneTrial = billing.planId === 'trial' && billing.status === 'trialing' && Boolean(billing.trialEndsAt && Date.parse(billing.trialEndsAt) > Date.now());
+  const settings = await getOrganisationSettings(user.organisationId);
+  const priceCurrency = subscription?.items.data[0]?.price.currency ?? workspaceCountryDefaults(settings.country).baseCurrency.toLowerCase();
 
   if (!standaloneTrial && billing.status !== 'trialing' && !(billing.status === 'active' && soleTraderBase)) {
-    throw unlockError(409, 'trial_unlock_unavailable', 'The £5 accounting integration unlock is available only during an active free trial.');
+    throw unlockError(409, 'trial_unlock_unavailable', 'The accounting integration unlock is available only during an active free trial or an eligible sole trader subscription.');
   }
   if (!standaloneTrial && (!billing.stripeCustomerId || !billing.stripeSubscriptionId)) {
     throw unlockError(409, 'trial_subscription_required', 'Start the free trial with Stripe before unlocking accounting integrations.');
@@ -140,6 +147,7 @@ export async function createAccountingIntegrationUnlockCheckout(user: Authentica
     organisationId: String(user.organisationId),
     ...(billing.stripeSubscriptionId ? { stripeSubscriptionId: billing.stripeSubscriptionId } : { trialStandalone: 'true' }),
     amountPence: String(ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE),
+    priceCurrency,
     ...(soleTraderBase ? { soleTraderXeroUpgrade: 'true' } : {}),
   };
   const session = await stripe.checkout.sessions.create({
@@ -150,7 +158,7 @@ export async function createAccountingIntegrationUnlockCheckout(user: Authentica
     cancel_url: cancelUrl,
     line_items: [{
       price_data: {
-        currency: 'gbp',
+        currency: priceCurrency,
         unit_amount: ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE,
         product_data: { name: soleTraderBase ? 'Exdox sole trader Xero upgrade' : 'Exdox accounting integration trial unlock' },
       },
@@ -158,7 +166,7 @@ export async function createAccountingIntegrationUnlockCheckout(user: Authentica
     }],
     metadata,
     payment_intent_data: { metadata, ...(soleTraderBase ? { setup_future_usage: 'off_session' as const } : {}) },
-  }, { idempotencyKey: `accounting-integration-unlock-${user.organisationId}-${billing.stripeSubscriptionId ?? 'trial'}-${generation}` });
+  }, { idempotencyKey: `accounting-integration-unlock-${user.organisationId}-${billing.stripeSubscriptionId ?? 'trial'}-${priceCurrency}-${generation}` });
 
   if (!session.url) {
     throw unlockError(502, 'checkout_url_missing', 'Stripe did not return a checkout page. Please try again.');
@@ -174,6 +182,7 @@ export async function createAccountingIntegrationUnlockCheckout(user: Authentica
     paymentIntentId: null,
     creditInvoiceItemId: null,
     amountPence: ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE,
+    currency: priceCurrency,
     createdAt: now,
     unlockedAt: null,
     creditVoidedAt: null,
@@ -202,9 +211,9 @@ export async function fulfillAccountingIntegrationUnlock(session: Stripe.Checkou
     throw unlockError(400, 'invalid_unlock_checkout', 'This Stripe payment is not an accounting integration unlock.');
   }
   if (session.status !== 'complete' || session.payment_status !== 'paid') {
-    throw unlockError(409, 'unlock_payment_incomplete', 'The £5 payment has not completed yet.');
+    throw unlockError(409, 'unlock_payment_incomplete', 'The accounting integration payment has not completed yet.');
   }
-  if (session.amount_total !== ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE || session.currency !== 'gbp') {
+  if (session.amount_total !== ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE || session.currency !== (session.metadata?.priceCurrency ?? 'gbp')) {
     throw unlockError(409, 'unlock_payment_amount_mismatch', 'The accounting integration payment amount could not be verified.');
   }
 
@@ -234,6 +243,7 @@ export async function fulfillAccountingIntegrationUnlock(session: Stripe.Checkou
       version: 1, organisationId, status: 'unlocked', checkoutSessionId: session.id,
       stripeCustomerId: customerId, stripeSubscriptionId: null, paymentIntentId,
       creditInvoiceItemId: null, amountPence: ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE,
+      currency: session.currency,
       createdAt: existing?.createdAt ?? unlockedAt, unlockedAt, creditVoidedAt: null,
     } satisfies AccountingIntegrationUnlockRecord);
     return { unlocked: true, alreadyUnlocked: false, unlockedAt, creditAmountPence: ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE };
@@ -255,7 +265,7 @@ export async function fulfillAccountingIntegrationUnlock(session: Stripe.Checkou
       const item = subscription.items.data[0]!;
       const productId = typeof item.price.product === 'string' ? item.price.product : item.price.product.id;
       const price = await stripe.prices.create({
-        currency: 'gbp',
+        currency: item.price.currency,
         unit_amount: SOLE_TRADER_XERO_MONTHLY_PENCE,
         recurring: { interval: 'month' },
         product: productId,
@@ -268,7 +278,7 @@ export async function fulfillAccountingIntegrationUnlock(session: Stripe.Checkou
         proration_behavior: 'none',
       });
       if (updated.pending_update || updated.items.data[0]?.price.unit_amount !== SOLE_TRADER_XERO_MONTHLY_PENCE) {
-        throw unlockError(409, 'xero_upgrade_pending', 'Stripe has not confirmed the £10 monthly subscription yet. Please try again.');
+        throw unlockError(409, 'xero_upgrade_pending', 'Stripe has not confirmed the updated monthly subscription yet. Please try again.');
       }
     } else if (subscription.metadata.xeroUpgrade !== 'true') {
       throw unlockError(409, 'xero_upgrade_plan_changed', 'The sole trader plan changed before the Xero upgrade completed. Contact billing support.');
@@ -278,6 +288,7 @@ export async function fulfillAccountingIntegrationUnlock(session: Stripe.Checkou
       version: 1, organisationId, status: 'unlocked', checkoutSessionId: session.id,
       stripeCustomerId: customerId, stripeSubscriptionId: metadataSubscriptionId,
       paymentIntentId, creditInvoiceItemId: null, amountPence: ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE,
+      currency: session.currency,
       createdAt: existing?.createdAt ?? unlockedAt, unlockedAt, creditVoidedAt: null,
     } satisfies AccountingIntegrationUnlockRecord);
     return { unlocked: true, alreadyUnlocked: false, unlockedAt, creditAmountPence: 0 };
@@ -287,8 +298,8 @@ export async function fulfillAccountingIntegrationUnlock(session: Stripe.Checkou
     customer: customerId,
     subscription: metadataSubscriptionId,
     amount: -ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE,
-    currency: 'gbp',
-    description: 'Credit for £5 accounting integration trial unlock payment',
+    currency: session.currency ?? 'gbp',
+    description: 'Credit for accounting integration trial unlock payment',
     discountable: false,
     metadata: {
       action: ACCOUNTING_INTEGRATION_UNLOCK_ACTION,
@@ -308,6 +319,7 @@ export async function fulfillAccountingIntegrationUnlock(session: Stripe.Checkou
     paymentIntentId,
     creditInvoiceItemId: credit.id,
     amountPence: ACCOUNTING_INTEGRATION_UNLOCK_PRICE_PENCE,
+    currency: session.currency,
     createdAt: existing?.createdAt ?? unlockedAt,
     unlockedAt,
     creditVoidedAt: null,
