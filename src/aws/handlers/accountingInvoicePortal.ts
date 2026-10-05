@@ -5,6 +5,7 @@ import { dueFor, ledger } from './accounting.js';
 import type { AccountingPayment } from '../shared/accounting.js';
 import { createAudit } from '../shared/accountingLifecycle.js';
 import { currentInvoiceLink, decodeInvoiceToken, ensureInvoiceLink, invoicePdf, invoiceUrl } from '../shared/accountingInvoicePresentation.js';
+import { invoicePaymentIntentMatches } from '../shared/accountingInvoicePaymentVerification.js';
 import { requireAuthenticatedUser } from '../shared/auth.js';
 import { findUserByEmail } from '../shared/db.js';
 import { awsEnv } from '../shared/env.js';
@@ -17,7 +18,7 @@ const stripe = () => {
   return new Stripe(awsEnv.stripeSecretKey, { apiVersion: '2026-06-24.dahlia' });
 };
 type PaymentConnection = { accountId: string; createdAt: string };
-type CheckoutMarker = { requestId: string; sessionId: string; url: string; expiresAt: number; amountPence: number; status: 'creating' | 'open' | 'paid' | 'needs_review' };
+type CheckoutMarker = { requestId: string; sessionId: string; url: string; expiresAt: number; amountPence: number; accountId?: string; chargeMode?: 'direct' | 'destination'; status: 'creating' | 'open' | 'paid' | 'needs_review' };
 const connectionKey = (prefix: string) => `${prefix}invoice-payment-connection.json`;
 const checkoutKey = (prefix: string, documentId: string) => `${prefix}invoice-checkouts/${documentId}.json`;
 const noStore = { 'Cache-Control': 'no-store, private', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow' };
@@ -59,13 +60,13 @@ async function connectedAccount(prefix: string) {
   if (!saved || !awsEnv.stripeSecretKey) return null;
   const account = await stripe().accounts.retrieve(saved.accountId);
   const accountReady = account.charges_enabled && account.payouts_enabled;
-  const eventsReady = accountReady && await webhookReady();
+  const eventsReady = accountReady && await webhookReady().catch(() => false);
   return { saved, accountReady, eventsReady, ready: accountReady && eventsReady };
 }
 async function webhookReady() {
-  if (!awsEnv.stripeWebhookSecret) return false;
+  if (!awsEnv.stripeConnectWebhookSecret) return false;
   const endpoints = await stripe().webhookEndpoints.list({ limit: 100 });
-  return endpoints.data.some((endpoint) => endpoint.livemode && endpoint.status === 'enabled' && endpoint.url === 'https://hz2zkm6jkf.execute-api.eu-west-2.amazonaws.com/prod/billing/webhook' && ['checkout.session.completed', 'charge.refunded', 'charge.dispute.created'].every((name) => endpoint.enabled_events.map(String).includes(name) || endpoint.enabled_events.map(String).includes('*')));
+  return endpoints.data.some((endpoint) => endpoint.livemode && endpoint.status === 'enabled' && endpoint.url === 'https://hz2zkm6jkf.execute-api.eu-west-2.amazonaws.com/prod/accounting/stripe-connect/webhook' && ['checkout.session.completed', 'charge.refunded', 'charge.dispute.created'].every((name) => endpoint.enabled_events.map(String).includes(name) || endpoint.enabled_events.map(String).includes('*')));
 }
 
 export async function invoiceLinkHandler(event: APIGatewayProxyEventV2) {
@@ -169,20 +170,20 @@ export async function publicInvoiceCheckoutHandler(event: APIGatewayProxyEventV2
       const connected = await connectedAccount(prefix);
       if (!connected?.ready) throw bad('Online payment is not enabled for this business.', 409);
       const existing = await optional<CheckoutMarker>(checkoutKey(prefix, document.id));
-      if (existing?.status === 'open' && existing.expiresAt > Date.now() / 1000 + 30 && existing.amountPence === amountPence) return jsonResponse(200, { success: true, url: existing.url });
-      const requestId = existing?.status === 'creating' && existing.amountPence === amountPence && existing.expiresAt > Date.now() / 1000 ? existing.requestId : randomUUID();
+      if (existing?.status === 'open' && existing.chargeMode === 'direct' && existing.accountId === connected.saved.accountId && existing.expiresAt > Date.now() / 1000 + 30 && existing.amountPence === amountPence) return jsonResponse(200, { success: true, url: existing.url });
+      const requestId = existing?.status === 'creating' && existing.chargeMode === 'direct' && existing.accountId === connected.saved.accountId && existing.amountPence === amountPence && existing.expiresAt > Date.now() / 1000 ? existing.requestId : randomUUID();
       const expiresAt = existing?.status === 'creating' && requestId === existing.requestId ? existing.expiresAt : Math.floor(Date.now() / 1000) + 1800;
-      await putReceiptJsonObject(checkoutKey(prefix, document.id), { requestId, sessionId: '', url: '', expiresAt, amountPence, status: 'creating' } satisfies CheckoutMarker);
+      await putReceiptJsonObject(checkoutKey(prefix, document.id), { requestId, sessionId: '', url: '', expiresAt, amountPence, accountId: connected.saved.accountId, chargeMode: 'direct', status: 'creating' } satisfies CheckoutMarker);
       const session = await stripe().checkout.sessions.create({
         mode: 'payment', payment_method_types: ['card'],
         line_items: [{ price_data: { currency: 'gbp', unit_amount: amountPence, product_data: { name: `Invoice ${document.number} from ${document.issuerName}` } }, quantity: 1 }],
-        payment_intent_data: { on_behalf_of: connected.saved.accountId, transfer_data: { destination: connected.saved.accountId }, metadata: { checkoutPurpose: 'accounting_invoice', exdoxOrganisationId: String(user.organisationId), documentId: document.id } },
+        payment_intent_data: { metadata: { checkoutPurpose: 'accounting_invoice', exdoxOrganisationId: String(user.organisationId), documentId: document.id } },
         metadata: { checkoutPurpose: 'accounting_invoice', exdoxOrganisationId: String(user.organisationId), documentId: document.id },
         success_url: `https://exdox.co.uk/invoice/${token}?payment=success`, cancel_url: `https://exdox.co.uk/invoice/${token}?payment=cancelled`,
         expires_at: expiresAt,
-      }, { idempotencyKey: `invoice-checkout-${requestId}` });
+      }, { stripeAccount: connected.saved.accountId, idempotencyKey: `invoice-checkout-${requestId}` });
       if (!session.url) throw new Error('Stripe did not return a checkout URL.');
-      await putReceiptJsonObject(checkoutKey(prefix, document.id), { requestId, sessionId: session.id, url: session.url, expiresAt: session.expires_at ?? 0, amountPence, status: 'open' } satisfies CheckoutMarker);
+      await putReceiptJsonObject(checkoutKey(prefix, document.id), { requestId, sessionId: session.id, url: session.url, expiresAt: session.expires_at ?? 0, amountPence, accountId: connected.saved.accountId, chargeMode: 'direct', status: 'open' } satisfies CheckoutMarker);
       return jsonResponse(200, { success: true, url: session.url });
     });
   } catch (error) { return errorResponse(error); }
@@ -192,7 +193,7 @@ function paymentId(sessionId: string) {
   const hash = createHash('sha256').update(`accounting-payment:${sessionId}`).digest('hex');
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
 }
-export async function fulfillAccountingInvoiceCheckout(session: Stripe.Checkout.Session, api: Stripe) {
+export async function fulfillAccountingInvoiceCheckout(session: Stripe.Checkout.Session, api: Stripe, connectedAccountId?: string) {
   if (session.metadata?.checkoutPurpose !== 'accounting_invoice') return false;
   if (session.payment_status !== 'paid' || session.currency !== 'gbp' || !Number.isSafeInteger(session.amount_total) || !session.amount_total || session.amount_total <= 0) return true;
   const orgId = Number(session.metadata.exdoxOrganisationId);
@@ -203,9 +204,9 @@ export async function fulfillAccountingInvoiceCheckout(session: Stripe.Checkout.
   const prefix = `accounting/org-${orgId}/`;
   const connection = await optional<PaymentConnection>(connectionKey(prefix));
   const intentId = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id;
-  if (!connection || !intentId) throw new Error('Invoice payment destination is missing.');
-  const intent = await api.paymentIntents.retrieve(intentId);
-  if (intent.status !== 'succeeded' || intent.amount_received !== session.amount_total || intent.transfer_data?.destination !== connection.accountId || intent.on_behalf_of !== connection.accountId) throw new Error('Invoice payment destination or amount did not verify.');
+  if (!connection || !intentId || (connectedAccountId && connection.accountId !== connectedAccountId)) throw new Error('Invoice payment account is missing or mismatched.');
+  const intent = await api.paymentIntents.retrieve(intentId, undefined, connectedAccountId ? { stripeAccount: connectedAccountId } : undefined);
+  if (!invoicePaymentIntentMatches(intent, session.amount_total, orgId, documentId, connection.accountId, connectedAccountId)) throw new Error('Invoice payment account or amount did not verify.');
   await withReceiptObjectLock(`${prefix}write-lease.json`, async () => {
     const key = `${prefix}payments/${paymentId(session.id)}.json`;
     if (await optional<AccountingPayment>(key)) return;
@@ -230,16 +231,17 @@ export async function fulfillAccountingInvoiceCheckout(session: Stripe.Checkout.
   return true;
 }
 
-export async function flagAccountingInvoiceCharge(charge: Stripe.Charge, reason: 'refund' | 'dispute', api: Stripe) {
+export async function flagAccountingInvoiceCharge(charge: Stripe.Charge, reason: 'refund' | 'dispute', api: Stripe, connectedAccountId?: string) {
   const intentId = typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
   if (!intentId) return false;
-  const intent = await api.paymentIntents.retrieve(intentId);
+  const intent = await api.paymentIntents.retrieve(intentId, undefined, connectedAccountId ? { stripeAccount: connectedAccountId } : undefined);
   if (intent.metadata.checkoutPurpose !== 'accounting_invoice') return false;
   const orgId = Number(intent.metadata.exdoxOrganisationId);
   const documentId = intent.metadata.documentId;
   const user = await findUserByEmail(pilotEmail);
   if (!user || user.status !== 'active' || user.organisationId !== orgId || !documentId || !/^[0-9a-f-]{36}$/.test(documentId)) throw new Error('Invoice payment review could not identify the owner.');
   const prefix = `accounting/org-${orgId}/`;
+  if (connectedAccountId && (await optional<PaymentConnection>(connectionKey(prefix)))?.accountId !== connectedAccountId) throw new Error('Invoice refund or dispute account did not match.');
   await withReceiptObjectLock(`${prefix}write-lease.json`, async () => {
     const books = await ledger(prefix);
     const document = books.documents.find((item) => item.id === documentId);

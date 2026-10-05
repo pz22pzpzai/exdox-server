@@ -10,7 +10,47 @@ import { jsonResponse } from '../shared/http.js';
 import { syncStripeSubscription } from '../shared/stripeSubscription.js';
 import { flagAccountingInvoiceCharge, fulfillAccountingInvoiceCheckout } from './accountingInvoicePortal.js';
 
+async function connectWebhook(event: APIGatewayProxyEventV2) {
+  if (!awsEnv.stripeSecretKey || !awsEnv.stripeConnectWebhookSecret) return jsonResponse(503, { success: false, error: 'connect_webhook_not_configured' });
+  const signature = event.headers['stripe-signature'] || event.headers['Stripe-Signature'];
+  if (!signature || !event.body) return jsonResponse(400, { success: false, error: 'invalid_webhook_request' });
+  const api = new Stripe(awsEnv.stripeSecretKey, { apiVersion: '2026-06-24.dahlia' });
+  let stripeEvent: Stripe.Event;
+  try {
+    stripeEvent = api.webhooks.constructEvent(Buffer.from(event.body, event.isBase64Encoded ? 'base64' : 'utf8'), signature, awsEnv.stripeConnectWebhookSecret);
+  } catch (error) {
+    return jsonResponse(error instanceof Stripe.errors.StripeSignatureVerificationError ? 400 : 500, { success: false, error: 'connect_webhook_verification_failed' });
+  }
+  if (!stripeEvent.account) return jsonResponse(400, { success: false, error: 'invalid_connect_event_scope' });
+  if (!stripeEvent.livemode) return jsonResponse(200, { success: true, received: true, ignored: 'test_mode' });
+  try {
+    switch (stripeEvent.type) {
+      case 'checkout.session.completed':
+      case 'checkout.session.async_payment_succeeded':
+        await fulfillAccountingInvoiceCheckout(stripeEvent.data.object as Stripe.Checkout.Session, api, stripeEvent.account);
+        break;
+      case 'charge.refunded':
+        await flagAccountingInvoiceCharge(stripeEvent.data.object as Stripe.Charge, 'refund', api, stripeEvent.account);
+        break;
+      case 'charge.dispute.created': {
+        const dispute = stripeEvent.data.object as Stripe.Dispute;
+        const chargeId = typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id;
+        if (chargeId) await flagAccountingInvoiceCharge(await api.charges.retrieve(chargeId, undefined, { stripeAccount: stripeEvent.account }), 'dispute', api, stripeEvent.account);
+        break;
+      }
+      default:
+        break;
+    }
+    return jsonResponse(200, { success: true, received: true });
+  } catch (error) {
+    console.error('Stripe Connect invoice event processing failed', { requestId: event.requestContext.requestId, eventId: stripeEvent.id, eventType: stripeEvent.type, message: error instanceof Error ? error.message : 'Unknown error' });
+    return jsonResponse(500, { success: false, error: 'connect_invoice_event_failed' });
+  }
+}
+
 export async function handler(event: APIGatewayProxyEventV2) {
+  const path = event.rawPath ?? (event as APIGatewayProxyEventV2 & { path?: string }).path ?? '';
+  if (path.endsWith('/accounting/stripe-connect/webhook')) return connectWebhook(event);
   try {
     if (!isStripeConfigured() || !awsEnv.stripeSecretKey || !awsEnv.stripeWebhookSecret) {
       return jsonResponse(503, {
