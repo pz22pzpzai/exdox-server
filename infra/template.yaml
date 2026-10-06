@@ -17,6 +17,9 @@ Parameters:
   JwtSecret:
     Type: String
     NoEcho: true
+  GoogleWebClientId:
+    Type: String
+    Default: ''
   InviteEmailFrom:
     Type: String
     Default: 'contact@exdox.co.uk'
@@ -158,6 +161,7 @@ Globals:
         OPENAI_API_KEY: !Ref OpenAIApiKey
         OPENAI_MODEL: !Ref OpenAIModel
         JWT_SECRET: !Ref JwtSecret
+        GOOGLE_WEB_CLIENT_ID: !Ref GoogleWebClientId
         INVITE_EMAIL_FROM: !Ref InviteEmailFrom
         INVITE_BASE_URL: !Ref InviteBaseUrl
         CONFIRM_EMAIL_BASE_URL: !Ref ConfirmEmailBaseUrl
@@ -492,6 +496,32 @@ Resources:
             RestApiId: !Ref ReceiptApi
             Path: /login
             Method: POST
+
+  GoogleAuthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/googleAuth.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+              Resource: '*'
+      Events:
+        GoogleAuthRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /auth/google
+            Method: POST
+        GoogleAuthConfigRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /auth/google
+            Method: GET
 
   TwoFactorFunction:
     Type: AWS::Serverless::Function

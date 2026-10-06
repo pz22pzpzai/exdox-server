@@ -18,6 +18,7 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
       INVITE_EMAIL_FROM: ${{ secrets.INVITE_EMAIL_FROM }}
       INVITE_BASE_URL: ${{ secrets.INVITE_BASE_URL }}
       SALES_INBOUND_DOMAIN: ${{ secrets.SALES_INBOUND_DOMAIN }}
@@ -159,6 +160,7 @@ jobs:
           )
 
           add_if_set "InviteEmailFrom" "$INVITE_EMAIL_FROM"
+          add_if_set "GoogleWebClientId" "$GOOGLE_WEB_CLIENT_ID"
           add_if_set "SalesInboundDomain" "$SALES_INBOUND_DOMAIN"
           add_if_set "DbHost" "$DB_HOST"
           add_if_set "DbPort" "$DB_PORT"

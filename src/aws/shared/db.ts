@@ -3210,6 +3210,11 @@ export async function deleteOrganisationAccount(
   const organisationDeletedRecordKeys = deletedRecords
     .filter(({ record }) => record.organisationId === organisationId)
     .map(({ key }) => key);
+  const googleUserBindingKeys = await listAllReceiptJsonKeys(`security/google-users/org-${organisationId}/`);
+  const googleIdentityKeys = await Promise.all(googleUserBindingKeys.map(async (key) => {
+    const binding = await getReceiptJsonObject<{ sub: string }>(key);
+    return `security/google-identities/${crypto.createHash('sha256').update(binding.sub).digest('hex')}.json`;
+  }));
 
   await Promise.all([
     deleteReceiptPrefix(`organisations/${organisationId}.json`),
@@ -3239,6 +3244,8 @@ export async function deleteOrganisationAccount(
       : []),
     ...organisationUserKeys.map((key) => deleteReceiptPrefix(key)),
     ...twoFactorUserIds.map((id) => deleteReceiptPrefix(`security/two-factor/${id}.json`)),
+    ...googleUserBindingKeys.map((key) => deleteReceiptObject(key)),
+    ...googleIdentityKeys.map((key) => deleteReceiptObject(key)),
     ...organisationDeletedRecordKeys.map((key) => deleteReceiptPrefix(key)),
   ]);
 

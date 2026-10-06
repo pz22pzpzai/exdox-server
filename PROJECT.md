@@ -1,5 +1,9 @@
 # Exdox server
 
+## Google sign-in (2026-10-06)
+
+`GET /auth/google` returns the public Google web OAuth client ID from `GOOGLE_WEB_CLIENT_ID`; `POST /auth/google` verifies a Google ID token with Google's library and that exact audience. New Business or Sole trader registrations start the existing plan-free 14-day trial and use Google's verified email instead of a separate confirmation message. A subject-to-user binding in S3 lets Android and website sign into the same Exdox account. It never merges an existing email/password account by matching email; a duplicate email is rejected. Existing Exdox two-factor settings still apply. Workspace deletion removes the Google binding. Google Cloud web/Android client setup and the GitHub `prod` variable are required before activation. Server source must deploy before the website/app use it. The owner checks deployment and live behaviour. Never store a client secret, token, or keystore here, and never delete or move signing material.
+
 ## Private Accounting aged balances (2026-10-04)
 
 `GET /accounting/aging?asOf=YYYY-MM-DD` uses the exact-email Accounting gate and returns posted invoice/bill aging by as-of date. It applies payment, settlement, credit, refund, and reversal dates, groups open balances into current/30/60/90/91+ and credit buckets, and compares document totals to the 1100/2000 ledger control balances. Manual journals and one-time Exdox source postings can produce a visible difference because they have no invoice/bill due date. The route is read-only and isolated to Accounting S3 data. Deploy before website; owner checks deployment/live. Never put secrets in project files or delete/move signing keystores or details.
