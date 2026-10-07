@@ -8,6 +8,7 @@ import { canChangeSalesStatus, isSalesStatus } from '../shared/salesWorkflow.js'
 import { parsePaymentMethod, sanitizeText, toNumber } from '../shared/helpers.js';
 import { getHistoricalExchangeRate } from '../shared/exchangeRates.js';
 import { decisionFromReceipt, deleteReceiptDecision, getReceiptDecision, saveReceiptDecision } from '../shared/receiptDecisions.js';
+import { autoPublishApprovedReceiptToXero } from './xero.js';
 
 const ukVatTreatments = new Set([
   'not_applicable',
@@ -204,9 +205,29 @@ export async function handler(event: APIGatewayProxyEventV2) {
       await deleteReceiptDecision(user.organisationId, existingReceipt.uploadedByUserId, receiptId);
     }
 
+    let warning: string | null = null;
+    if (
+      user.role === 'Business_Admin'
+      && existingReceipt.status === 'Review'
+      && receipt.status === 'Ready'
+      && receipt.workspaceContext !== 'vault'
+      && receipt.claimId === null
+    ) {
+      try {
+        const published = await autoPublishApprovedReceiptToXero(user, receipt.id);
+        if (published) {
+          receipt = await getReceiptById(user, receipt.id);
+          warning = published.warning ?? null;
+        }
+      } catch (publishError) {
+        warning = `The document was approved, but Xero publishing failed: ${publishError instanceof Error ? publishError.message : 'Please try publishing it manually.'}`;
+      }
+    }
+
     return jsonResponse(200, {
       success: true,
       receipt,
+      warning,
     });
   } catch (error) {
     const status =

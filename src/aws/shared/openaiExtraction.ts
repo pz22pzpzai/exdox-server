@@ -12,6 +12,7 @@ import {
 } from './helpers.js';
 import { type DocumentType, type ExpenseRequestOptions, type NormalizedExpenseDocument } from '../types.js';
 import { type WorkspaceCountry } from './workspaceCountry.js';
+import { splitPdfByPageRanges } from './pdfDocumentSplitting.js';
 
 const openai = new OpenAI({
   apiKey: awsEnv.openAiApiKey,
@@ -54,7 +55,7 @@ export async function processExpenseBuffer(input: {
   return normalized;
 }
 
-export async function processSalesPdfDocuments(input: {
+export async function processPdfDocuments(input: {
   fileName: string;
   buffer: Buffer;
   options: ExpenseRequestOptions;
@@ -78,8 +79,14 @@ export async function processSalesPdfDocuments(input: {
   const rows = parsed && typeof parsed === 'object' && Array.isArray((parsed as { documents?: unknown[] }).documents)
     ? (parsed as { documents: unknown[] }).documents
     : [];
-  if (!rows.length) return [await processExpenseBuffer(input)];
-  return rows.slice(0, 50).map((row) => normalizeExtractionPayload(row, 'invoice'));
+  if (!rows.length && input.splitMode === 'auto_detect') {
+    return [{ document: await processExpenseBuffer(input), buffer: input.buffer, pageStart: 1, pageEnd: null }];
+  }
+  const parts = await splitPdfByPageRanges(input.buffer, rows as Array<{ page_start?: unknown; page_end?: unknown }>, input.splitMode);
+  return parts.map((part, index) => ({
+    document: normalizeExtractionPayload(rows[index], input.options.documentType),
+    ...part,
+  }));
 }
 
 async function extractWithOpenAI({

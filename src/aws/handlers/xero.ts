@@ -9,6 +9,7 @@ import { awsEnv } from '../shared/env.js';
 import { jsonResponse } from '../shared/http.js';
 import { deleteReceiptObject, getReceiptJsonObject, getReceiptObjectBuffer, putReceiptJsonObject } from '../shared/s3.js';
 import { getOrganisationSettings, getReceiptById, listExpenseClaims, listReceiptsByClaim, updateClaimStatus, updateReceiptById } from '../shared/db.js';
+import type { AuthenticatedUser } from '../types.js';
 import { getSalesDocumentPdf, getSalesWorkspace, markSalesDocumentPublishedToXero, saveSalesCustomer } from '../shared/salesWorkspaceStore.js';
 
 const XERO_AUTHORIZE_URL = 'https://login.xero.com/identity/connect/authorize';
@@ -45,6 +46,7 @@ type XeroIntegrationSettings = {
   purchaseStatus: 'DRAFT' | 'SUBMITTED' | 'AUTHORISED';
   salesStatus: 'DRAFT' | 'SUBMITTED' | 'AUTHORISED';
   publishAttachments: boolean;
+  autoPublishApprovedReceipts: boolean;
   companyCardBankAccountCode: string | null;
   trackingCategoryId: string | null;
   trackingOptionId: string | null;
@@ -56,7 +58,7 @@ type XeroIntegrationSettings = {
 };
 type XeroPublication = { sourceType: 'receipt' | 'sales_document' | 'claim'; sourceId: string; xeroType: string; xeroId: string; xeroNumber: string | null; publishedAt: string };
 
-const DEFAULT_XERO_SETTINGS: XeroIntegrationSettings = { purchaseAccountCode: null, salesAccountCode: null, purchaseTaxType: null, salesTaxType: null, purchaseStatus: 'DRAFT', salesStatus: 'DRAFT', publishAttachments: true, companyCardBankAccountCode: null, trackingCategoryId: null, trackingOptionId: null, categoryAccountMappings: {}, purchaseTaxTypeMappings: {}, salesTaxTypeMappings: {} };
+const DEFAULT_XERO_SETTINGS: XeroIntegrationSettings = { purchaseAccountCode: null, salesAccountCode: null, purchaseTaxType: null, salesTaxType: null, purchaseStatus: 'DRAFT', salesStatus: 'DRAFT', publishAttachments: true, autoPublishApprovedReceipts: false, companyCardBankAccountCode: null, trackingCategoryId: null, trackingOptionId: null, categoryAccountMappings: {}, purchaseTaxTypeMappings: {}, salesTaxTypeMappings: {} };
 
 function connectionKey(organisationId: number) { return `xero-connections/org-${organisationId}.json`; }
 function settingsKey(organisationId: number) { return `xero-connections/org-${organisationId}-settings.json`; }
@@ -433,6 +435,7 @@ export async function updateIntegrationSettingsHandler(event: APIGatewayProxyEve
       purchaseStatus: status(input.purchaseStatus, 'DRAFT'),
       salesStatus: status(input.salesStatus, 'DRAFT'),
       publishAttachments: input.publishAttachments !== false,
+      autoPublishApprovedReceipts: input.autoPublishApprovedReceipts === true,
       companyCardBankAccountCode: typeof input.companyCardBankAccountCode === 'string' && input.companyCardBankAccountCode.trim() ? input.companyCardBankAccountCode.trim() : null,
       trackingCategoryId: typeof input.trackingCategoryId === 'string' && input.trackingCategoryId.trim() ? input.trackingCategoryId.trim() : null,
       trackingOptionId: typeof input.trackingOptionId === 'string' && input.trackingOptionId.trim() ? input.trackingOptionId.trim() : null,
@@ -454,6 +457,20 @@ export async function publishHandler(event: APIGatewayProxyEventV2) {
     const sourceType = input.sourceType;
     const sourceId = String(input.sourceId ?? '').trim();
     if (!sourceType || !['receipt', 'sales_document', 'claim'].includes(sourceType) || !sourceId) throw new Error('Choose an Exdox cost, sale, or claim to publish.');
+    return jsonResponse(200, await publishSourceToXero(user, sourceType, sourceId));
+  } catch (error) { return xeroError(error, 'Could not publish this item to Xero.'); }
+}
+
+export async function autoPublishApprovedReceiptToXero(user: AuthenticatedUser, receiptId: number) {
+  const settings = await loadSettings(user.organisationId);
+  if (!settings.autoPublishApprovedReceipts) return null;
+  const receipt = await getReceiptById(user, receiptId);
+  if (receipt.workspaceContext === 'vault' || receipt.claimId !== null || receipt.status !== 'Ready') return null;
+  await requirePaidXeroAccess(user.organisationId);
+  return publishSourceToXero(user, 'receipt', String(receiptId));
+}
+
+async function publishSourceToXero(user: AuthenticatedUser, sourceType: XeroPublication['sourceType'], sourceId: string) {
     const previous = await loadPublication(user.organisationId, sourceType, sourceId);
     if (previous) {
       // Repair the visible Exdox state if Xero already accepted the record but a
@@ -466,7 +483,7 @@ export async function publishHandler(event: APIGatewayProxyEventV2) {
         const claim = (await listExpenseClaims(user, 200)).find((item) => item.id === claimId);
         if (claim && claim.status !== 'published') await updateClaimStatus(user, claim.id, 'published');
       }
-      return jsonResponse(200, { success: true, alreadyPublished: true, publication: previous });
+      return { success: true, alreadyPublished: true, publication: previous };
     }
     const settings = await loadSettings(user.organisationId);
     const publishInvoice = async (invoice: Record<string, unknown>, attachment?: { filename: string; contentType: string; body: Buffer }) => {
@@ -511,7 +528,6 @@ export async function publishHandler(event: APIGatewayProxyEventV2) {
       } else {
         result = await publishInvoice({ Type: isCost ? 'ACCPAY' : 'ACCREC', Contact: { ContactID: contact.ContactID }, Date: safeDate(receipt.invoiceDate), DueDate: safeDate(receipt.dueDate ?? receipt.invoiceDate), CurrencyCode: receipt.currency || receipt.baseCurrency, Reference: `Exdox ${receipt.id}`, ...(receipt.invoiceNumber ? { InvoiceNumber: receipt.invoiceNumber } : {}), Status: isCost ? settings.purchaseStatus : settings.salesStatus, LineAmountTypes: 'Exclusive', LineItems: [line] }, { filename: receipt.sourceFilename, contentType: receipt.sourceMimeType, body: sourceDocument });
       }
-      await updateReceiptById(user, receipt.id, { status: 'Published' });
     } else if (sourceType === 'sales_document') {
       const document = (await getSalesWorkspace(user)).documents.find((item) => item.id === sourceId);
       if (!document) throw new Error('Sales document not found.');
@@ -551,6 +567,6 @@ export async function publishHandler(event: APIGatewayProxyEventV2) {
     }
     const publication: XeroPublication = { sourceType, sourceId, xeroType, xeroId: result.xeroId, xeroNumber: result.xeroNumber, publishedAt: new Date().toISOString() };
     await putReceiptJsonObject(publicationKey(user.organisationId, sourceType, sourceId), publication);
-    return jsonResponse(200, { success: true, alreadyPublished: false, publication, warning: result.warning ?? null });
-  } catch (error) { return xeroError(error, 'Could not publish this item to Xero.'); }
+    if (sourceType === 'receipt') await updateReceiptById(user, Number(sourceId), { status: 'Published' });
+    return { success: true, alreadyPublished: false, publication, warning: result.warning ?? null };
 }
