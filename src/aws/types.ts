@@ -123,6 +123,7 @@ export type ExpenseRequestOptions = {
 };
 
 export type NormalizedExpenseDocument = {
+  allocationLines?: import('./shared/documentAutomation.js').AllocationLine[];
   vendorName: string | null;
   customer: string | null;
   invoiceDate: string | null;
@@ -169,6 +170,7 @@ export type NormalizedExpenseDocument = {
 };
 
 export type ReceiptRow = {
+  allocationLines?: import('./shared/documentAutomation.js').AllocationLine[];
   id: number;
   organisationId: number;
   uploadedByUserId: number;
@@ -301,6 +303,8 @@ export type SupplierRuleRow = {
   taxRate: string;
   paymentMethod: PaymentMethod;
   isActive: boolean;
+  splitMode?: import('./shared/documentAutomation.js').SplitMode;
+  splitAllocations?: import('./shared/documentAutomation.js').SplitPart[];
   createdAt: string;
   updatedAt: string;
 };

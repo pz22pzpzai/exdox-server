@@ -158,7 +158,16 @@ export async function handler(event: APIGatewayProxyEventV2) {
     }, 'rejected'));
     let receipt;
     try {
+      const allocationLines = Array.isArray(body.allocationLines)
+        ? body.allocationLines.map((line: unknown) => ({
+          category: sanitizeText((line as Record<string, unknown>)?.category),
+          netAmount: Number((line as Record<string, unknown>)?.netAmount),
+        })) : existingReceipt.allocationLines ?? [];
+      if (allocationLines.length > 20 || allocationLines.some((line) => !line.category || !Number.isFinite(line.netAmount) || line.netAmount <= 0)) {
+        return jsonResponse(400, { success: false, error: 'invalid_split', message: 'Split allocations need a category and positive net amount.' });
+      }
       receipt = await updateReceiptById(user, receiptId, {
+      allocationLines,
       vendorName: sanitizeText(body.vendorName) || null,
       invoiceDate: sanitizeText(body.invoiceDate) || null,
       dueDate: sanitizeText(body.dueDate) || null,

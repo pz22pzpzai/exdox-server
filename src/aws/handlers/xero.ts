@@ -512,10 +512,16 @@ async function publishSourceToXero(user: AuthenticatedUser, sourceType: XeroPubl
       const net = receipt.netAmount ?? Math.max(0, Number(receipt.totalAmount ?? 0) - Number(receipt.vatAmount ?? 0));
       const taxTypeMappings = isCost ? settings.purchaseTaxTypeMappings : settings.salesTaxTypeMappings;
       const taxType = (receipt.taxRateApplied ? taxTypeMappings[receipt.taxRateApplied] : null) || (isCost ? settings.purchaseTaxType : settings.salesTaxType);
-      const line = xeroLine(receipt.description || receipt.category || receipt.sourceFilename, net, accountCode, taxType, 1, settings);
+      const allocationLines = receipt.allocationLines ?? [];
+      if (allocationLines.length && Math.round(allocationLines.reduce((sum, item) => sum + item.netAmount, 0) * 100) !== Math.round(net * 100)) {
+        throw new Error('Split allocations no longer match the document net amount. Review the split before publishing.');
+      }
+      const lines = allocationLines.length
+        ? allocationLines.map((item) => xeroLine(item.category, item.netAmount, settings.categoryAccountMappings[item.category] || (isCost ? settings.purchaseAccountCode : settings.salesAccountCode)!, taxType, 1, settings))
+        : [xeroLine(receipt.description || receipt.category || receipt.sourceFilename, net, accountCode, taxType, 1, settings)];
       const sourceDocument = await getReceiptObjectBuffer(receipt.s3Key);
       if (isCost && receipt.paymentMethod === 'business_card' && settings.companyCardBankAccountCode) {
-        const response = await xeroPost<{ BankTransactions?: Array<{ BankTransactionID: string }> }>(user.organisationId, 'BankTransactions', { BankTransactions: [{ Type: 'SPEND', Contact: { ContactID: contact.ContactID }, BankAccount: { Code: settings.companyCardBankAccountCode }, Date: safeDate(receipt.invoiceDate), Reference: `Exdox ${receipt.id}`, LineAmountTypes: 'Exclusive', LineItems: [line] }] });
+        const response = await xeroPost<{ BankTransactions?: Array<{ BankTransactionID: string }> }>(user.organisationId, 'BankTransactions', { BankTransactions: [{ Type: 'SPEND', Contact: { ContactID: contact.ContactID }, BankAccount: { Code: settings.companyCardBankAccountCode }, Date: safeDate(receipt.invoiceDate), Reference: `Exdox ${receipt.id}`, LineAmountTypes: 'Exclusive', LineItems: lines }] });
         const created = response.BankTransactions?.[0];
         if (!created?.BankTransactionID) throw new Error('Xero did not return the bank transaction it created.');
         let warning: string | null = null;
@@ -526,7 +532,7 @@ async function publishSourceToXero(user: AuthenticatedUser, sourceType: XeroPubl
         result = { xeroId: created.BankTransactionID, xeroNumber: null, warning };
         xeroType = 'BankTransaction';
       } else {
-        result = await publishInvoice({ Type: isCost ? 'ACCPAY' : 'ACCREC', Contact: { ContactID: contact.ContactID }, Date: safeDate(receipt.invoiceDate), DueDate: safeDate(receipt.dueDate ?? receipt.invoiceDate), CurrencyCode: receipt.currency || receipt.baseCurrency, Reference: `Exdox ${receipt.id}`, ...(receipt.invoiceNumber ? { InvoiceNumber: receipt.invoiceNumber } : {}), Status: isCost ? settings.purchaseStatus : settings.salesStatus, LineAmountTypes: 'Exclusive', LineItems: [line] }, { filename: receipt.sourceFilename, contentType: receipt.sourceMimeType, body: sourceDocument });
+        result = await publishInvoice({ Type: isCost ? 'ACCPAY' : 'ACCREC', Contact: { ContactID: contact.ContactID }, Date: safeDate(receipt.invoiceDate), DueDate: safeDate(receipt.dueDate ?? receipt.invoiceDate), CurrencyCode: receipt.currency || receipt.baseCurrency, Reference: `Exdox ${receipt.id}`, ...(receipt.invoiceNumber ? { InvoiceNumber: receipt.invoiceNumber } : {}), Status: isCost ? settings.purchaseStatus : settings.salesStatus, LineAmountTypes: 'Exclusive', LineItems: lines }, { filename: receipt.sourceFilename, contentType: receipt.sourceMimeType, body: sourceDocument });
       }
     } else if (sourceType === 'sales_document') {
       const document = (await getSalesWorkspace(user)).documents.find((item) => item.id === sourceId);
@@ -561,7 +567,15 @@ async function publishSourceToXero(user: AuthenticatedUser, sourceType: XeroPubl
       if (!settings.purchaseAccountCode) throw new Error('Choose a default Xero cost account in Integrations first.');
       const receipts = await listReceiptsByClaim(user, claimId);
       const contact = await findOrCreateContact(user.organisationId, claim.claimantName || claim.claimantEmail || `Exdox claimant ${claim.createdByUserId}`, claim.claimantEmail);
-      const lines = receipts.length ? receipts.map((receipt) => xeroLine(receipt.description || receipt.vendorName || receipt.sourceFilename, receipt.netAmount ?? Math.max(0, Number(receipt.totalAmount ?? 0) - Number(receipt.vatAmount ?? 0)), (receipt.category ? settings.categoryAccountMappings[receipt.category] : null) || settings.purchaseAccountCode!, (receipt.taxRateApplied ? settings.purchaseTaxTypeMappings[receipt.taxRateApplied] : null) || settings.purchaseTaxType, 1, settings)) : [xeroLine(claim.description || claim.name, claim.totalAmount, settings.purchaseAccountCode, settings.purchaseTaxType, 1, settings)];
+      const lines = receipts.length ? receipts.flatMap((receipt) => {
+        const net = receipt.netAmount ?? Math.max(0, Number(receipt.totalAmount ?? 0) - Number(receipt.vatAmount ?? 0));
+        const allocations = receipt.allocationLines ?? [];
+        if (allocations.length && Math.round(allocations.reduce((sum, item) => sum + item.netAmount, 0) * 100) !== Math.round(net * 100)) throw new Error(`Split allocations for receipt ${receipt.id} need review.`);
+        const taxType = (receipt.taxRateApplied ? settings.purchaseTaxTypeMappings[receipt.taxRateApplied] : null) || settings.purchaseTaxType;
+        return allocations.length
+          ? allocations.map((item) => xeroLine(item.category, item.netAmount, settings.categoryAccountMappings[item.category] || settings.purchaseAccountCode!, taxType, 1, settings))
+          : [xeroLine(receipt.description || receipt.vendorName || receipt.sourceFilename, net, (receipt.category ? settings.categoryAccountMappings[receipt.category] : null) || settings.purchaseAccountCode!, taxType, 1, settings)];
+      }) : [xeroLine(claim.description || claim.name, claim.totalAmount, settings.purchaseAccountCode, settings.purchaseTaxType, 1, settings)];
       result = await publishInvoice({ Type: 'ACCPAY', Contact: { ContactID: contact.ContactID }, Date: safeDate(claim.createdAt), DueDate: safeDate(claim.createdAt), CurrencyCode: claim.currency, Reference: `Exdox claim ${claim.id}`, Status: settings.purchaseStatus, LineAmountTypes: 'Exclusive', LineItems: lines }, receipts[0] ? { filename: receipts[0].sourceFilename, contentType: receipts[0].sourceMimeType, body: await getReceiptObjectBuffer(receipts[0].s3Key) } : undefined);
       await updateClaimStatus(user, claim.id, 'published');
     }

@@ -1,5 +1,9 @@
 # Exdox server
 
+## Cost learning and Smart Split (2026-10-07)
+
+`src/aws/shared/documentAutomation.ts` validates fixed-net and percentage supplier/customer splits in integer pence. Supplier rules now store split mode and allocations in S3 or a migrated SQL JSON column. Matching Costs/Sales store the resulting allocations on each review record; reviewers can edit them, and Xero publishes separate mapped account lines (including claimed Costs). If a fixed amount exceeds the document net value, upload continues with a review warning. For a Cost without a matching rule, two or more approved records from the same supplier must agree at least 80% before the API suggests their category; explicit app category updates still take priority. This learning step makes no additional AI call. Deploy server before website. Local tests and builds passed; the owner checks deployment and live Xero behaviour. Never store secrets here or delete/move signing material.
+
 ## Google sign-in (2026-10-06)
 
 `GET /auth/google` returns the public Google web OAuth client ID from `GOOGLE_WEB_CLIENT_ID`; `POST /auth/google` verifies a Google ID token with Google's library and that exact audience. New Business or Sole trader registrations start the existing plan-free 14-day trial and use Google's verified email instead of a separate confirmation message. A subject-to-user binding in S3 lets Android and website sign into the same Exdox account. It never merges an existing email/password account by matching email; a duplicate email is rejected. Existing Exdox two-factor settings still apply. Workspace deletion removes the Google binding. Google Cloud web/Android client setup and the GitHub `prod` variable are required before activation. Server source must deploy before the website/app use it. The owner checks deployment and live behaviour. Never store a client secret, token, or keystore here, and never delete or move signing material.

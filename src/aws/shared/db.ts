@@ -5,6 +5,7 @@ import mysql from 'mysql2/promise';
 
 import { awsEnv } from './env.js';
 import { sanitizeText } from './helpers.js';
+import { calculateAllocations, suggestApprovedCategory } from './documentAutomation.js';
 import { workspaceCountry, workspaceCountryDefaults, type WorkspaceCountry } from './workspaceCountry.js';
 import {
   deleteReceiptObject,
@@ -357,6 +358,7 @@ async function ensureReceiptTaxTreatmentSchema() {
     await pool.execute("ALTER TABLE receipts ADD COLUMN IF NOT EXISTS uk_vat_treatment VARCHAR(64) NOT NULL DEFAULT 'not_applicable' AFTER foreign_tax_label");
     await pool.execute('ALTER TABLE receipts ADD COLUMN IF NOT EXISTS reimbursement_batch_id CHAR(36) NULL AFTER uk_vat_treatment');
     await pool.execute('ALTER TABLE receipts ADD COLUMN IF NOT EXISTS reimbursement_batch_created_at DATETIME NULL AFTER reimbursement_batch_id');
+    await pool.execute('ALTER TABLE receipts ADD COLUMN IF NOT EXISTS allocation_lines JSON NULL');
   })();
   await receiptTaxTreatmentSchemaReady;
 }
@@ -411,6 +413,8 @@ async function ensureSupplierRuleSchema() {
     return;
   }
   await pool.execute("ALTER TABLE supplier_rules ADD COLUMN IF NOT EXISTS workspace_context ENUM('cost', 'sales') NOT NULL DEFAULT 'cost' AFTER organisation_id");
+  await pool.execute("ALTER TABLE supplier_rules ADD COLUMN IF NOT EXISTS split_mode VARCHAR(16) NOT NULL DEFAULT 'none'");
+  await pool.execute('ALTER TABLE supplier_rules ADD COLUMN IF NOT EXISTS split_allocations JSON NULL');
 }
 
 type StoredClaim = ExpenseClaimRow;
@@ -498,11 +502,12 @@ export async function insertReceiptRecord(input: {
       extraction_provider,
       extraction_model,
       line_items,
+      allocation_lines,
       tax_breakdown,
       notes,
       raw_text_summary,
       raw_extraction_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
     [
       input.organisationId,
       input.uploadedByUserId,
@@ -547,6 +552,7 @@ export async function insertReceiptRecord(input: {
       input.extractionProvider,
       input.extractionModel,
       JSON.stringify(input.document.lineItems),
+      JSON.stringify(input.document.allocationLines ?? []),
       JSON.stringify(input.document.taxBreakdown),
       JSON.stringify(input.document.notes),
       input.document.rawTextSummary,
@@ -2459,10 +2465,14 @@ export async function updateReceiptById(
   user: AuthenticatedUser,
   receiptId: number,
   updates: Partial<
-    Pick<ReceiptRow, 'vendorName' | 'invoiceDate' | 'dueDate' | 'invoiceNumber' | 'category' | 'description' | 'customer' | 'paymentMethod' | 'currency' | 'netAmount' | 'vatAmount' | 'totalAmount' | 'taxRateApplied' | 'status' | 'baseCurrency' | 'exchangeRate' | 'exchangeRateDate' | 'exchangeRateProvider' | 'baseTotalAmount' | 'exchangeRateOverride' | 'exchangeRateNote' | 'foreignTaxAmount' | 'foreignTaxLabel' | 'ukVatTreatment'>
+    Pick<ReceiptRow, 'vendorName' | 'invoiceDate' | 'dueDate' | 'invoiceNumber' | 'category' | 'description' | 'customer' | 'paymentMethod' | 'currency' | 'netAmount' | 'vatAmount' | 'totalAmount' | 'taxRateApplied' | 'status' | 'baseCurrency' | 'exchangeRate' | 'exchangeRateDate' | 'exchangeRateProvider' | 'baseTotalAmount' | 'exchangeRateOverride' | 'exchangeRateNote' | 'foreignTaxAmount' | 'foreignTaxLabel' | 'ukVatTreatment' | 'allocationLines'>
   >,
 ) {
   const existing = await getReceiptById(user, receiptId);
+  const allocationLines = updates.allocationLines ?? existing.allocationLines ?? [];
+  if (allocationLines.length && Math.round(allocationLines.reduce((sum, line) => sum + Number(line.netAmount), 0) * 100) !== Math.round(Number(updates.netAmount ?? existing.netAmount ?? 0) * 100)) {
+    throw new Error('Split allocations must equal the document net amount. Edit or remove the split before saving.');
+  }
   const normalizedNeedsReview =
     updates.status === 'Ready' || updates.status === 'Published' || updates.status === 'Payment processing' || updates.status === 'Paid' || updates.status === 'Rejected'
       ? false
@@ -2537,6 +2547,7 @@ export async function updateReceiptById(
          uk_vat_treatment = ?,
          status = ?,
          needs_review = ?,
+         allocation_lines = ?,
          updated_at = CURRENT_TIMESTAMP
      WHERE id = ? AND organisation_id = ?`,
     [
@@ -2565,6 +2576,7 @@ export async function updateReceiptById(
       updates.ukVatTreatment ?? existing.ukVatTreatment,
       updates.status ?? 'Review',
       normalizedNeedsReview ?? true,
+      JSON.stringify(allocationLines),
       receiptId,
       user.organisationId,
     ],
@@ -3268,7 +3280,7 @@ export async function listSupplierRules(organisationId: number, workspaceContext
 
   await ensureSupplierRuleSchema();
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
-    `SELECT id, organisation_id, workspace_context, supplier_match_text, category, tax_rate, payment_method, is_active, created_at, updated_at
+    `SELECT id, organisation_id, workspace_context, supplier_match_text, category, tax_rate, payment_method, is_active, split_mode, split_allocations, created_at, updated_at
      FROM supplier_rules
      WHERE organisation_id = ? AND workspace_context = ?
      ORDER BY updated_at DESC`,
@@ -3284,6 +3296,8 @@ export async function listSupplierRules(organisationId: number, workspaceContext
     taxRate: String(row.tax_rate),
     paymentMethod: String(row.payment_method) as PaymentMethod,
     isActive: Boolean(row.is_active),
+    splitMode: row.split_mode === 'fixed' || row.split_mode === 'percentage' ? row.split_mode : 'none',
+    splitAllocations: safeJsonArrayParse(row.split_allocations),
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   }));
@@ -3303,19 +3317,47 @@ export async function applySupplierRulesToDocument(input: {
     .sort((left, right) => right.supplierMatchText.trim().length - left.supplierMatchText.trim().length)[0];
 
   if (!matchedRule) {
+    let category = input.workspaceContext === 'sales' ? 'Accounts Receivable' : 'Uncategorised';
+    if (input.workspaceContext === 'cost' && vendor) {
+      const history = !pool
+        ? await listOrganisationWorkspaceReceiptsFromS3(input.organisationId, 'cost', 1000)
+        : (await pool.query<mysql.RowDataPacket[]>(
+          "SELECT vendor_name AS vendorName, category, status FROM receipts WHERE organisation_id = ? AND workspace_context = 'cost' AND LOWER(vendor_name) = ? AND status IN ('Ready', 'Published', 'Paid') ORDER BY created_at DESC LIMIT 250",
+          [input.organisationId, vendor],
+        ))[0];
+      category = suggestApprovedCategory(input.document.vendorName, history.map((item) => ({
+        vendorName: item.vendorName ? String(item.vendorName) : null,
+        category: item.category ? String(item.category) : null,
+        status: String(item.status),
+      }))) ?? category;
+    }
     return {
-      document: input.document,
+      document: input.workspaceContext !== 'cost' || category === 'Uncategorised' ? input.document : {
+        ...input.document,
+        notes: [...input.document.notes, `Category suggested from previously approved ${vendor} documents; check before approval.`],
+      },
       paymentMethod: input.paymentMethod,
       matchedRuleId: null,
-      category: input.workspaceContext === 'sales' ? 'Accounts Receivable' : 'Uncategorised',
+      category,
     };
   }
 
+  let allocationLines: NormalizedExpenseDocument['allocationLines'] = [];
+  let splitWarning: string | null = null;
+  if (matchedRule.splitMode && matchedRule.splitMode !== 'none') {
+    try {
+      if (input.document.netAmount === null) throw new Error('the net amount is missing');
+      allocationLines = calculateAllocations(input.document.netAmount, matchedRule.category, matchedRule.splitMode, matchedRule.splitAllocations ?? []);
+    } catch (error) {
+      splitWarning = `Smart Split needs review: ${error instanceof Error ? error.message : 'the rule could not be applied'}.`;
+    }
+  }
   return {
     document: {
       ...input.document,
       taxRateApplied: matchedRule.taxRate,
-      notes: [...input.document.notes, `${input.workspaceContext === 'sales' ? 'Customer' : 'Supplier'} rule matched: ${matchedRule.supplierMatchText}`],
+      allocationLines,
+      notes: [...input.document.notes, `${input.workspaceContext === 'sales' ? 'Customer' : 'Supplier'} rule matched: ${matchedRule.supplierMatchText}`, ...(splitWarning ? [splitWarning] : [])],
     },
     paymentMethod: matchedRule.paymentMethod,
     matchedRuleId: matchedRule.id,
@@ -3430,6 +3472,8 @@ export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'cr
       taxRate: sanitizeText(input.taxRate) || '20% Standard',
       paymentMethod: input.paymentMethod,
       isActive: input.isActive,
+      splitMode: input.splitMode ?? 'none',
+      splitAllocations: input.splitAllocations ?? [],
       createdAt,
       updatedAt: new Date().toISOString(),
     };
@@ -3441,7 +3485,7 @@ export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'cr
     await ensureSupplierRuleSchema();
     await pool.execute(
       `UPDATE supplier_rules
-       SET supplier_match_text = ?, category = ?, tax_rate = ?, payment_method = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
+       SET supplier_match_text = ?, category = ?, tax_rate = ?, payment_method = ?, is_active = ?, split_mode = ?, split_allocations = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND organisation_id = ? AND workspace_context = ?`,
       [
         sanitizeText(input.supplierMatchText),
@@ -3449,6 +3493,8 @@ export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'cr
         sanitizeText(input.taxRate),
         input.paymentMethod,
         input.isActive ? 1 : 0,
+        input.splitMode ?? 'none',
+        JSON.stringify(input.splitAllocations ?? []),
         input.id,
         input.organisationId,
         input.workspaceContext,
@@ -3457,8 +3503,8 @@ export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'cr
   } else {
     await ensureSupplierRuleSchema();
     await pool.execute(
-      `INSERT INTO supplier_rules (organisation_id, workspace_context, supplier_match_text, category, tax_rate, payment_method, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO supplier_rules (organisation_id, workspace_context, supplier_match_text, category, tax_rate, payment_method, is_active, split_mode, split_allocations)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.organisationId,
         input.workspaceContext,
@@ -3467,6 +3513,8 @@ export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'cr
         sanitizeText(input.taxRate),
         input.paymentMethod,
         input.isActive ? 1 : 0,
+        input.splitMode ?? 'none',
+        JSON.stringify(input.splitAllocations ?? []),
       ],
     );
   }
@@ -4183,6 +4231,7 @@ function mapReceiptRow(row: mysql.RowDataPacket): ReceiptRow {
     extractionProvider: String(row.extraction_provider),
     extractionModel: String(row.extraction_model),
     lineItems: safeJsonArrayParse(row.line_items),
+    allocationLines: safeJsonArrayParse(row.allocation_lines),
     taxBreakdown: safeJsonArrayParse(row.tax_breakdown),
     notes: safeJsonArrayParse(row.notes),
     rawTextSummary: row.raw_text_summary,
@@ -4390,6 +4439,7 @@ function buildS3BackedReceiptRow(input: {
     extractionProvider: input.extractionProvider,
     extractionModel: input.extractionModel,
     lineItems: input.document.lineItems,
+    allocationLines: input.document.allocationLines ?? [],
     taxBreakdown: input.document.taxBreakdown,
     notes: input.document.notes,
     rawTextSummary: input.document.rawTextSummary,
