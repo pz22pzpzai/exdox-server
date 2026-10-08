@@ -1,5 +1,9 @@
 # Exdox server
 
+## OpenAI OCR model (2026-10-08)
+
+Production `OPENAI_MODEL` is pinned to `gpt-6-luna` in `.github/workflows/deploy.yml`; `infra/template.yaml`, `src/aws/shared/env.ts`, and the local proxy `src/index.ts` use the same default. `src/aws/shared/openaiExtraction.ts` applies this shared model to receipt/invoice images, PDFs, automatic PDF splitting, and VAT fallback; email imports and response metadata also read the shared setting. Luna requests set `reasoning.effort: none` so extraction does not unexpectedly use its default medium reasoning. Do not restore a production secret override without checking its value and updating every active default. Build and 104 tests passed locally; benchmark real receipts for vendor/date/total/VAT accuracy and measure token usage before claiming better OCR or a per-receipt cost. The owner checks deployment and live behavior. Never store API keys here or delete/move signing material.
+
 ## Cost learning and Smart Split (2026-10-07)
 
 `src/aws/shared/documentAutomation.ts` validates fixed-net and percentage supplier/customer splits in integer pence. Supplier rules now store split mode and allocations in S3 or a migrated SQL JSON column. Matching Costs/Sales store the resulting allocations on each review record; reviewers can edit them, and Xero publishes separate mapped account lines (including claimed Costs). If a fixed amount exceeds the document net value, upload continues with a review warning. For a Cost without a matching rule, two or more approved records from the same supplier must agree at least 80% before the API suggests their category; explicit app category updates still take priority. This learning step makes no additional AI call. Deploy server before website. Local tests and builds passed; the owner checks deployment and live Xero behaviour. Never store secrets here or delete/move signing material.

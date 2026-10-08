@@ -13,7 +13,7 @@ Parameters:
     NoEcho: true
   OpenAIModel:
     Type: String
-    Default: gpt-4.1-nano
+    Default: gpt-6-luna
   JwtSecret:
     Type: String
     NoEcho: true

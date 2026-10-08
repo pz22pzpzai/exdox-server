@@ -18,6 +18,9 @@ const openai = new OpenAI({
   apiKey: awsEnv.openAiApiKey,
   timeout: 45000,
 });
+const extractionReasoning = awsEnv.openAiModel === 'gpt-6-luna'
+  ? { reasoning: { effort: 'none' as const } }
+  : {};
 
 export async function processExpenseBuffer(input: {
   fileName: string;
@@ -70,6 +73,7 @@ export async function processPdfDocuments(input: {
     : 'Detect document boundaries. Combine continuation pages belonging to one invoice, but return separate results when the PDF contains distinct invoices, credit notes, or receipts.';
   const response = await openai.responses.create({
     model: awsEnv.openAiModel,
+    ...extractionReasoning,
     input: [{ role: 'user', content: [
       { type: 'input_text', text: `${buildExtractionPrompt(input.options)}\n${modeInstruction}\nReturn one JSON object with a documents array. Each documents entry must use the requested extraction shape and include page_start and page_end numbers. Return JSON only.` },
       { type: 'input_file', file_id: uploadedFile.id },
@@ -128,6 +132,7 @@ async function extractWithOpenAI({
 
   const response = await openai.responses.create({
     model: awsEnv.openAiModel,
+    ...extractionReasoning,
     input: [
       {
         role: 'user',
@@ -180,6 +185,7 @@ async function extractVatFallbackWithOpenAI(
 
   const response = await openai.responses.create({
     model: awsEnv.openAiModel,
+    ...extractionReasoning,
     input: [
       {
         role: 'user',

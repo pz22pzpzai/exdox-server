@@ -63,7 +63,10 @@ type ExtractionEnvelope = {
 const port = Number(process.env.PORT ?? 8787);
 const maxUploadMb = Number(process.env.MAX_UPLOAD_MB ?? 25);
 const requestTimeoutMs = Number(process.env.EXPENSES_REQUEST_TIMEOUT_MS ?? 45000);
-const model = process.env.OPENAI_MODEL ?? 'gpt-4.1-nano';
+const model = process.env.OPENAI_MODEL ?? 'gpt-6-luna';
+const extractionReasoning = model === 'gpt-6-luna'
+  ? { reasoning: { effort: 'none' as const } }
+  : {};
 
 if (!process.env.OPENAI_API_KEY) {
   throw new Error('OPENAI_API_KEY is required for the expenses proxy.');
@@ -234,6 +237,7 @@ async function extractWithOpenAI(
 
   const response = await openai.responses.create({
     model,
+    ...extractionReasoning,
     input: [
       {
         role: 'user',

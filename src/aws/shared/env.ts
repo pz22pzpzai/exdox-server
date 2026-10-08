@@ -21,7 +21,7 @@ function optionalBooleanEnv(name: string) {
 export const awsEnv = {
   receiptBucketName: requireEnv('RECEIPT_BUCKET_NAME'),
   openAiApiKey: requireEnv('OPENAI_API_KEY'),
-  openAiModel: process.env.OPENAI_MODEL?.trim() || 'gpt-4.1-nano',
+  openAiModel: process.env.OPENAI_MODEL?.trim() || 'gpt-6-luna',
   jwtSecret: requireEnv('JWT_SECRET'),
   // All account emails use the verified Exdox support identity unless a deployment override is supplied.
   inviteEmailFrom: optionalEnv('INVITE_EMAIL_FROM') || 'contact@exdox.co.uk',

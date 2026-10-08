@@ -20,7 +20,7 @@ jobs:
       ENVIRONMENT_NAME: prod
       RECEIPT_BUCKET_NAME: ${{ secrets.RECEIPT_BUCKET_NAME }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+      OPENAI_MODEL: gpt-6-luna
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
       GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
       INVITE_EMAIL_FROM: ${{ secrets.INVITE_EMAIL_FROM }}
@@ -152,7 +152,7 @@ jobs:
             "EnvironmentName=$ENVIRONMENT_NAME"
             "ReceiptBucketName=$RECEIPT_BUCKET_NAME"
             "OpenAIApiKey=$OPENAI_API_KEY"
-            "OpenAIModel=${OPENAI_MODEL:-gpt-4.1-nano}"
+            "OpenAIModel=$OPENAI_MODEL"
             "JwtSecret=$JWT_SECRET"
             "InviteBaseUrl=${INVITE_BASE_URL:-https://exdox.co.uk/register}"
             "ReceiptStoreMode=${RECEIPT_STORE_MODE:-s3}"
