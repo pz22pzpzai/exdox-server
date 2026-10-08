@@ -5,7 +5,7 @@ import mysql from 'mysql2/promise';
 
 import { awsEnv } from './env.js';
 import { sanitizeText } from './helpers.js';
-import { calculateAllocations, suggestApprovedCategory } from './documentAutomation.js';
+import { calculateAllocations, groupExtractedLineItems, suggestApprovedCategory } from './documentAutomation.js';
 import { workspaceCountry, workspaceCountryDefaults, type WorkspaceCountry } from './workspaceCountry.js';
 import {
   deleteReceiptObject,
@@ -415,6 +415,8 @@ async function ensureSupplierRuleSchema() {
   await pool.execute("ALTER TABLE supplier_rules ADD COLUMN IF NOT EXISTS workspace_context ENUM('cost', 'sales') NOT NULL DEFAULT 'cost' AFTER organisation_id");
   await pool.execute("ALTER TABLE supplier_rules ADD COLUMN IF NOT EXISTS split_mode VARCHAR(16) NOT NULL DEFAULT 'none'");
   await pool.execute('ALTER TABLE supplier_rules ADD COLUMN IF NOT EXISTS split_allocations JSON NULL');
+  await pool.execute("ALTER TABLE supplier_rules ADD COLUMN IF NOT EXISTS line_item_group_mode VARCHAR(32) NOT NULL DEFAULT 'none'");
+  await pool.execute('ALTER TABLE supplier_rules ADD COLUMN IF NOT EXISTS line_item_groups JSON NULL');
 }
 
 type StoredClaim = ExpenseClaimRow;
@@ -3280,7 +3282,7 @@ export async function listSupplierRules(organisationId: number, workspaceContext
 
   await ensureSupplierRuleSchema();
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
-    `SELECT id, organisation_id, workspace_context, supplier_match_text, category, tax_rate, payment_method, is_active, split_mode, split_allocations, created_at, updated_at
+    `SELECT id, organisation_id, workspace_context, supplier_match_text, category, tax_rate, payment_method, is_active, split_mode, split_allocations, line_item_group_mode, line_item_groups, created_at, updated_at
      FROM supplier_rules
      WHERE organisation_id = ? AND workspace_context = ?
      ORDER BY updated_at DESC`,
@@ -3298,6 +3300,8 @@ export async function listSupplierRules(organisationId: number, workspaceContext
     isActive: Boolean(row.is_active),
     splitMode: row.split_mode === 'fixed' || row.split_mode === 'percentage' ? row.split_mode : 'none',
     splitAllocations: safeJsonArrayParse(row.split_allocations),
+    lineItemGroupMode: ['description', 'tax'].includes(String(row.line_item_group_mode)) ? row.line_item_group_mode : 'none',
+    lineItemGroups: safeJsonArrayParse(row.line_item_groups),
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   }));
@@ -3350,6 +3354,19 @@ export async function applySupplierRulesToDocument(input: {
       allocationLines = calculateAllocations(input.document.netAmount, matchedRule.category, matchedRule.splitMode, matchedRule.splitAllocations ?? []);
     } catch (error) {
       splitWarning = `Smart Split needs review: ${error instanceof Error ? error.message : 'the rule could not be applied'}.`;
+    }
+  }
+  if (!allocationLines.length && !splitWarning && matchedRule.lineItemGroupMode && matchedRule.lineItemGroupMode !== 'none') {
+    allocationLines = groupExtractedLineItems({
+      netAmount: input.document.netAmount ?? 0,
+      defaultCategory: matchedRule.category,
+      mode: matchedRule.lineItemGroupMode,
+      groups: matchedRule.lineItemGroups ?? [],
+      items: input.document.lineItems,
+    });
+    if (!allocationLines.length) splitWarning = 'Line-item grouping needs review: the extracted items could not be reconciled to the document net amount.';
+    else if (allocationLines.some((line) => line.description === 'Unallocated document balance')) {
+      splitWarning = 'Line-item grouping left a document balance; check the grouped lines before approval.';
     }
   }
   return {
@@ -3474,6 +3491,8 @@ export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'cr
       isActive: input.isActive,
       splitMode: input.splitMode ?? 'none',
       splitAllocations: input.splitAllocations ?? [],
+      lineItemGroupMode: input.lineItemGroupMode ?? 'none',
+      lineItemGroups: input.lineItemGroups ?? [],
       createdAt,
       updatedAt: new Date().toISOString(),
     };
@@ -3485,7 +3504,7 @@ export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'cr
     await ensureSupplierRuleSchema();
     await pool.execute(
       `UPDATE supplier_rules
-       SET supplier_match_text = ?, category = ?, tax_rate = ?, payment_method = ?, is_active = ?, split_mode = ?, split_allocations = ?, updated_at = CURRENT_TIMESTAMP
+       SET supplier_match_text = ?, category = ?, tax_rate = ?, payment_method = ?, is_active = ?, split_mode = ?, split_allocations = ?, line_item_group_mode = ?, line_item_groups = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND organisation_id = ? AND workspace_context = ?`,
       [
         sanitizeText(input.supplierMatchText),
@@ -3495,6 +3514,8 @@ export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'cr
         input.isActive ? 1 : 0,
         input.splitMode ?? 'none',
         JSON.stringify(input.splitAllocations ?? []),
+        input.lineItemGroupMode ?? 'none',
+        JSON.stringify(input.lineItemGroups ?? []),
         input.id,
         input.organisationId,
         input.workspaceContext,
@@ -3503,8 +3524,8 @@ export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'cr
   } else {
     await ensureSupplierRuleSchema();
     await pool.execute(
-      `INSERT INTO supplier_rules (organisation_id, workspace_context, supplier_match_text, category, tax_rate, payment_method, is_active, split_mode, split_allocations)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO supplier_rules (organisation_id, workspace_context, supplier_match_text, category, tax_rate, payment_method, is_active, split_mode, split_allocations, line_item_group_mode, line_item_groups)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.organisationId,
         input.workspaceContext,
@@ -3515,6 +3536,8 @@ export async function upsertSupplierRule(input: Omit<SupplierRuleRow, 'id' | 'cr
         input.isActive ? 1 : 0,
         input.splitMode ?? 'none',
         JSON.stringify(input.splitAllocations ?? []),
+        input.lineItemGroupMode ?? 'none',
+        JSON.stringify(input.lineItemGroups ?? []),
       ],
     );
   }

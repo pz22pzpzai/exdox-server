@@ -517,7 +517,7 @@ async function publishSourceToXero(user: AuthenticatedUser, sourceType: XeroPubl
         throw new Error('Split allocations no longer match the document net amount. Review the split before publishing.');
       }
       const lines = allocationLines.length
-        ? allocationLines.map((item) => xeroLine(item.category, item.netAmount, settings.categoryAccountMappings[item.category] || (isCost ? settings.purchaseAccountCode : settings.salesAccountCode)!, taxType, 1, settings))
+        ? allocationLines.map((item) => xeroLine(item.description || item.category, item.netAmount, settings.categoryAccountMappings[item.category] || (isCost ? settings.purchaseAccountCode : settings.salesAccountCode)!, (item.taxRateApplied ? taxTypeMappings[item.taxRateApplied] : null) || taxType, 1, settings))
         : [xeroLine(receipt.description || receipt.category || receipt.sourceFilename, net, accountCode, taxType, 1, settings)];
       const sourceDocument = await getReceiptObjectBuffer(receipt.s3Key);
       if (isCost && receipt.paymentMethod === 'business_card' && settings.companyCardBankAccountCode) {
@@ -573,7 +573,7 @@ async function publishSourceToXero(user: AuthenticatedUser, sourceType: XeroPubl
         if (allocations.length && Math.round(allocations.reduce((sum, item) => sum + item.netAmount, 0) * 100) !== Math.round(net * 100)) throw new Error(`Split allocations for receipt ${receipt.id} need review.`);
         const taxType = (receipt.taxRateApplied ? settings.purchaseTaxTypeMappings[receipt.taxRateApplied] : null) || settings.purchaseTaxType;
         return allocations.length
-          ? allocations.map((item) => xeroLine(item.category, item.netAmount, settings.categoryAccountMappings[item.category] || settings.purchaseAccountCode!, taxType, 1, settings))
+          ? allocations.map((item) => xeroLine(item.description || item.category, item.netAmount, settings.categoryAccountMappings[item.category] || settings.purchaseAccountCode!, (item.taxRateApplied ? settings.purchaseTaxTypeMappings[item.taxRateApplied] : null) || taxType, 1, settings))
           : [xeroLine(receipt.description || receipt.vendorName || receipt.sourceFilename, net, (receipt.category ? settings.categoryAccountMappings[receipt.category] : null) || settings.purchaseAccountCode!, taxType, 1, settings)];
       }) : [xeroLine(claim.description || claim.name, claim.totalAmount, settings.purchaseAccountCode, settings.purchaseTaxType, 1, settings)];
       result = await publishInvoice({ Type: 'ACCPAY', Contact: { ContactID: contact.ContactID }, Date: safeDate(claim.createdAt), DueDate: safeDate(claim.createdAt), CurrencyCode: claim.currency, Reference: `Exdox claim ${claim.id}`, Status: settings.purchaseStatus, LineAmountTypes: 'Exclusive', LineItems: lines }, receipts[0] ? { filename: receipts[0].sourceFilename, contentType: receipts[0].sourceMimeType, body: await getReceiptObjectBuffer(receipts[0].s3Key) } : undefined);

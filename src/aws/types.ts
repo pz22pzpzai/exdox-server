@@ -305,6 +305,8 @@ export type SupplierRuleRow = {
   isActive: boolean;
   splitMode?: import('./shared/documentAutomation.js').SplitMode;
   splitAllocations?: import('./shared/documentAutomation.js').SplitPart[];
+  lineItemGroupMode?: import('./shared/documentAutomation.js').GroupMode;
+  lineItemGroups?: import('./shared/documentAutomation.js').LineItemGroup[];
   createdAt: string;
   updatedAt: string;
 };

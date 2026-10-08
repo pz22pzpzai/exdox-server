@@ -201,3 +201,14 @@ jobs:
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --parameter-overrides "${parameter_overrides[@]}"
+
+      - name: Activate Costs email receipt rules
+        run: |
+          active_rule_set=$(aws ses describe-active-receipt-rule-set --region "$AWS_REGION" --query 'Metadata.Name' --output text)
+          target_rule_set="${ENVIRONMENT_NAME}-exdox-costs-inbound"
+          if [[ "$active_rule_set" == "None" || -z "$active_rule_set" ]]; then
+            aws ses set-active-receipt-rule-set --region "$AWS_REGION" --rule-set-name "$target_rule_set"
+          elif [[ "$active_rule_set" != "$target_rule_set" ]]; then
+            echo "Another SES receipt rule set is active; refusing to replace it."
+            exit 1
+          fi

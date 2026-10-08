@@ -162,6 +162,8 @@ export async function handler(event: APIGatewayProxyEventV2) {
         ? body.allocationLines.map((line: unknown) => ({
           category: sanitizeText((line as Record<string, unknown>)?.category),
           netAmount: Number((line as Record<string, unknown>)?.netAmount),
+          description: sanitizeText((line as Record<string, unknown>)?.description) || undefined,
+          taxRateApplied: sanitizeText((line as Record<string, unknown>)?.taxRateApplied) || null,
         })) : existingReceipt.allocationLines ?? [];
       if (allocationLines.length > 20 || allocationLines.some((line) => !line.category || !Number.isFinite(line.netAmount) || line.netAmount <= 0)) {
         return jsonResponse(400, { success: false, error: 'invalid_split', message: 'Split allocations need a category and positive net amount.' });

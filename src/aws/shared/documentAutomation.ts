@@ -1,6 +1,61 @@
 export type SplitMode = 'none' | 'percentage' | 'fixed';
 export type SplitPart = { category: string; value: number };
-export type AllocationLine = { category: string; netAmount: number };
+export type AllocationLine = { category: string; netAmount: number; description?: string; taxRateApplied?: string | null };
+export type GroupMode = 'none' | 'description' | 'tax';
+export type LineItemGroup = { name: string; matchText: string; category: string };
+
+export function validateLineItemGroups(mode: GroupMode, groups: LineItemGroup[]): void {
+  if (!['none', 'description', 'tax'].includes(mode)) throw new Error('Choose a valid line-item grouping mode.');
+  if (groups.length > 20 || groups.some((group) => !group.name.trim() || !group.matchText.trim() || !group.category.trim())) {
+    throw new Error('Each line-item group needs a name, matching text and category (maximum 20 groups).');
+  }
+}
+
+export function groupExtractedLineItems(input: {
+  netAmount: number;
+  defaultCategory: string;
+  mode: GroupMode;
+  groups: LineItemGroup[];
+  items: Array<{ description: string; total: number | null; taxAmount: number | null }>;
+}): AllocationLine[] {
+  validateLineItemGroups(input.mode, input.groups);
+  if (input.mode === 'none' || input.items.length === 0 || input.items.length > 100) return [];
+  const expected = Math.round(input.netAmount * 100);
+  if (!Number.isFinite(expected) || expected <= 0) return [];
+  const buckets = new Map<string, { category: string; description: string; taxRateApplied: string | null; pence: number }>();
+  let allocated = 0;
+  for (const item of input.items) {
+    if (!Number.isFinite(item.total) || item.total === null || item.total <= 0) return [];
+    const grossPence = Math.round(item.total * 100);
+    const taxPence = item.taxAmount === null ? 0 : Math.round(item.taxAmount * 100);
+    const netPence = grossPence - taxPence;
+    if (netPence <= 0 || taxPence < 0 || taxPence > grossPence) return [];
+    allocated += netPence;
+    const match = input.groups.find((group) => item.description.toLocaleLowerCase().includes(group.matchText.trim().toLocaleLowerCase()));
+    const taxKey = item.taxAmount === null ? 'tax unknown' : `${Math.round(taxPence / netPence * 10000) / 100}% tax`;
+    const taxPercent = Math.round(taxPence / netPence * 100);
+    const taxRateApplied = item.taxAmount === null ? null : taxPercent === 20 ? '20% Standard' : taxPercent === 5 ? '5% Reduced' : taxPercent === 0 ? '0% Zero' : null;
+    const description = match?.name ?? (item.description.trim() || 'Line item');
+    const key = input.mode === 'tax' ? taxKey : `${description}|${taxKey}`;
+    const category = match?.category ?? input.defaultCategory;
+    const bucket = buckets.get(key);
+    if (bucket && (bucket.category !== category || bucket.taxRateApplied !== taxRateApplied)) return [];
+    if (bucket) bucket.pence += netPence;
+    else buckets.set(key, { category, description: input.mode === 'tax' ? taxKey : description, taxRateApplied, pence: netPence });
+  }
+  if (allocated > expected + 2) return [];
+  if (buckets.size > 20) return [];
+  const result: AllocationLine[] = [...buckets.values()].map((bucket) => ({ category: bucket.category, description: bucket.description, taxRateApplied: bucket.taxRateApplied, netAmount: bucket.pence / 100 }));
+  const remaining = expected - allocated;
+  if (remaining < 0) {
+    if (result.length === 0 || result[result.length - 1].netAmount * 100 + remaining <= 0) return [];
+    result[result.length - 1].netAmount = (Math.round(result[result.length - 1].netAmount * 100) + remaining) / 100;
+  } else if (remaining > 0) {
+    if (result.length >= 20) return [];
+    result.push({ category: input.defaultCategory, description: 'Unallocated document balance', netAmount: remaining / 100 });
+  }
+  return result;
+}
 
 export function validateSplitRule(mode: SplitMode, parts: SplitPart[]): void {
   if (mode === 'none') {

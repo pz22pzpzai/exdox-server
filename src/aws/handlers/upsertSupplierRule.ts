@@ -5,7 +5,7 @@ import { assertFeatureAccess } from '../shared/billing.js';
 import { getOrganisationBillingSummary, upsertSupplierRule } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { parseBoolean, parsePaymentMethod, sanitizeText } from '../shared/helpers.js';
-import { validateSplitRule, type SplitMode, type SplitPart } from '../shared/documentAutomation.js';
+import { validateLineItemGroups, validateSplitRule, type GroupMode, type LineItemGroup, type SplitMode, type SplitPart } from '../shared/documentAutomation.js';
 
 export async function handler(event: APIGatewayProxyEventV2) {
   try {
@@ -23,6 +23,18 @@ export async function handler(event: APIGatewayProxyEventV2) {
       })) : [];
     try { validateSplitRule(splitMode, splitAllocations); }
     catch (error) { return jsonResponse(400, { success: false, error: 'invalid_split_rule', message: error instanceof Error ? error.message : 'Invalid split rule.' }); }
+    const lineItemGroupMode: GroupMode = ['description', 'tax'].includes(String(body.lineItemGroupMode))
+      ? body.lineItemGroupMode as GroupMode : 'none';
+    const lineItemGroups: LineItemGroup[] = Array.isArray(body.lineItemGroups)
+      ? body.lineItemGroups.map((group: unknown) => ({
+        name: sanitizeText((group as Record<string, unknown>)?.name),
+        matchText: sanitizeText((group as Record<string, unknown>)?.matchText),
+        category: sanitizeText((group as Record<string, unknown>)?.category),
+      })) : [];
+    try {
+      validateLineItemGroups(lineItemGroupMode, lineItemGroups);
+      if (splitMode !== 'none' && lineItemGroupMode !== 'none') throw new Error('Choose Smart Split or line-item grouping for this rule, not both.');
+    } catch (error) { return jsonResponse(400, { success: false, error: 'invalid_line_item_group', message: error instanceof Error ? error.message : 'Invalid line-item group.' }); }
 
     const rule = await upsertSupplierRule({
       id: Number.isFinite(Number(body.id)) ? Number(body.id) : undefined,
@@ -35,6 +47,8 @@ export async function handler(event: APIGatewayProxyEventV2) {
       isActive: parseBoolean(String(body.isActive ?? 'true'), true),
       splitMode,
       splitAllocations,
+      lineItemGroupMode,
+      lineItemGroups,
     });
 
     return jsonResponse(200, {

@@ -41,6 +41,9 @@ Parameters:
   SalesInboundDomain:
     Type: String
     Default: 'sales.exdox.co.uk'
+  CostsInboundDomain:
+    Type: String
+    Default: 'costs.exdox.co.uk'
   ReceiptStoreMode:
     Type: String
     Default: s3
@@ -169,6 +172,7 @@ Globals:
         CONFIRM_EMAIL_LOGIN_URL: !Ref ConfirmEmailLoginUrl
         RESET_PASSWORD_BASE_URL: !Ref ResetPasswordBaseUrl
         SALES_INBOUND_DOMAIN: !Ref SalesInboundDomain
+        COSTS_INBOUND_DOMAIN: !Ref CostsInboundDomain
         RECEIPT_STORE_MODE: !Ref ReceiptStoreMode
         DB_HOST: !Ref DbHost
         DB_PORT: !Ref DbPort
@@ -297,6 +301,88 @@ Resources:
             Condition:
               StringNotEquals:
                 's3:x-amz-server-side-encryption': 'AES256'
+
+  CostsInboundBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteRawEmailsAfterSevenDays
+            Status: Enabled
+            ExpirationInDays: 7
+
+  CostsInboundBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CostsInboundBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: RequireSecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt CostsInboundBucket.Arn
+              - !Sub '${CostsInboundBucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+          - Sid: PermitSesEmailStorage
+            Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${CostsInboundBucket.Arn}/costs/*'
+            Condition:
+              StringEquals:
+                'AWS:SourceAccount': !Ref AWS::AccountId
+                'AWS:SourceArn': !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/${EnvironmentName}-exdox-costs-inbound:receipt-rule/CostsDocuments'
+
+  CostsInboundRuleSet:
+    Type: AWS::SES::ReceiptRuleSet
+    Properties:
+      RuleSetName: !Sub '${EnvironmentName}-exdox-costs-inbound'
+
+  CostsInboundPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt CostsEmailReceiveFunction.Arn
+      Principal: ses.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/${EnvironmentName}-exdox-costs-inbound:receipt-rule/CostsDocuments'
+
+  CostsInboundRule:
+    Type: AWS::SES::ReceiptRule
+    DependsOn:
+      - CostsInboundBucketPolicy
+      - CostsInboundPermission
+    Properties:
+      RuleSetName: !Ref CostsInboundRuleSet
+      Rule:
+        Name: CostsDocuments
+        Enabled: true
+        ScanEnabled: true
+        TlsPolicy: Optional
+        Recipients:
+          - !Ref CostsInboundDomain
+        Actions:
+          - S3Action:
+              BucketName: !Ref CostsInboundBucket
+              ObjectKeyPrefix: costs/
+          - LambdaAction:
+              FunctionArn: !GetAtt CostsEmailReceiveFunction.Arn
+              InvocationType: Event
 
   HealthFunction:
     Type: AWS::Serverless::Function
@@ -1333,6 +1419,50 @@ Resources:
             RestApiId: !Ref ReceiptApi
             Path: /xero/publish
             Method: POST
+
+  CostsEmailGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/costsEmail.listHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        CostsEmailGetRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /costs-email
+            Method: GET
+
+  CostsEmailRotateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/costsEmail.rotateHandler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        CostsEmailRotateRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /costs-email/rotate
+            Method: POST
+
+  CostsEmailReceiveFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/costsEmailReceive.handler
+      Timeout: 900
+      Environment:
+        Variables:
+          INBOUND_EMAIL_BUCKET_NAME: !Ref CostsInboundBucket
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+        - S3ReadPolicy:
+            BucketName: !Ref CostsInboundBucket
 
   ListSupplierRulesFunction:
     Type: AWS::Serverless::Function
