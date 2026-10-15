@@ -83,6 +83,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       allowedWebRoutes,
       billing: {
         ...billing,
+        priceCurrency: billing.priceCurrency ?? (billing.stripeSubscriptionId ? null : organisation.country === 'DE' ? 'eur' : null),
         planLabel: billing.planId === 'legacy' ? 'Legacy' : billing.planId[0]!.toUpperCase() + billing.planId.slice(1),
         stripeConfigured: isStripeConfigured(),
       },

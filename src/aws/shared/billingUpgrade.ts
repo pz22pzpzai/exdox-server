@@ -6,7 +6,7 @@ import {
   normalizePlanId,
   resolveSelfServeSubscriptionSelection,
 } from './billing.js';
-import { getOrganisationBillingSummary } from './db.js';
+import { getOrganisationBillingSummary, getOrganisationSettings } from './db.js';
 import { awsEnv } from './env.js';
 import { syncStripeSubscription } from './stripeSubscription.js';
 
@@ -57,8 +57,10 @@ export async function upgradeSubscriptionPlan(input: {
   if (!subscriptionItem) {
     throw billingUpgradeError(409, 'subscription_item_missing', 'This subscription does not contain a billable plan item.');
   }
-  if (subscriptionItem.price.currency !== 'gbp') {
-    throw billingUpgradeError(409, 'currency_change_requires_billing_support', 'This plan is billed in GBP. Contact billing support to move your subscription to a larger plan.');
+  const priceCurrency = subscriptionItem.price.currency;
+  const settings = await getOrganisationSettings(input.user.organisationId);
+  if (priceCurrency !== 'gbp' && !(settings.country === 'DE' && priceCurrency === 'eur')) {
+    throw billingUpgradeError(409, 'currency_change_requires_billing_support', 'Contact billing support to move this subscription to a larger plan.');
   }
 
   const productId = typeof subscriptionItem.price.product === 'string'
@@ -66,7 +68,7 @@ export async function upgradeSubscriptionPlan(input: {
     : subscriptionItem.price.product?.id;
   const product = await resolveActiveSubscriptionProduct(stripe, productId);
   const price = await stripe.prices.create({
-    currency: 'gbp',
+    currency: priceCurrency,
     unit_amount: selection.monthlyAmountPence,
     recurring: { interval: 'month' },
     product: product.id,

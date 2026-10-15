@@ -1,5 +1,9 @@
 # Exdox server
 
+## German EUR subscription pricing (2026-10-15)
+
+New Germany (`country=DE`) workspaces use EUR for every self-serve Stripe checkout tier, with the same numeric monthly amounts as the existing plan table. Existing paused subscriptions keep their original Stripe currency on continuation; active EUR subscriptions can upgrade in EUR, and existing GBP subscriptions upgrade in GBP. `getSession` exposes the hydrated Stripe price currency for billing displays. The 60–100-user Stripe amounts were deliberately preserved; the German pricing page and authenticated billing screens show those exact amounts. The English public pricing component and original UK checkout amounts were not changed. Server deploys before website. Local build and focused billing-selection tests passed; the owner checks live deployment and Stripe checkout. Never store secrets or delete/move signing material.
+
 ## German website signup emails (2026-10-15)
 
 Website requests that explicitly send `locale: "de"` to registration, confirmation resend, or password-reset request receive German SES email copy and links under `https://exdox.co.uk/de/`. English requests retain their current email wording and URL configuration. The locale is selected per request; it does not change a user's workspace country, currency, or existing account. The website source depends on this server change, so deploy server before website. The owner checks live workflow and message delivery. Never store secrets or delete/move signing material.

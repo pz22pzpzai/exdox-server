@@ -54,7 +54,7 @@ export async function hydrateBillingSummaryFromStripe(
     const subscription = await stripe.subscriptions.retrieve(summary.stripeSubscriptionId);
     const syncedSummary = await syncStripeSubscription(subscription);
     if (syncedSummary) {
-      return syncedSummary;
+      return { ...syncedSummary, priceCurrency: subscription.items.data[0]?.price.currency ?? null };
     }
     const billingPeriod = getSubscriptionBillingPeriod(subscription);
 
@@ -70,6 +70,7 @@ export async function hydrateBillingSummaryFromStripe(
           ? subscription.customer
           : subscription.customer?.id ?? summary.stripeCustomerId,
       stripeSubscriptionId: subscription.status === 'canceled' ? null : subscription.id,
+      priceCurrency: subscription.items.data[0]?.price.currency ?? null,
     };
   } catch (error) {
     if (organisationId && isStripeResourceMissing(error)) {

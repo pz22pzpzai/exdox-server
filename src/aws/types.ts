@@ -389,6 +389,7 @@ export type OrganisationBillingSummary = {
   currentUserCount: number;
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
+  priceCurrency?: string | null;
   cancellationScheduledFor: string | null;
 };
 

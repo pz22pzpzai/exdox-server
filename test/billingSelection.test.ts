@@ -17,6 +17,7 @@ const {
   resolveAllowedWebRoutes,
   resolveSelfServeSubscriptionSelection,
 } = await import('../src/aws/shared/billing.js');
+const { resolveCheckoutCurrency } = await import('../src/aws/shared/billingCheckout.js');
 import type { OrganisationBillingSummary } from '../src/aws/types.js';
 
 function billingFor(planId: OrganisationBillingSummary['planId'], status: OrganisationBillingSummary['status'] = 'active'): OrganisationBillingSummary {
@@ -98,6 +99,24 @@ test('existing five-user Capture price remains £15', () => {
     monthlyDocumentLimit: 250,
   });
   assert.equal(selection.monthlyAmountPence, 1500);
+});
+
+test('German checkout uses EUR at every size and preserves existing subscription currency', () => {
+  assert.equal(resolveCheckoutCurrency('DE', 1), 'eur');
+  assert.equal(resolveCheckoutCurrency('DE', 5), 'eur');
+  assert.equal(resolveCheckoutCurrency('DE', 200), 'eur');
+  assert.equal(resolveCheckoutCurrency('DE', 5, 'gbp'), 'gbp');
+  assert.equal(resolveCheckoutCurrency('GB', 5), 'gbp');
+  assert.equal(resolveCheckoutCurrency('FR', 5), 'gbp');
+});
+
+test('larger plan charges retain their existing Stripe amounts', () => {
+  const chargedMinorUnits = new Map([[60, 17300], [65, 18741], [70, 20182], [75, 21623], [80, 23064], [85, 24503], [90, 25944], [95, 27385], [100, 28826]]);
+  for (const [users, amount] of chargedMinorUnits) {
+    assert.equal(resolveSelfServeSubscriptionSelection({
+      planId: 'operations', includedUsers: users, monthlyDocumentLimit: users * 50,
+    }).monthlyAmountPence, amount);
+  }
 });
 
 test('new 110–200 user tiers use the published prices and larger document allowances', () => {

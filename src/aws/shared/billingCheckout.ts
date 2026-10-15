@@ -79,9 +79,7 @@ export async function createSelfServeCheckoutSession(input: {
   if (continuingSoleTraderXero || (trialXeroPurchased && selection.includedUsers === 1 && selection.monthlyDocumentLimit === 100)) {
     selection = { ...selection, monthlyAmountPence: 1000 };
   }
-  const priceCurrency = selection.includedUsers === 1
-    ? (previousSubscription?.items.data[0]?.price.currency ?? workspaceCountryDefaults(settings.country).baseCurrency.toLowerCase())
-    : 'gbp';
+  const priceCurrency = resolveCheckoutCurrency(settings.country, selection.includedUsers, previousSubscription?.items.data[0]?.price.currency);
   let customerId = billing.stripeCustomerId;
   if (customerId) {
     const customer = await stripe.customers.retrieve(customerId);
@@ -186,6 +184,12 @@ export async function createSelfServeCheckoutSession(input: {
     checkoutUrl: session.url,
     sessionId: session.id,
   };
+}
+
+export function resolveCheckoutCurrency(country: Parameters<typeof workspaceCountryDefaults>[0], includedUsers: number, previousCurrency?: string) {
+  return previousCurrency ?? (country === 'DE' || includedUsers === 1
+    ? workspaceCountryDefaults(country).baseCurrency.toLowerCase()
+    : 'gbp');
 }
 
 export async function finishPaidContinuation(session: Stripe.Checkout.Session, stripe: Stripe) {
