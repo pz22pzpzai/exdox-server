@@ -2,7 +2,7 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 import { requireAuthenticatedUser } from '../shared/auth.js';
 import { assertWorkspaceAccess, canAccessWorkspace } from '../shared/billing.js';
-import { getOrganisationBillingSummary, listLegacyAdminDeletedReceiptDecisions, listReceipts } from '../shared/db.js';
+import { getOrganisationBillingSummary, listLegacyAdminDeletedReceiptDecisions, listReceipts, updateReceiptById } from '../shared/db.js';
 import { jsonResponse } from '../shared/http.js';
 import { parseBoolean, parseWorkspaceContext } from '../shared/helpers.js';
 import { listDismissedReceiptDecisionIds, listReceiptDecisions, saveReceiptDecision } from '../shared/receiptDecisions.js';
@@ -41,6 +41,23 @@ export async function handler(event: APIGatewayProxyEventV2) {
       includeMileageCosts: parseBoolean(query.include_mileage_costs, false),
       claimId: Number.isFinite(claimId) ? claimId : undefined,
     });
+    // Bring previously approved company-card costs into their already-paid state.
+    // The update is idempotent, scoped to this admin's Costs list, and persists the correction.
+    if (user.role === 'Business_Admin' && workspaceContext === 'cost' && !Number.isFinite(claimId) && !parseBoolean(query.only_claimable, false)) {
+      for (const receipt of receipts) {
+        if (receipt.paymentMethod === 'business_card' && receipt.status === 'Ready' && !receipt.needsReview && !receipt.mileageClaimId) {
+          try {
+            const paid = await updateReceiptById(user, receipt.id, { ...receipt, status: 'Paid' });
+            Object.assign(receipt, paid);
+          } catch (repairError) {
+            console.error('Could not settle an approved company-card cost.', {
+              receiptId: receipt.id,
+              message: repairError instanceof Error ? repairError.message : 'Unknown error',
+            });
+          }
+        }
+      }
+    }
 
     return jsonResponse(200, {
       success: true,

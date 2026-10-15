@@ -477,7 +477,7 @@ async function publishSourceToXero(user: AuthenticatedUser, sourceType: XeroPubl
       // previous request ended before the local status update completed.
       if (sourceType === 'receipt') {
         const receipt = await getReceiptById(user, Number(sourceId));
-        if (receipt.status !== 'Published') await updateReceiptById(user, receipt.id, { status: 'Published' });
+        if (receipt.status !== 'Published' && !(receipt.status === 'Paid' && receipt.paymentMethod === 'business_card')) await updateReceiptById(user, receipt.id, { status: 'Published' });
       } else if (sourceType === 'claim') {
         const claimId = Number(sourceId);
         const claim = (await listExpenseClaims(user, 200)).find((item) => item.id === claimId);
@@ -502,7 +502,7 @@ async function publishSourceToXero(user: AuthenticatedUser, sourceType: XeroPubl
     if (sourceType === 'receipt') {
       const receipt = await getReceiptById(user, Number(sourceId));
       if (receipt.workspaceContext === 'vault') throw new Error('Vault files are evidence only and cannot be published to Xero.');
-      if (receipt.status !== 'Ready' && receipt.status !== 'Published') throw new Error('Approve this document before publishing it to Xero.');
+      if (receipt.status !== 'Ready' && receipt.status !== 'Published' && !(receipt.status === 'Paid' && receipt.paymentMethod === 'business_card')) throw new Error('Approve this document before publishing it to Xero.');
       const isCost = receipt.workspaceContext === 'cost';
       const accountCode = (receipt.category ? settings.categoryAccountMappings[receipt.category] : null) || (isCost ? settings.purchaseAccountCode : settings.salesAccountCode);
       if (!accountCode) throw new Error(`Choose a default Xero ${isCost ? 'cost' : 'sales'} account in Integrations first.`);
@@ -581,6 +581,11 @@ async function publishSourceToXero(user: AuthenticatedUser, sourceType: XeroPubl
     }
     const publication: XeroPublication = { sourceType, sourceId, xeroType, xeroId: result.xeroId, xeroNumber: result.xeroNumber, publishedAt: new Date().toISOString() };
     await putReceiptJsonObject(publicationKey(user.organisationId, sourceType, sourceId), publication);
-    if (sourceType === 'receipt') await updateReceiptById(user, Number(sourceId), { status: 'Published' });
+    if (sourceType === 'receipt') {
+      const receipt = await getReceiptById(user, Number(sourceId));
+      if (!(receipt.status === 'Paid' && receipt.paymentMethod === 'business_card')) {
+        await updateReceiptById(user, receipt.id, { status: 'Published' });
+      }
+    }
     return { success: true, alreadyPublished: false, publication, warning: result.warning ?? null };
 }

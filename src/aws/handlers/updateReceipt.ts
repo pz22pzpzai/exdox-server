@@ -246,6 +246,14 @@ export async function handler(event: APIGatewayProxyEventV2) {
       }
     }
 
+    if (user.role === 'Business_Admin'
+      && receipt.workspaceContext === 'cost'
+      && receipt.paymentMethod === 'business_card'
+      && !receipt.needsReview
+      && (receipt.status === 'Ready' || (requestedStatus === 'Ready' && receipt.status === 'Published'))) {
+      receipt = await updateReceiptById(user, receipt.id, { ...receipt, status: 'Paid' });
+    }
+
     return jsonResponse(200, {
       success: true,
       receipt,

@@ -1,5 +1,9 @@
 # Exdox server
 
+## Business-card Cost settlement (2026-10-15)
+
+After a business admin approves a Cost saved with `paymentMethod=business_card`, `updateReceipt` persists status Paid, including after optional auto-publication to Xero. The admin Costs list idempotently repairs older approved Business-card Costs left Ready, without stopping the list if one repair fails. Personal spend is unaffected and remains in the reimbursement flow. Xero accepts Paid Business-card Costs and leaves Paid intact after publishing or an idempotent retry. Deploy server before website; owner checks live behavior. Never store secrets or delete/move signing material.
+
 ## Single Cost payment status (2026-10-15)
 
 `updateReceipt` permits moving a Cost to Paid only for a business admin when its current status is approved (Ready, Payment processing, or Published) and it does not need review. `updateReceiptById` reconciles an attached expense claim when that receipt is marked Paid. Mileage uses the existing admin claim-status route to move approved or processing claims to paid. The bulk reimbursement route remains limited to Personal spend. Deploy server before the website and let the owner check live behavior. Never store secrets or move/delete signing material.
