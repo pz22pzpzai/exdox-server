@@ -4752,16 +4752,16 @@ function buildInviteLink(inviteToken: string, email: string) {
   return `${base}${separator}inviteToken=${encodeURIComponent(inviteToken)}&email=${encodeURIComponent(email)}`;
 }
 
-export function buildConfirmationEmailLink(confirmationToken: string, email: string) {
+export function buildConfirmationEmailLink(confirmationToken: string, email: string, locale?: 'de') {
   // Send people to the Exdox website, not directly to the API. This keeps the
   // confirmation flow usable from any device and avoids exposing raw API output.
-  const base = awsEnv.confirmEmailBaseUrl.replace(/\/$/, '');
+  const base = locale === 'de' ? 'https://exdox.co.uk/de/confirm-email' : awsEnv.confirmEmailBaseUrl.replace(/\/$/, '');
   const separator = base.includes('?') ? '&' : '?';
   return `${base}${separator}token=${encodeURIComponent(confirmationToken)}&email=${encodeURIComponent(email)}`;
 }
 
-export function buildPasswordResetLink(resetToken: string, email: string) {
-  const base = awsEnv.resetPasswordBaseUrl.replace(/\/$/, '');
+export function buildPasswordResetLink(resetToken: string, email: string, locale?: 'de') {
+  const base = locale === 'de' ? 'https://exdox.co.uk/de/reset-password' : awsEnv.resetPasswordBaseUrl.replace(/\/$/, '');
   const separator = base.includes('?') ? '&' : '?';
   return `${base}${separator}token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
 }

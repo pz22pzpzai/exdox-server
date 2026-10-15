@@ -1,5 +1,9 @@
 # Exdox server
 
+## German website signup emails (2026-10-15)
+
+Website requests that explicitly send `locale: "de"` to registration, confirmation resend, or password-reset request receive German SES email copy and links under `https://exdox.co.uk/de/`. English requests retain their current email wording and URL configuration. The locale is selected per request; it does not change a user's workspace country, currency, or existing account. The website source depends on this server change, so deploy server before website. The owner checks live workflow and message delivery. Never store secrets or delete/move signing material.
+
 ## Business-card Cost settlement (2026-10-15)
 
 After a business admin approves a Cost saved with `paymentMethod=business_card`, `updateReceipt` persists status Paid, including after optional auto-publication to Xero. The admin Costs list idempotently repairs older approved Business-card Costs left Ready, without stopping the list if one repair fails. Personal spend is unaffected and remains in the reimbursement flow. Xero accepts Paid Business-card Costs and leaves Paid intact after publishing or an idempotent retry. Deploy server before website; owner checks live behavior. Never store secrets or delete/move signing material.

@@ -10,6 +10,7 @@ export async function sendPasswordResetEmail(input: {
   fullName: string | null;
   organisationName: string;
   resetLink: string;
+  locale?: 'de';
 }) {
   if (!awsEnv.inviteEmailFrom) {
     console.info('Password reset email not sent because INVITE_EMAIL_FROM is not configured.', {
@@ -34,11 +35,20 @@ export async function sendPasswordResetEmail(input: {
       Content: {
         Simple: {
           Subject: {
-            Data: `Reset your Exdox password for ${input.organisationName}`,
+            Data: input.locale === 'de' ? `Setzen Sie Ihr Exdox-Passwort für ${input.organisationName} zurück` : `Reset your Exdox password for ${input.organisationName}`,
           },
           Body: {
             Text: {
-              Data: [
+              Data: input.locale === 'de' ? [
+                `Guten Tag ${recipientName},`,
+                '',
+                `für Ihren Exdox-Zugang zu ${input.organisationName} wurde eine Passwortänderung angefordert.`,
+                'Über diesen sicheren Link können Sie ein neues Passwort wählen:',
+                input.resetLink,
+                '',
+                'Der Link ist eine Stunde gültig.',
+                'Wenn Sie die Änderung nicht angefordert haben, können Sie diese Nachricht ignorieren.',
+              ].join('\n') : [
                 `Hi ${recipientName},`,
                 '',
                 `We received a request to reset the password for your Exdox access in ${input.organisationName}.`,
@@ -51,14 +61,19 @@ export async function sendPasswordResetEmail(input: {
             },
             Html: {
               Data: buildExdoxEmailHtml({
-                heading: 'Reset your Exdox password',
-                greeting: `Hi ${recipientName},`,
-                paragraphs: [
+                locale: input.locale,
+                heading: input.locale === 'de' ? 'Exdox-Passwort zurücksetzen' : 'Reset your Exdox password',
+                greeting: input.locale === 'de' ? `Guten Tag ${recipientName},` : `Hi ${recipientName},`,
+                paragraphs: input.locale === 'de' ? [
+                  `Für Ihren Exdox-Zugang zu ${input.organisationName} wurde eine Passwortänderung angefordert.`,
+                  'Wählen Sie über die Schaltfläche ein neues Passwort. Der Link ist eine Stunde gültig.',
+                  'Wenn Sie die Änderung nicht angefordert haben, können Sie diese Nachricht ignorieren.',
+                ] : [
                   `We received a request to reset the password for your Exdox access in ${input.organisationName}.`,
                   'Use the secure button below to choose a new password. This link expires in 1 hour.',
                   'If you did not request this change, you can ignore this email.',
                 ],
-                action: { label: 'Reset password', url: input.resetLink },
+                action: { label: input.locale === 'de' ? 'Passwort zurücksetzen' : 'Reset password', url: input.resetLink },
               }),
             },
           },

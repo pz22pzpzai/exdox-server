@@ -10,6 +10,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
   try {
     const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
     const email = sanitizeText(body.email).toLowerCase();
+    const locale = body.locale === 'de' ? 'de' as const : undefined;
 
     if (!email) {
       return jsonResponse(400, {
@@ -31,7 +32,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
 
     const organisationName = await getOrganisationName(user.organisationId);
     const resetToken = signPasswordResetToken(user);
-    const resetLink = buildPasswordResetLink(resetToken, user.email);
+    const resetLink = buildPasswordResetLink(resetToken, user.email, locale);
 
     let delivered = false;
     try {
@@ -40,6 +41,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
         fullName: user.fullName,
         organisationName,
         resetLink,
+        locale,
       });
       delivered = delivery.delivered;
     } catch (error) {

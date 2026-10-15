@@ -10,6 +10,7 @@ export async function sendRegistrationConfirmationEmail(input: {
   fullName: string | null;
   organisationName: string;
   confirmationLink: string;
+  locale?: 'de';
 }) {
   if (!awsEnv.inviteEmailFrom) {
     console.info('Registration confirmation email not sent because INVITE_EMAIL_FROM is not configured.', {
@@ -34,11 +35,19 @@ export async function sendRegistrationConfirmationEmail(input: {
       Content: {
         Simple: {
           Subject: {
-            Data: `Confirm your exdox email for ${input.organisationName}`,
+            Data: input.locale === 'de' ? `Bestätigen Sie Ihre Exdox-E-Mail für ${input.organisationName}` : `Confirm your exdox email for ${input.organisationName}`,
           },
           Body: {
             Text: {
-              Data: [
+              Data: input.locale === 'de' ? [
+                `Guten Tag ${recipientName},`,
+                '',
+                `vielen Dank, dass Sie ${input.organisationName} bei Exdox eingerichtet haben.`,
+                'Bestätigen Sie Ihre E-Mail-Adresse, um Ihren Arbeitsbereich zu aktivieren:',
+                input.confirmationLink,
+                '',
+                'Wenn Sie dieses Konto nicht erstellt haben, können Sie diese Nachricht ignorieren.',
+              ].join('\n') : [
                 `Hi ${recipientName},`,
                 '',
                 `Thanks for creating ${input.organisationName} on exdox.`,
@@ -50,14 +59,19 @@ export async function sendRegistrationConfirmationEmail(input: {
             },
             Html: {
               Data: buildExdoxEmailHtml({
-                heading: 'Confirm your Exdox email',
-                greeting: `Hi ${recipientName},`,
-                paragraphs: [
+                locale: input.locale,
+                heading: input.locale === 'de' ? 'Bestätigen Sie Ihre Exdox-E-Mail' : 'Confirm your Exdox email',
+                greeting: input.locale === 'de' ? `Guten Tag ${recipientName},` : `Hi ${recipientName},`,
+                paragraphs: input.locale === 'de' ? [
+                  `Vielen Dank, dass Sie ${input.organisationName} bei Exdox eingerichtet haben.`,
+                  'Bestätigen Sie Ihre E-Mail-Adresse, um Ihren Arbeitsbereich zu aktivieren.',
+                  'Wenn Sie dieses Konto nicht erstellt haben, können Sie diese Nachricht ignorieren.',
+                ] : [
                   `Thanks for creating ${input.organisationName} on Exdox.`,
                   'Confirm your email address to activate your workspace.',
                   'If you did not create this account, you can ignore this email.',
                 ],
-                action: { label: 'Confirm email address', url: input.confirmationLink },
+                action: { label: input.locale === 'de' ? 'E-Mail-Adresse bestätigen' : 'Confirm email address', url: input.confirmationLink },
               }),
             },
           },

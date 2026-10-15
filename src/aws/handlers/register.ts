@@ -29,6 +29,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const inviteToken = sanitizeText(body.inviteToken);
     const termsAccepted = body.termsAccepted === true;
     const termsVersion = sanitizeText(body.termsVersion) || '2026-07-26';
+    const locale = body.locale === 'de' ? 'de' as const : undefined;
     const accountType = body.accountType === 'employee'
       ? 'employee'
       : body.accountType === 'sole_trader'
@@ -119,7 +120,8 @@ export async function handler(event: APIGatewayProxyEventV2) {
             toEmail: user.email,
             fullName: user.fullName,
             organisationName: matchedOrganisation.organisationName,
-            confirmationLink: buildConfirmationEmailLink(user.inviteToken, user.email),
+            confirmationLink: buildConfirmationEmailLink(user.inviteToken, user.email, locale),
+            locale,
           });
           confirmationDelivered = delivery.delivered;
         } catch (error) {
@@ -208,13 +210,14 @@ export async function handler(event: APIGatewayProxyEventV2) {
 
     let confirmationDelivered = false;
     if (user.inviteToken) {
-      const confirmationLink = buildConfirmationEmailLink(user.inviteToken, user.email);
+      const confirmationLink = buildConfirmationEmailLink(user.inviteToken, user.email, locale);
       try {
         const delivery = await sendRegistrationConfirmationEmailWithRetry({
           toEmail: user.email,
           fullName: user.fullName,
           organisationName: workspaceName,
           confirmationLink,
+          locale,
         });
         confirmationDelivered = delivery.delivered;
       } catch (error) {

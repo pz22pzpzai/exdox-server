@@ -9,6 +9,7 @@ type EmailLink = {
 };
 
 export function buildExdoxEmailHtml(input: {
+  locale?: 'de';
   heading: string;
   greeting?: string;
   paragraphs: string[];
@@ -26,7 +27,7 @@ export function buildExdoxEmailHtml(input: {
     : '';
   const action = input.action
     ? `<div style="margin:24px 0"><a href="${safeEmailUrl(input.action.url)}" style="display:inline-block;background:#10203d;color:#ffffff;text-decoration:none;font-weight:700;padding:14px 22px;border-radius:8px">${escapeEmailHtml(input.action.label)}</a></div>
-       <p style="font-size:13px;line-height:1.6;color:#65758c;margin:0 0 18px">If the button does not work, use this full link:<br><a href="${safeEmailUrl(input.action.url)}" style="color:#087fc1;word-break:break-all">${escapeEmailHtml(input.action.url)}</a></p>`
+       <p style="font-size:13px;line-height:1.6;color:#65758c;margin:0 0 18px">${input.locale === 'de' ? 'Falls die Schaltfläche nicht funktioniert, verwenden Sie diesen Link:' : 'If the button does not work, use this full link:'}<br><a href="${safeEmailUrl(input.action.url)}" style="color:#087fc1;word-break:break-all">${escapeEmailHtml(input.action.url)}</a></p>`
     : '';
   const links = input.links?.length
     ? `<div style="margin-top:20px">${input.links
@@ -35,7 +36,7 @@ export function buildExdoxEmailHtml(input: {
     : '';
 
   return `<!doctype html>
-<html lang="en">
+<html lang="${input.locale === 'de' ? 'de' : 'en'}">
   <body style="margin:0;background:#eef4f8;font-family:Arial,sans-serif;color:#10203d">
     <div style="max-width:600px;margin:0 auto;padding:32px 20px">
       <div style="background:#ffffff;border:1px solid #d3dfeb;border-radius:16px;padding:32px">
@@ -46,7 +47,7 @@ export function buildExdoxEmailHtml(input: {
         ${details}
         ${action}
         ${links}
-        <p style="font-size:13px;line-height:1.6;color:#65758c;margin:24px 0 0">Exdox support<br><a href="mailto:contact@exdox.co.uk" style="color:#087fc1">contact@exdox.co.uk</a></p>
+        <p style="font-size:13px;line-height:1.6;color:#65758c;margin:24px 0 0">${input.locale === 'de' ? 'Exdox-Support' : 'Exdox support'}<br><a href="mailto:contact@exdox.co.uk" style="color:#087fc1">contact@exdox.co.uk</a></p>
       </div>
     </div>
   </body>
