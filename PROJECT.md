@@ -1,5 +1,9 @@
 # Exdox server
 
+## Single Cost payment status (2026-10-15)
+
+`updateReceipt` permits moving a Cost to Paid only for a business admin when its current status is approved (Ready, Payment processing, or Published) and it does not need review. `updateReceiptById` reconciles an attached expense claim when that receipt is marked Paid. Mileage uses the existing admin claim-status route to move approved or processing claims to paid. The bulk reimbursement route remains limited to Personal spend. Deploy server before the website and let the owner check live behavior. Never store secrets or move/delete signing material.
+
 ## OpenAI OCR model (2026-10-08)
 
 Production `OPENAI_MODEL` is pinned to `gpt-6-luna` in `.github/workflows/deploy.yml`; `infra/template.yaml`, `src/aws/shared/env.ts`, and the local proxy `src/index.ts` use the same default. `src/aws/shared/openaiExtraction.ts` applies this shared model to receipt/invoice images, PDFs, automatic PDF splitting, and VAT fallback; email imports and response metadata also read the shared setting. Luna requests set `reasoning.effort: none` so extraction does not unexpectedly use its default medium reasoning. Do not restore a production secret override without checking its value and updating every active default. Build and 104 tests passed locally; benchmark real receipts for vendor/date/total/VAT accuracy and measure token usage before claiming better OCR or a per-receipt cost. The owner checks deployment and live behavior. Never store API keys here or delete/move signing material.

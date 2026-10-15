@@ -38,6 +38,17 @@ export async function handler(event: APIGatewayProxyEventV2) {
     ]);
     assertWorkspaceAccess(billing, existingReceipt.workspaceContext);
     const requestedStatus = sanitizeText(body.status);
+    if (existingReceipt.workspaceContext === 'cost' && requestedStatus === 'Paid' && existingReceipt.status !== 'Paid') {
+      requireAdminUser(user);
+      assertFeatureAccess(billing, 'approval_workflows', 'Your current plan does not include payment management.');
+      if (existingReceipt.needsReview || !['Ready', 'Payment processing', 'Published'].includes(existingReceipt.status)) {
+        return jsonResponse(409, {
+          success: false,
+          error: 'cost_not_approved',
+          message: 'Approve this cost before marking it as paid.',
+        });
+      }
+    }
     if (existingReceipt.workspaceContext === 'cost' && requestedStatus === 'Rejected' && existingReceipt.status !== 'Rejected') {
       requireAdminUser(user);
       if (existingReceipt.status !== 'Review' || existingReceipt.claimId !== null) {

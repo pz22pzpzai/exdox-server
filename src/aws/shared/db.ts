@@ -2507,6 +2507,9 @@ export async function updateReceiptById(
       updatedAt: new Date().toISOString(),
     };
     await putReceiptJsonObject(buildReceiptMetadataKey(next), next);
+    if (updates.status === 'Paid' && existing.claimId !== null) {
+      await reconcileReimbursementClaimStatuses(user);
+    }
     return next;
   }
 
@@ -2584,6 +2587,9 @@ export async function updateReceiptById(
     ],
   );
 
+  if (updates.status === 'Paid' && existing.claimId !== null) {
+    await reconcileReimbursementClaimStatuses(user);
+  }
   return getReceiptById(user, receiptId);
 }
 
