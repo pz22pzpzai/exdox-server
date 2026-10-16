@@ -1509,6 +1509,21 @@ Resources:
             Path: /rules/{id}
             Method: DELETE
 
+  PlatformAdminGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/aws/handlers/platformAdmin.handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ReceiptBucketName
+      Events:
+        PlatformAdminGetRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReceiptApi
+            Path: /platform-admin/workspaces
+            Method: GET
+
   AccountingGetFunction:
     Type: AWS::Serverless::Function
     Properties:

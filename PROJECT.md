@@ -1,5 +1,9 @@
 # Exdox server
 
+## Private platform Admin overview (2026-10-16)
+
+`GET /platform-admin/workspaces` is a read-only SAM route in `src/aws/handlers/platformAdmin.ts`. It authorizes only an active `terryreedbfv@outlook.com` Business_Admin session whose ID and organisation match a fresh user lookup. `listPlatformWorkspaceOverview` in `src/aws/shared/db.ts` reads all current organisations and non-removed users from MySQL or S3 and returns signup dates, names/emails, recorded billing plan/status, trial end, and monthly document/user usage; it never returns password hashes, tokens, or Stripe identifiers. Responses use `Cache-Control: no-store`. The website polls the endpoint for new signups. Deploy server before website; owner checks workflow and live behavior. Never put secrets here or delete or move signing material.
+
 ## German EUR subscription pricing (2026-10-15)
 
 New Germany (`country=DE`) workspaces use EUR for every self-serve Stripe checkout tier, with the same numeric monthly amounts as the existing plan table. Existing paused subscriptions keep their original Stripe currency on continuation; active EUR subscriptions can upgrade in EUR, and existing GBP subscriptions upgrade in GBP. `getSession` exposes the hydrated Stripe price currency for billing displays. The 60–100-user Stripe amounts were deliberately preserved; the German pricing page and authenticated billing screens show those exact amounts. The English public pricing component and original UK checkout amounts were not changed. Server deploys before website. Local build and focused billing-selection tests passed; the owner checks live deployment and Stripe checkout. Never store secrets or delete/move signing material.

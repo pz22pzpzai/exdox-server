@@ -2257,6 +2257,126 @@ export async function getOrganisationBillingSummary(organisationId: number): Pro
   };
 }
 
+export type PlatformWorkspaceOverview = {
+  organisationId: number;
+  organisationName: string;
+  country: WorkspaceCountry;
+  createdAt: string;
+  billing: Pick<OrganisationBillingSummary, 'planId' | 'status' | 'billingCycle' | 'trialEndsAt' | 'billingPeriodStartedAt' | 'monthlyDocumentLimit' | 'monthlyDocumentUsage' | 'includedUsers' | 'currentUserCount'> & { hasSubscription: boolean };
+  users: Array<{ id: number; fullName: string | null; email: string; role: UserRole; status: UserRecord['status']; createdAt: string | null }>;
+};
+
+/** Cross-organisation data: call only after the platform-owner access check. */
+export async function listPlatformWorkspaceOverview(): Promise<PlatformWorkspaceOverview[]> {
+  if (!pool) {
+    const [organisationKeys, userKeys] = await Promise.all([
+      listAllReceiptJsonKeys('organisations/'),
+      listAllReceiptJsonKeys('users/'),
+    ]);
+    const [organisations, allUsers] = await Promise.all([
+      Promise.all(organisationKeys.filter((key) => key.endsWith('.json')).map((key) => getReceiptJsonObject<StoredOrganisation>(key))),
+      Promise.all(userKeys.filter((key) => key.endsWith('.json')).map((key) => getReceiptJsonObject<StoredUser>(key))),
+    ]);
+    const usersByOrganisation = new Map<number, StoredUser[]>();
+    for (const user of allUsers.filter((item) => !item.removedAt)) {
+      const group = usersByOrganisation.get(user.organisationId) ?? [];
+      group.push(user);
+      usersByOrganisation.set(user.organisationId, group);
+    }
+    const results: PlatformWorkspaceOverview[] = [];
+    // Bound S3 billing reads so the page remains usable as new workspaces sign up.
+    for (let offset = 0; offset < organisations.length; offset += 5) {
+      const batch = await Promise.all(organisations.slice(offset, offset + 5).map(async (organisation) => {
+        const billing = await getOrganisationBillingSummary(organisation.id);
+        return {
+          organisationId: organisation.id,
+          organisationName: organisation.name,
+          country: workspaceCountry(organisation.country),
+          createdAt: organisation.createdAt,
+          billing: {
+            planId: billing.planId,
+            status: billing.status,
+            billingCycle: billing.billingCycle,
+            trialEndsAt: billing.trialEndsAt,
+            billingPeriodStartedAt: billing.billingPeriodStartedAt,
+            monthlyDocumentLimit: billing.monthlyDocumentLimit,
+            monthlyDocumentUsage: billing.monthlyDocumentUsage,
+            includedUsers: billing.includedUsers,
+            currentUserCount: billing.currentUserCount,
+            hasSubscription: Boolean(billing.stripeSubscriptionId),
+          },
+          users: (usersByOrganisation.get(organisation.id) ?? []).map((user) => ({
+            id: user.id,
+            fullName: user.fullName,
+            email: user.email,
+            role: normalizeUserRole(user.role),
+            status: user.status,
+            createdAt: user.createdAt,
+          })),
+        } satisfies PlatformWorkspaceOverview;
+      }));
+      results.push(...batch);
+    }
+    return results.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  await ensureBillingCycleSchema();
+  await ensureTeamSchema();
+  const [organisationRows, userRows] = await Promise.all([
+    pool.query<mysql.RowDataPacket[]>(
+      `SELECT o.id, o.name, o.country, o.created_at, o.billing_plan, o.billing_status,
+              o.billing_cycle, o.trial_ends_at, o.billing_period_started_at,
+              o.monthly_document_limit, o.included_users, o.stripe_subscription_id,
+              (SELECT COUNT(*) FROM receipts r WHERE r.organisation_id = o.id
+                 AND r.created_at >= COALESCE(o.billing_period_started_at, DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-01'))) AS monthly_document_usage,
+              (SELECT COUNT(*) FROM users u WHERE u.organisation_id = o.id AND u.removed_at IS NULL) AS current_user_count
+       FROM organisations o ORDER BY o.created_at DESC`,
+    ),
+    pool.query<mysql.RowDataPacket[]>(
+      `SELECT id, organisation_id, full_name, email, user_role, status, created_at
+       FROM users WHERE removed_at IS NULL ORDER BY created_at ASC`,
+    ),
+  ]);
+  const usersByOrganisation = new Map<number, PlatformWorkspaceOverview['users']>();
+  for (const row of userRows[0]) {
+    const organisationId = Number(row.organisation_id);
+    const group = usersByOrganisation.get(organisationId) ?? [];
+    group.push({
+      id: Number(row.id),
+      fullName: row.full_name ? String(row.full_name) : null,
+      email: String(row.email),
+      role: normalizeUserRole(row.user_role),
+      status: String(row.status) as UserRecord['status'],
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+    });
+    usersByOrganisation.set(organisationId, group);
+  }
+  return organisationRows[0].map((row) => {
+    const planId = normalizePlanId(row.billing_plan);
+    const status = normalizeBillingStatus(row.billing_status, planId);
+    const organisationId = Number(row.id);
+    return {
+      organisationId,
+      organisationName: String(row.name),
+      country: workspaceCountry(row.country),
+      createdAt: new Date(row.created_at).toISOString(),
+      billing: {
+        planId,
+        status,
+        billingCycle: normalizeBillingCycle(row.billing_cycle),
+        trialEndsAt: row.trial_ends_at ? new Date(row.trial_ends_at).toISOString() : null,
+        billingPeriodStartedAt: row.billing_period_started_at ? new Date(row.billing_period_started_at).toISOString() : defaultUsagePeriodStart(),
+        monthlyDocumentLimit: normalizeNullableNumber(row.monthly_document_limit) ?? defaultMonthlyDocumentLimitForPlan(planId),
+        monthlyDocumentUsage: Number(row.monthly_document_usage ?? 0),
+        includedUsers: normalizeNullableNumber(row.included_users) ?? defaultIncludedUsersForPlan(planId),
+        currentUserCount: Number(row.current_user_count ?? 0),
+        hasSubscription: Boolean(row.stripe_subscription_id),
+      },
+      users: usersByOrganisation.get(organisationId) ?? [],
+    } satisfies PlatformWorkspaceOverview;
+  });
+}
+
 export async function getOrganisationBillingStatus(organisationId: number): Promise<BillingStatus> {
   return (await getOrganisationBillingAccessState(organisationId)).billingStatus;
 }
