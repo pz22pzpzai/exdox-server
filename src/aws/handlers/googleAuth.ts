@@ -125,7 +125,7 @@ export async function handler(event: APIGatewayProxyEventV2 & { httpMethod?: str
         billingCycle: 'monthly',
         monthlyDocumentLimit: null,
         includedUsers: null,
-        startPlanFreeTrial: true,
+        startPlanFreeTrial: body.paidSignup !== true,
       });
       if (!user.inviteToken) throw new Error('Google signup did not create a confirmation token.');
       await confirmRegisteredUserEmail({ email, confirmationToken: user.inviteToken });

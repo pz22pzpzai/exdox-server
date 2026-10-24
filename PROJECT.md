@@ -1,5 +1,9 @@
 # Exdox server
 
+## Paid signup without a trial (2026-10-24)
+
+Email and Google owner registration accept `paidSignup: true` and create the plan-free billing record as inactive instead of starting the 14-day trial. Inactive owners can reach Billing, and the existing `paid_continuation` Stripe checkout charges immediately for the chosen allowance. Entitlements remain locked until successful payment updates billing. Free-trial signups retain the existing trial path. Deploy before website; the owner verifies live signup, checkout, and payment. Never store secrets or delete/move keystores or signing details.
+
 ## Private platform Admin overview (2026-10-16)
 
 `GET /platform-admin/workspaces` is a read-only SAM route in `src/aws/handlers/platformAdmin.ts`. It authorizes only an active `terryreedbfv@outlook.com` Business_Admin session whose ID and organisation match a fresh user lookup. `listPlatformWorkspaceOverview` in `src/aws/shared/db.ts` reads all current organisations and non-removed users from MySQL or S3 and returns signup dates, names/emails, recorded billing plan/status, trial end, and monthly document/user usage; it never returns password hashes, tokens, or Stripe identifiers. Responses use `Cache-Control: no-store`. The website polls the endpoint for new signups. Deploy server before website; owner checks workflow and live behavior. Never put secrets here or delete or move signing material.

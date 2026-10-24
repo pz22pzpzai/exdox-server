@@ -59,12 +59,14 @@ export async function handler(event: ConfirmationEvent) {
     });
     const { user } = confirmation;
 
+    const billing = await getOrganisationBillingSummary(user.organisationId);
     if (!confirmation.alreadyConfirmed) {
       try {
         await sendWorkspaceWelcomeEmail({
           toEmail: user.email,
           fullName: user.fullName,
           organisationName: await getOrganisationName(user.organisationId),
+          paymentRequired: billing.planId === 'trial' && billing.status === 'inactive',
         });
       } catch (error) {
         console.warn('Could not send the workspace welcome email.', {
@@ -74,7 +76,6 @@ export async function handler(event: ConfirmationEvent) {
       }
     }
 
-    const billing = await getOrganisationBillingSummary(user.organisationId);
     return jsonResponse(200, {
       success: true,
       token: signUserToken({ ...user, trialEndsAt: billing.status === 'trialing' ? billing.trialEndsAt : null }),

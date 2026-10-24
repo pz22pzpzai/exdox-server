@@ -28,6 +28,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
     const organisationName = sanitizeText(body.organisationName) || null;
     const inviteToken = sanitizeText(body.inviteToken);
     const termsAccepted = body.termsAccepted === true;
+    const paidSignup = body.paidSignup === true;
     const termsVersion = sanitizeText(body.termsVersion) || '2026-07-26';
     const locale = body.locale === 'de' ? 'de' as const : undefined;
     const accountType = body.accountType === 'employee'
@@ -171,7 +172,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       return jsonResponse(400, {
         success: false,
         error: 'terms_required',
-        message: 'You must accept the Exdox Terms and Conditions before starting a free trial.',
+        message: 'You must accept the Exdox Terms and Conditions before creating a workspace.',
       });
     }
 
@@ -187,7 +188,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       billingCycle: 'monthly',
       monthlyDocumentLimit: null,
       includedUsers: null,
-      startPlanFreeTrial: true,
+      startPlanFreeTrial: !paidSignup,
     });
 
     try {
@@ -235,6 +236,7 @@ export async function handler(event: APIGatewayProxyEventV2) {
       message: buildRegistrationMessage({
         confirmationDelivered,
         termsVersion,
+        paidSignup,
       }),
       user: {
         id: user.id,
@@ -267,9 +269,12 @@ export async function handler(event: APIGatewayProxyEventV2) {
 function buildRegistrationMessage(input: {
   confirmationDelivered: boolean;
   termsVersion: string;
+  paidSignup: boolean;
 }) {
   const confirmationSummary = input.confirmationDelivered
     ? 'We have sent your confirmation email.'
     : 'We could not send the confirmation email right now; contact contact@exdox.co.uk so we can activate access.';
-  return `Your 14-day free trial has started. ${confirmationSummary} You can use the workspace now and have three days to confirm your email. Choose a paid plan only when you are ready to continue after the trial; no payment happens automatically. Terms version ${input.termsVersion} was accepted during registration.`;
+  return input.paidSignup
+    ? `Your workspace has been created. ${confirmationSummary} Confirm your email and sign in to open secure checkout for your selected monthly plan. Workspace access starts only after payment succeeds. Terms version ${input.termsVersion} was accepted during registration.`
+    : `Your 14-day free trial has started. ${confirmationSummary} You can use the workspace now and have three days to confirm your email. Choose a paid plan only when you are ready to continue after the trial; no payment happens automatically. Terms version ${input.termsVersion} was accepted during registration.`;
 }

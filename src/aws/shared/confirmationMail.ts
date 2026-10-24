@@ -108,6 +108,7 @@ export async function sendWorkspaceWelcomeEmail(input: {
   toEmail: string;
   fullName: string | null;
   organisationName: string;
+  paymentRequired?: boolean;
 }) {
   const recipientName = input.fullName || input.toEmail;
   await ses.send(
@@ -127,14 +128,12 @@ export async function sendWorkspaceWelcomeEmail(input: {
               Data: [
                 `Hi ${recipientName},`,
                 '',
-                'Your email is confirmed and your exdox workspace is ready.',
+                input.paymentRequired ? 'Your email is confirmed. Complete your selected monthly plan in secure checkout to open your workspace.' : 'Your email is confirmed and your exdox workspace is ready.',
                 '',
                 'Recommended next steps:',
-                '1. Upload your first receipt or invoice.',
-                '2. Review the extracted details and approve the document.',
-                '3. Invite your team from Profile/Settings.',
+                ...(input.paymentRequired ? ['1. Sign in and complete secure Stripe checkout.', '2. After payment succeeds, open your workspace.'] : ['1. Upload your first receipt or invoice.', '2. Review the extracted details and approve the document.', '3. Invite your team from Profile/Settings.']),
                 '',
-                'Open your workspace: https://exdox.co.uk/overview',
+                `Open your workspace: https://exdox.co.uk/${input.paymentRequired ? 'login' : 'overview'}`,
                 'Help and support: https://exdox.co.uk/contact',
                 '',
                 'Exdox support',
@@ -146,10 +145,10 @@ export async function sendWorkspaceWelcomeEmail(input: {
                 heading: `Welcome to Exdox - ${input.organisationName}`,
                 greeting: `Hi ${recipientName},`,
                 paragraphs: [
-                  'Your email is confirmed and your Exdox workspace is ready.',
-                  'Recommended next steps:\n1. Upload your first receipt or invoice.\n2. Review the extracted details and approve the document.\n3. Invite your team from Profile/Settings.',
+                  input.paymentRequired ? 'Your email is confirmed. Complete your selected monthly plan in secure checkout to open your workspace.' : 'Your email is confirmed and your Exdox workspace is ready.',
+                  input.paymentRequired ? 'Sign in and complete secure Stripe checkout. Your workspace opens after payment succeeds.' : 'Recommended next steps:\n1. Upload your first receipt or invoice.\n2. Review the extracted details and approve the document.\n3. Invite your team from Profile/Settings.',
                 ],
-                action: { label: 'Open your workspace', url: 'https://exdox.co.uk/overview' },
+                action: { label: input.paymentRequired ? 'Sign in to complete payment' : 'Open your workspace', url: `https://exdox.co.uk/${input.paymentRequired ? 'login' : 'overview'}` },
                 links: [{ label: 'Help and support', url: 'https://exdox.co.uk/contact' }],
               }),
             },
