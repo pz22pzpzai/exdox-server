@@ -1,5 +1,9 @@
 # Exdox server
 
+## System architecture diagram (2026-11-10)
+
+`docs/exdox-system-architecture.md` shows the customer path from the Android app and website to API Gateway, Lambda, S3, optional RDS, and core external services. It also shows each GitHub repository's build/deployment path. It is based on checked-in configuration, not a live AWS or hosting audit. Keep it current when a deployment route or storage mode changes. Never store secrets here or delete or move signing keystores or details.
+
 ## SQL schema diagram (2026-11-10)
 
 `schema/exdox.dbml` documents the eight tables, columns, indexes, and declared foreign keys in `schema/001_exdox.sql`. It is a schema diagram, not a database backup or a diagram of the S3-backed production records. The department and manager ID fields have no declared SQL foreign keys, so the DBML marks them as logical links only. Never store secrets here or delete or move signing keystores or signing details.
