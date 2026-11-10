@@ -1,0 +1,250 @@
+// Exdox MySQL schema diagram, derived from 001_exdox.sql.
+// This documents the SQL model. Production has also used S3-backed storage;
+// this file is not an inventory or backup of live customer data.
+Project exdox {
+  database_type: 'MySQL'
+  Note: 'Exdox SQL schema. The production receipt store mode may be S3.'
+}
+
+Enum user_role {
+  Business_Admin
+  Standard_Employee
+}
+
+Enum user_status {
+  pending_invite
+  active
+}
+
+Enum workspace_context {
+  cost
+  sales
+  vault
+}
+
+Enum rule_workspace_context {
+  cost
+  sales
+}
+
+Enum payment_method {
+  business_card
+  cash_personal
+  bank_transfer
+  not_applicable
+}
+
+Enum document_type {
+  receipt
+  invoice
+  unknown
+}
+
+Enum confidence_source {
+  model_self_assessment
+  unavailable
+}
+
+Table organisations {
+  id bigint [pk, increment]
+  name varchar(255) [not null]
+  base_currency char(3) [not null, default: 'GBP']
+  is_vat_registered tinyint(1) [not null, default: 0]
+  default_tax_rate_costs varchar(64) [not null, default: 'No VAT']
+  billing_plan varchar(32) [not null, default: 'legacy']
+  billing_status varchar(32) [not null, default: 'legacy']
+  billing_cycle varchar(32) [not null, default: 'monthly']
+  trial_ends_at timestamp
+  billing_period_started_at timestamp
+  billing_period_ends_at timestamp
+  monthly_document_limit int
+  included_users int
+  stripe_customer_id varchar(255)
+  stripe_subscription_id varchar(255)
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+}
+
+Table users {
+  id bigint [pk, increment]
+  organisation_id bigint [not null]
+  email varchar(255) [not null, unique]
+  password_hash varchar(255)
+  full_name varchar(255)
+  user_role user_role [not null, default: 'Standard_Employee']
+  status user_status [not null, default: 'active']
+  invite_token varchar(255) [unique]
+  invited_by_user_id bigint
+  department_id bigint [note: 'Logical department link; SQL schema does not declare a foreign key.']
+  removed_at timestamp
+  invite_sent_at timestamp
+  invitation_accepted_at timestamp
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (organisation_id, user_role) [name: 'idx_users_org_role']
+    (organisation_id, department_id) [name: 'idx_users_org_department']
+  }
+}
+
+Table departments {
+  id bigint [pk, increment]
+  organisation_id bigint [not null]
+  name varchar(120) [not null]
+  manager_user_id bigint [note: 'Logical manager link; SQL schema does not declare a foreign key.']
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (organisation_id, name) [unique, name: 'uq_departments_org_name']
+    organisation_id [name: 'idx_departments_org']
+  }
+}
+
+Table expense_claims {
+  id bigint [pk, increment]
+  organisation_id bigint [not null]
+  created_by_user_id bigint [not null]
+  name varchar(255) [not null]
+  description text
+  currency char(3) [not null, default: 'GBP']
+  status varchar(32) [not null, default: 'pending']
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (organisation_id, created_at) [name: 'idx_expense_claims_org_created']
+    created_by_user_id [name: 'idx_expense_claims_created_by']
+  }
+}
+
+Table receipts {
+  id bigint [pk, increment]
+  organisation_id bigint [not null]
+  uploaded_by_user_id bigint [not null]
+  workspace_context workspace_context [not null, default: 'cost']
+  payment_method payment_method [not null, default: 'business_card']
+  claim_id bigint
+  status varchar(32) [not null, default: 'Processing']
+  category varchar(255)
+  description text
+  customer_name varchar(255)
+  receipt_source varchar(32) [not null, default: 'web_upload']
+  source_filename varchar(255) [not null]
+  source_mime_type varchar(120) [not null]
+  content_sha256 char(64)
+  s3_bucket varchar(255) [not null]
+  s3_key varchar(1024) [not null, note: 'SQL has a unique index on its first 255 characters.']
+  locale varchar(32) [not null, default: 'en-GB']
+  document_type document_type [not null, default: 'unknown']
+  vendor_name varchar(255)
+  invoice_date date
+  due_date date
+  invoice_number varchar(120)
+  currency char(3)
+  base_currency char(3) [not null, default: 'GBP']
+  exchange_rate decimal(18,8)
+  exchange_rate_date date
+  exchange_rate_provider varchar(64)
+  base_total_amount decimal(12,2)
+  exchange_rate_override tinyint(1) [not null, default: 0]
+  exchange_rate_note varchar(500)
+  total_amount decimal(12,2)
+  net_amount decimal(12,2)
+  vat_amount decimal(12,2)
+  tax_rate_applied varchar(64)
+  subtotal_amount decimal(12,2)
+  total_tax_amount decimal(12,2)
+  foreign_tax_amount decimal(12,2)
+  foreign_tax_label varchar(120)
+  uk_vat_treatment varchar(64) [not null, default: 'not_applicable']
+  reimbursement_batch_id char(36)
+  reimbursement_batch_created_at datetime
+  confidence_score decimal(6,4)
+  confidence_source confidence_source [not null, default: 'unavailable']
+  needs_review tinyint(1) [not null, default: 1]
+  extraction_provider varchar(64) [not null, default: 'openai']
+  extraction_model varchar(64) [not null]
+  line_items json [not null]
+  tax_breakdown json [not null]
+  notes json [not null]
+  raw_text_summary text
+  raw_extraction_json json [not null]
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (organisation_id, created_at) [name: 'idx_receipts_org_created']
+    uploaded_by_user_id [name: 'idx_receipts_uploaded_by']
+    (organisation_id, workspace_context, created_at) [name: 'idx_receipts_org_context_created']
+    claim_id [name: 'idx_receipts_claim_id']
+    vendor_name [name: 'idx_receipts_vendor_name']
+    document_type [name: 'idx_receipts_document_type']
+  }
+}
+
+Table supplier_rules {
+  id bigint [pk, increment]
+  organisation_id bigint [not null]
+  workspace_context rule_workspace_context [not null, default: 'cost']
+  supplier_match_text varchar(255) [not null]
+  category varchar(255) [not null]
+  tax_rate varchar(64) [not null]
+  payment_method payment_method [not null, default: 'business_card']
+  is_active tinyint(1) [not null, default: 1]
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (organisation_id, is_active) [name: 'idx_supplier_rules_org_active']
+  }
+}
+
+Table bank_transactions {
+  id bigint [pk, increment]
+  organisation_id bigint [not null]
+  transaction_id varchar(191) [not null, unique]
+  booking_date date [not null]
+  remittance_information varchar(255) [not null]
+  transaction_amount decimal(12,2) [not null]
+  status varchar(32) [not null, default: 'Open']
+  matched_receipt_id bigint
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (organisation_id, status) [name: 'idx_bank_transactions_org_status']
+    matched_receipt_id [name: 'idx_bank_transactions_match']
+  }
+}
+
+Table bank_requisitions {
+  id bigint [pk, increment]
+  organisation_id bigint [not null]
+  provider varchar(64) [not null]
+  external_requisition_id varchar(191) [not null, unique]
+  institution_id varchar(191)
+  status varchar(32) [not null, default: 'pending']
+  redirect_url text [not null]
+  callback_state varchar(191) [not null, unique]
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (organisation_id, status) [name: 'idx_bank_requisitions_org_status']
+  }
+}
+
+Ref: organisations.id < users.organisation_id [delete: cascade]
+Ref: users.id < users.invited_by_user_id [delete: set null]
+Ref: organisations.id < departments.organisation_id [delete: cascade]
+Ref: organisations.id < expense_claims.organisation_id [delete: cascade]
+Ref: users.id < expense_claims.created_by_user_id [delete: cascade]
+Ref: organisations.id < receipts.organisation_id [delete: cascade]
+Ref: users.id < receipts.uploaded_by_user_id [delete: cascade]
+Ref: expense_claims.id < receipts.claim_id [delete: set null]
+Ref: organisations.id < supplier_rules.organisation_id [delete: cascade]
+Ref: organisations.id < bank_transactions.organisation_id [delete: cascade]
+Ref: receipts.id < bank_transactions.matched_receipt_id [delete: set null]
+Ref: organisations.id < bank_requisitions.organisation_id [delete: cascade]

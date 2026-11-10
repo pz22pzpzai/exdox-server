@@ -1,5 +1,9 @@
 # Exdox server
 
+## SQL schema diagram (2026-11-10)
+
+`schema/exdox.dbml` documents the eight tables, columns, indexes, and declared foreign keys in `schema/001_exdox.sql`. It is a schema diagram, not a database backup or a diagram of the S3-backed production records. The department and manager ID fields have no declared SQL foreign keys, so the DBML marks them as logical links only. Never store secrets here or delete or move signing keystores or signing details.
+
 ## Paid signup without a trial (2026-10-24)
 
 Email and Google owner registration accept `paidSignup: true` and create the plan-free billing record as inactive instead of starting the 14-day trial. Inactive owners can reach Billing, and the existing `paid_continuation` Stripe checkout charges immediately for the chosen allowance. Entitlements remain locked until successful payment updates billing. Free-trial signups retain the existing trial path. Deploy before website; the owner verifies live signup, checkout, and payment. Never store secrets or delete/move keystores or signing details.
